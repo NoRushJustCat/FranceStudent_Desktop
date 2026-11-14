@@ -1,0 +1,288 @@
+<script>
+  import { onMount, tick } from 'svelte';
+  import * as api from './lib/api.js';
+  import Message from './lib/Message.svelte';
+  import Settings from './lib/Settings.svelte';
+
+  let settings = $state(null);
+  let agents = $state([]);
+  let agentId = $state(null);
+  let chats = $state([]);
+  let chatId = $state(null);
+  let messages = $state([]);
+  let input = $state('');
+  let busy = $state(false);
+  let error = $state('');
+  let usage = $state(null);
+  let ctx = $state(null);
+  let showSettings = $state(false);
+  let listEl = $state();
+
+  const fmt = new Intl.NumberFormat('fr-FR');
+  const agent = $derived(agents.find((a) => a.id === agentId));
+  const budget = $derived(readBudget(usage));
+
+  onMount(boot);
+
+  // Mémorise le dernier modèle choisi.
+  $effect(() => {
+    if (agentId != null) api.saveSettings({ lastAgentId: agentId }).catch(() => {});
+  });
+
+  // Jauge budget : tolérant sur les noms de champs (à caler sur la vraie réponse de /user/usage).
+  function readBudget(u) {
+    const b = u?.chatBudget;
+    if (!b || typeof b !== 'object') return null;
+    let pct = b.usedPercent ?? b.percentUsed ?? b.usagePercent ?? b.percent;
+    if (pct == null && b.limitUsd > 0) pct = (b.usedUsd / b.limitUsd) * 100;
+    if (pct == null || Number.isNaN(pct)) return null;
+    return { pct: Math.max(0, Math.min(100, pct)), uncertain: !!b.accountingUncertain };
+  }
+
+  async function boot() {
+    try {
+      settings = await api.getSettings();
+    } catch (e) {
+      error = String(e);
+      return;
+    }
+    if (!settings.hasKey) {
+      showSettings = true;
+      return;
+    }
+    await loadAll();
+  }
+
+  async function loadAll() {
+    error = '';
+    try {
+      const [a, h, u] = await Promise.all([api.listAgents(), api.listChats(40), api.getUsage()]);
+      agents = a.filter((x) => x.isActive);
+      chats = h.chats ?? [];
+      usage = u;
+      if (!agents.some((x) => x.id === agentId)) {
+        agentId =
+          agents.find((x) => x.id === settings.lastAgentId)?.id ??
+          agents.find((x) => x.isDefault)?.id ??
+          agents[0]?.id ??
+          null;
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function onSaved() {
+    showSettings = false;
+    try {
+      settings = await api.getSettings();
+    } catch (e) {
+      error = String(e);
+    }
+    await loadAll();
+  }
+
+  function newChat() {
+    if (busy) return;
+    chatId = null;
+    messages = [];
+    ctx = null;
+    error = '';
+  }
+
+  async function openChat(id) {
+    if (busy) return;
+    error = '';
+    try {
+      const d = await api.getChat(id);
+      chatId = id;
+      messages = (d.chatMessages ?? [])
+        .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content)
+        .map((m) => ({ role: m.role, content: m.content }));
+      if (d.agent?.id != null && agents.some((x) => x.id === d.agent.id)) agentId = d.agent.id;
+      refreshCtx();
+      scrollDown();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function upsertChat(id, title) {
+    const i = chats.findIndex((c) => c.id === id);
+    if (i >= 0) chats[i].title = title;
+    else chats.unshift({ id, title });
+  }
+
+  async function refreshCtx() {
+    if (!chatId) return;
+    try {
+      ctx = await api.getContext(chatId);
+    } catch {
+      ctx = null;
+    }
+  }
+
+  async function refreshUsage() {
+    try {
+      usage = await api.getUsage();
+    } catch {
+      /* la jauge reste sur l'ancienne valeur */
+    }
+  }
+
+  async function scrollDown() {
+    await tick();
+    if (listEl) listEl.scrollTop = listEl.scrollHeight;
+  }
+
+  async function send() {
+    const text = input.trim();
+    if (!text || busy || agentId == null) return;
+    input = '';
+    error = '';
+    busy = true;
+    messages.push({ role: 'user', content: text });
+    messages.push({ role: 'assistant', content: '', reasoning: '' });
+    const idx = messages.length - 1;
+    scrollDown();
+    try {
+      await api.sendMessage({ chatId, agentId, content: text }, (ev) => {
+        const m = messages[idx];
+        switch (ev.type) {
+          case 'opened':
+            chatId = ev.chat_id;
+            break;
+          case 'title':
+            upsertChat(ev.chat_id, ev.title);
+            break;
+          case 'delta':
+            m.content += ev.text;
+            scrollDown();
+            break;
+          case 'reasoning':
+            m.reasoning += ev.text;
+            break;
+          case 'failed':
+            error = `${ev.code} : ${ev.message}`;
+            break;
+          case 'cancelled':
+            m.cancelled = true;
+            break;
+        }
+      });
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+      refreshCtx();
+      refreshUsage();
+    }
+  }
+
+  async function stop() {
+    if (!chatId) return;
+    try {
+      await api.cancelChat(chatId);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function compact() {
+    if (!chatId || busy) return;
+    busy = true;
+    error = '';
+    try {
+      await api.compactChat(chatId);
+      await refreshCtx();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function onKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      send();
+    }
+  }
+</script>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand">FS Code</div>
+    <button class="primary wide" onclick={newChat}>Nouveau chat</button>
+    <div class="chats">
+      {#each chats as c (c.id)}
+        <button
+          class="chat"
+          class:active={c.id === chatId}
+          onclick={() => openChat(c.id)}
+          title={c.title}
+        >
+          {c.title || 'Sans titre'}
+        </button>
+      {/each}
+    </div>
+    <button class="wide" onclick={() => (showSettings = true)}>Réglages</button>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <select bind:value={agentId} disabled={busy || !agents.length}>
+        {#each agents as a (a.id)}
+          <option value={a.id}>{a.name}</option>
+        {/each}
+      </select>
+      {#if agent}<span class="dim">{agent.model}</span>{/if}
+    </header>
+
+    <div class="messages" bind:this={listEl}>
+      {#if !messages.length}
+        <div class="empty">Écris un message pour démarrer.</div>
+      {/if}
+      {#each messages as m}
+        <Message msg={m} />
+      {/each}
+    </div>
+
+    {#if error}<div class="error">{error}</div>{/if}
+
+    <div class="composer">
+      <textarea
+        rows="3"
+        placeholder="Message… (Entrée = envoyer, Maj+Entrée = nouvelle ligne)"
+        bind:value={input}
+        onkeydown={onKey}
+      ></textarea>
+      {#if busy}
+        <button onclick={stop}>Stop</button>
+      {:else}
+        <button class="primary" onclick={send} disabled={!input.trim() || agentId == null}>
+          Envoyer
+        </button>
+      {/if}
+    </div>
+  </main>
+
+  <footer class="status">
+    {#if ctx}
+      <span title="Occupation du contexte du chat">
+        ctx {ctx.measured ? '' : '~'}{fmt.format(ctx.usedTokens)} / {fmt.format(ctx.contextWindow)}
+        ({Math.round(ctx.usagePercent)} %)
+      </span>
+      <button class="mini" onclick={compact} disabled={busy}>Compacter</button>
+    {/if}
+    <span class="spacer"></span>
+    {#if budget}
+      <span class="gauge" title="Budget chat"><i style="width:{budget.pct}%"></i></span>
+      <span>{budget.uncertain ? '~' : ''}{Math.round(budget.pct)} %</span>
+    {/if}
+  </footer>
+</div>
+
+{#if showSettings}
+  <Settings {settings} onclose={() => (showSettings = false)} onsaved={onSaved} />
+{/if}

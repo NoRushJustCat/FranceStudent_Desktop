@@ -1,0 +1,233 @@
+<script>
+  import { onMount } from 'svelte';
+  import {
+    listSkills,
+    accountSkills,
+    mcpStatus,
+    mcpGetConfig,
+    mcpSaveConfig,
+    mcpConnect,
+    mcpDisconnect,
+    trustTool,
+  } from './api.js';
+
+  // workdir : dossier du mode Code (ou null). oninsert(name) : ajoute $name au message.
+  let { workdir = null, onclose, oninsert, onchange } = $props();
+
+  let tab = $state('skills');
+  let skills = $state([]);
+  let acct = $state(null); // {list} ou {error}
+  let acctBusy = $state(false);
+  let mcp = $state({ servers: [], error: null, customRejected: false });
+  let busyName = $state('');
+  let msg = $state('');
+  let editing = $state(false);
+  let cfg = $state('');
+  let cfgMsg = $state('');
+
+  const SOURCES = { projet: 'projet', utilisateur: 'utilisateur', app: 'app' };
+
+  async function loadSkills() {
+    try {
+      skills = await listSkills(workdir);
+    } catch (e) {
+      msg = String(e);
+    }
+  }
+  async function loadMcp() {
+    try {
+      mcp = await mcpStatus();
+    } catch (e) {
+      msg = String(e);
+    }
+  }
+  onMount(() => {
+    loadSkills();
+    loadMcp();
+  });
+
+  const toList = (r) => {
+    const a = Array.isArray(r) ? r : (r?.skills ?? r?.items ?? r?.data ?? []);
+    return (Array.isArray(a) ? a : []).map((s) => ({
+      name: s.name ?? s.title ?? s.slug ?? String(s.id ?? '?'),
+      description: s.description ?? s.summary ?? '',
+    }));
+  };
+  async function loadAcct() {
+    acctBusy = true;
+    try {
+      acct = { list: toList(await accountSkills()) };
+    } catch (e) {
+      acct = { error: String(e) };
+    }
+    acctBusy = false;
+  }
+
+  async function toggle(s) {
+    busyName = s.name;
+    msg = '';
+    try {
+      if (s.connected) await mcpDisconnect(s.name);
+      else await mcpConnect(s.name);
+    } catch (e) {
+      msg = `${s.name} : ${e}`;
+    }
+    busyName = '';
+    await loadMcp();
+    onchange?.();
+  }
+  async function trust(t, on) {
+    await trustTool(t.exposedName, on);
+    await loadMcp();
+  }
+
+  async function openEditor() {
+    try {
+      cfg = await mcpGetConfig();
+      cfgMsg = '';
+      editing = true;
+    } catch (e) {
+      cfgMsg = String(e);
+    }
+  }
+  async function saveCfg() {
+    try {
+      JSON.parse(cfg);
+    } catch (e) {
+      cfgMsg = 'JSON invalide : ' + e.message;
+      return;
+    }
+    try {
+      await mcpSaveConfig(cfg);
+      editing = false;
+      cfgMsg = '';
+      await loadMcp();
+      onchange?.();
+    } catch (e) {
+      cfgMsg = String(e);
+    }
+  }
+</script>
+
+<aside class="drawer" aria-label="Extensions">
+  <header>
+    <b>Extensions</b>
+    <span class="spacer"></span>
+    <button class="mini" onclick={() => onclose?.()} title="Fermer">✕</button>
+  </header>
+
+  <div class="tabs">
+    <button class:on={tab === 'skills'} onclick={() => (tab = 'skills')}>Skills</button>
+    <button class:on={tab === 'mcp'} onclick={() => (tab = 'mcp')}>MCP</button>
+  </div>
+
+  <div class="scroll">
+    {#if msg}<div class="errbox">{msg}</div>{/if}
+
+    {#if tab === 'skills'}
+      <div class="hint">
+        Écris <span class="mono">$nom</span> dans un message pour joindre un skill. Le modèle peut aussi en charger un
+        lui-même.
+      </div>
+
+      <h4>Locaux ({skills.length})</h4>
+      {#each skills as s (s.path)}
+        <div class="card">
+          <div class="row">
+            <b class="ellipsis">{s.name}</b>
+            <span class="badge skill">{SOURCES[s.source] ?? s.source}</span>
+            <span class="spacer"></span>
+            <button class="mini" onclick={() => oninsert?.(s.name)}>Insérer</button>
+          </div>
+          {#if s.description}<div class="desc">{s.description}</div>{/if}
+        </div>
+      {:else}
+        <div class="hint">
+          Aucun skill trouvé. Dossiers lus : <span class="mono">&lt;projet&gt;/.fscode/skills</span>,
+          <span class="mono">&lt;projet&gt;/.claude/skills</span>, <span class="mono">~/.claude/skills</span> et
+          <span class="mono">skills</span> dans le dossier de config de l'app. Chacun contient
+          <span class="mono">&lt;nom&gt;/SKILL.md</span>.
+        </div>
+      {/each}
+
+      <h4>Compte France Student</h4>
+      {#if !acct}
+        <button onclick={loadAcct} disabled={acctBusy}>Charger la liste du compte</button>
+        <div class="hint">Lecture seule pour l'instant. L'adresse de l'API des skills est une supposition.</div>
+      {:else if acct.error}
+        <div class="errbox">{acct.error}</div>
+        <button onclick={loadAcct} disabled={acctBusy}>Réessayer</button>
+      {:else}
+        {#each acct.list as s (s.name)}
+          <div class="card">
+            <b class="ellipsis">{s.name}</b>
+            {#if s.description}<div class="desc">{s.description}</div>{/if}
+          </div>
+        {:else}
+          <div class="hint">Aucun skill sur le compte.</div>
+        {/each}
+      {/if}
+    {:else}
+      <div class="hint">
+        Aucun serveur ne démarre seul. Chaque appel d'outil MCP demande ta confirmation.
+      </div>
+      {#if mcp.customRejected}
+        <div class="warnbox">
+          Le serveur France Student a refusé les outils personnalisés : les outils MCP ne sont pas proposés au modèle.
+          Les skills via <span class="mono">$nom</span> marchent toujours.
+        </div>
+      {/if}
+      {#if mcp.error}<div class="errbox">{mcp.error}</div>{/if}
+
+      {#each mcp.servers as s (s.name)}
+        <div class="card">
+          <div class="row">
+            <span class="dot" class:on={s.connected}></span>
+            <b class="ellipsis">{s.name}</b>
+            <span class="spacer"></span>
+            <button class="mini" onclick={() => toggle(s)} disabled={busyName === s.name}>
+              {busyName === s.name ? '…' : s.connected ? 'Déconnecter' : 'Connecter'}
+            </button>
+          </div>
+          <div class="mono dim ellipsis" title={[s.command, ...s.args].join(' ')}>{[s.command, ...s.args].join(' ')}</div>
+          {#if s.connected}
+            <div class="tools">
+              {#each s.tools as t (t.exposedName)}
+                <div class="tool-line">
+                  <div class="row">
+                    <span class="mono ellipsis">{t.name}</span>
+                    {#if t.readOnly}<span class="badge ro">lecture</span>{/if}
+                  </div>
+                  {#if t.description}<div class="desc">{t.description}</div>{/if}
+                  <label class="chk">
+                    <input type="checkbox" checked={t.trusted} onchange={(e) => trust(t, e.currentTarget.checked)} />
+                    Sans confirmation (cette session)
+                  </label>
+                </div>
+              {:else}
+                <div class="hint">Aucun outil exposé.</div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else}
+        {#if !mcp.error}<div class="hint">Aucun serveur déclaré. Ajoute-en dans mcp.json (format Claude Desktop).</div>{/if}
+      {/each}
+
+      <h4>Configuration</h4>
+      {#if editing}
+        <textarea class="cfg" bind:value={cfg} spellcheck="false"></textarea>
+        <div class="row" style="display:flex;gap:8px">
+          <button class="primary" onclick={saveCfg}>Enregistrer</button>
+          <button onclick={() => (editing = false)}>Annuler</button>
+        </div>
+      {:else}
+        <div style="display:flex;gap:8px">
+          <button onclick={openEditor}>Modifier mcp.json</button>
+          <button onclick={loadMcp}>Actualiser</button>
+        </div>
+      {/if}
+      {#if cfgMsg}<div class="errbox">{cfgMsg}</div>{/if}
+    {/if}
+  </div>
+</aside>

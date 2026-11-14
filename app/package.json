@@ -1,0 +1,27 @@
+{
+  "name": "fs-code-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/fetch-cloudflared.mjs",
+    "fetch-cloudflared": "node scripts/fetch-cloudflared.mjs",
+    "predev": "node scripts/fetch-cloudflared.mjs",
+    "dev": "vite",
+    "prebuild": "node scripts/fetch-cloudflared.mjs",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "dompurify": "^3",
+    "marked": "^16"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6",
+    "@tauri-apps/cli": "^2",
+    "svelte": "^5",
+    "vite": "^7"
+  }
+}

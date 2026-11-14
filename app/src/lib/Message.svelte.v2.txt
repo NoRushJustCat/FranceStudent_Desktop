@@ -1,0 +1,27 @@
+<script>
+  import { marked } from 'marked';
+  import DOMPurify from 'dompurify';
+
+  // role : 'user' | 'assistant'
+  let { role, text = '', reasoning = '' } = $props();
+
+  const html = $derived(
+    role === 'assistant'
+      ? DOMPurify.sanitize(marked.parse(text ?? '', { gfm: true, breaks: true, async: false }))
+      : ''
+  );
+
+  // Les liens ne doivent pas faire naviguer la webview.
+  function noNav(node) {
+    const h = (e) => {
+      if (e.target instanceof Element && e.target.closest('a')) e.preventDefault();
+    };
+    node.addEventListener('click', h);
+    return { destroy: () => node.removeEventListener('click', h) };
+  }
+</script>
+
+<div class="msg {role}">
+  <div class="who">{role === 'user' ? 'Moi' : 'IA'}</div>
+  <div class="body">{#if role === 'user'}{text}{:else}{#if reasoning}<details class="think"><summary>Raisonnement</summary><pre>{reasoning}</pre></details>{/if}<div class="md" use:noNav>{@html html}</div>{/if}</div>
+</div>

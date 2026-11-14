@@ -1,0 +1,951 @@
+<script>
+  // Tiroir « Extensions » : skills (locaux + compte) et serveurs MCP locaux.
+  // Ajout / modification / retrait directement depuis l'interface.
+  import { onMount } from 'svelte';
+  import {
+    getSettings,
+    pickFolder,
+    listSkills,
+    skillRead,
+    skillWrite,
+    skillCreate,
+    skillDelete,
+    accountSkills,
+    accountSkillUpdate,
+    accountSkillDelete,
+    mcpStatus,
+    mcpGetConfig,
+    mcpSaveConfig,
+    mcpConnect,
+    mcpDisconnect,
+    mcpGetServer,
+    mcpUpsert,
+    mcpRemove,
+    mcpImport,
+    trustTool,
+  } from './api.js';
+
+  // `workdir` : dossier du mode Code (pour les skills du projet). `onchange` : optionnel.
+  // `embedded` : affiché dans la fenêtre Réglages (le parent choisit l'onglet via `section`).
+  // `oninsert(nom)` : si fourni, appelé à la place de l'écriture directe dans le composer.
+  let { onclose, workdir = null, onchange, embedded = false, section = 'skills', oninsert } = $props();
+
+  let root = $state();
+  let tab = $state('skills');
+  $effect(() => {
+    if (embedded) tab = section;
+  });
+  // list | skill-edit | skill-new | acc-edit | mcp-form | mcp-import | mcp-json
+  let view = $state('list');
+  let savedWorkdir = $state(null);
+
+  let local = $state([]);
+  let account = $state([]);
+  let accountError = $state('');
+  let accountLoading = $state(false);
+  let mcp = $state({ servers: [], error: null, customRejected: false });
+  let msg = $state(null);
+  let confirm = $state('');
+  let busy = $state({});
+
+  const dir = () => workdir ?? savedWorkdir ?? null;
+  const err = (e) => String(e?.message ?? e);
+  const flash = (ok, text) => {
+    msg = { ok, text };
+  };
+
+  function changed() {
+    onchange?.({
+      skills: local.length,
+      mcp: mcp.servers.filter((s) => s.connected).length,
+    });
+    window.dispatchEvent(new CustomEvent('fs:extensions-changed'));
+  }
+
+  function back() {
+    view = 'list';
+    msg = null;
+    confirm = '';
+  }
+
+  function onkey(e) {
+    if (e.key !== 'Escape') return;
+    if (view !== 'list') back();
+    else if (!embedded) onclose?.();
+  }
+
+  // ---------- chargement ----------
+  async function loadLocal() {
+    try {
+      local = await listSkills(dir());
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  const accItems = (v) => {
+    if (Array.isArray(v)) return v;
+    for (const k of ['skills', 'items', 'data', 'results']) {
+      if (Array.isArray(v?.[k])) return v[k];
+    }
+    return [];
+  };
+
+  async function loadAccount() {
+    accountLoading = true;
+    accountError = '';
+    try {
+      account = accItems(await accountSkills());
+    } catch (e) {
+      account = [];
+      accountError = err(e);
+    }
+    accountLoading = false;
+  }
+
+  async function loadMcp() {
+    try {
+      mcp = await mcpStatus();
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  onMount(async () => {
+    try {
+      const s = await getSettings();
+      savedWorkdir = s?.lastWorkdir ?? null;
+    } catch {
+      /* sans importance */
+    }
+    await Promise.all([loadLocal(), loadMcp(), loadAccount()]);
+  });
+
+  // ---------- skills locaux ----------
+  const SOURCES = { projet: 'PROJET', utilisateur: 'UTILISATEUR', app: 'APP' };
+  const clean = (s) =>
+    String(s ?? '')
+      .replace(/\\n/g, ' ')
+      .replace(/\\"/g, '"')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  // Écrit `$nom` dans le composer (le textarea qui n'est pas dans ce tiroir).
+  function insertSkill(name) {
+    if (oninsert) {
+      oninsert(name);
+      onclose?.();
+      return;
+    }
+    const token = '$' + name;
+    const tas = [...document.querySelectorAll('textarea')].filter((t) => !root?.contains(t));
+    const ta = tas[tas.length - 1];
+    if (!ta) {
+      navigator.clipboard?.writeText(token);
+      flash(true, `${token} copié dans le presse-papiers.`);
+      return;
+    }
+    const sep = ta.value && !/\s$/.test(ta.value) ? ' ' : '';
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    set.call(ta, ta.value + sep + token + ' ');
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.focus();
+    flash(true, `${token} ajouté au message.`);
+  }
+
+  let editName = $state('');
+  let editText = $state('');
+
+  async function openEdit(s) {
+    try {
+      editText = await skillRead(s.name, dir());
+      editName = s.name;
+      view = 'skill-edit';
+      msg = null;
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  async function saveEdit() {
+    try {
+      await skillWrite(editName, editText, dir());
+      view = 'list';
+      await loadLocal();
+      flash(true, `« ${editName} » enregistré.`);
+      changed();
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  let nName = $state('');
+  let nDesc = $state('');
+  let nBody = $state('');
+
+  function openNew() {
+    nName = '';
+    nDesc = '';
+    nBody = '';
+    view = 'skill-new';
+    msg = null;
+  }
+
+  async function createSkill() {
+    try {
+      await skillCreate(nName.trim(), nDesc, nBody, dir());
+      const name = nName.trim();
+      view = 'list';
+      await loadLocal();
+      flash(true, `« ${name} » créé.`);
+      changed();
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  async function removeSkill(s) {
+    if (confirm !== 'sk:' + s.name) {
+      confirm = 'sk:' + s.name;
+      return;
+    }
+    confirm = '';
+    try {
+      await skillDelete(s.name, dir());
+      await loadLocal();
+      flash(true, `« ${s.name} » retiré.`);
+      changed();
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  // ---------- skills du compte ----------
+  const accId = (s) => String(s?.id ?? s?.skillId ?? s?.slug ?? s?.name ?? '');
+  let accEditId = $state('');
+  let accText = $state('');
+
+  function openAcc(s) {
+    accEditId = accId(s);
+    accText = JSON.stringify(s, null, 2);
+    view = 'acc-edit';
+    msg = null;
+  }
+
+  async function saveAcc() {
+    let obj;
+    try {
+      obj = JSON.parse(accText);
+    } catch (e) {
+      flash(false, 'JSON invalide : ' + err(e));
+      return;
+    }
+    for (const k of ['id', 'skillId', 'createdAt', 'updatedAt', 'userId']) delete obj[k];
+    try {
+      await accountSkillUpdate(accEditId, obj);
+      view = 'list';
+      await loadAccount();
+      flash(true, 'Skill du compte mis à jour.');
+    } catch (e) {
+      flash(false, err(e) + ' (endpoint supposé : PATCH /skills/{id})');
+    }
+  }
+
+  async function removeAcc(s) {
+    const id = accId(s);
+    if (confirm !== 'ac:' + id) {
+      confirm = 'ac:' + id;
+      return;
+    }
+    confirm = '';
+    try {
+      await accountSkillDelete(id);
+      await loadAccount();
+      flash(true, 'Skill du compte retiré.');
+    } catch (e) {
+      flash(false, err(e) + ' (endpoint supposé : DELETE /skills/{id})');
+    }
+  }
+
+  // ---------- MCP ----------
+  const PRESETS = [
+    { name: 'fichiers', label: 'Fichiers', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem'] },
+    { name: 'memoire', label: 'Mémoire', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] },
+    { name: 'web', label: 'Web (fetch)', command: 'uvx', args: ['mcp-server-fetch'] },
+  ];
+
+  let f = $state({ orig: null, name: '', command: '', args: '', env: '', cwd: '' });
+
+  function openServerForm(p = null) {
+    f = {
+      orig: null,
+      name: p?.name ?? '',
+      command: p?.command ?? '',
+      args: (p?.args ?? []).join('\n'),
+      env: '',
+      cwd: '',
+    };
+    view = 'mcp-form';
+    msg = null;
+  }
+
+  async function editServer(s) {
+    try {
+      const c = await mcpGetServer(s.name);
+      f = {
+        orig: s.name,
+        name: s.name,
+        command: c.command ?? '',
+        args: (c.args ?? []).join('\n'),
+        env: Object.entries(c.env ?? {})
+          .map(([k, v]) => `${k}=${v}`)
+          .join('\n'),
+        cwd: c.cwd ?? '',
+      };
+      view = 'mcp-form';
+      msg = null;
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  function parseEnv(text) {
+    const o = {};
+    for (const raw of text.split(/\r?\n/)) {
+      const l = raw.trim();
+      if (!l || l.startsWith('#')) continue;
+      const i = l.indexOf('=');
+      if (i < 1) throw new Error(`Variable invalide : « ${l} » (attendu : NOM=valeur)`);
+      o[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+    }
+    return o;
+  }
+
+  async function addDirArg() {
+    const d = await pickFolder();
+    if (d) f.args = (f.args.trim() ? f.args.replace(/\s+$/, '') + '\n' : '') + d;
+  }
+
+  async function connectServer(name) {
+    busy[name] = true;
+    msg = null;
+    try {
+      const n = await mcpConnect(name);
+      flash(true, `« ${name} » connecté : ${n} outil(s).`);
+    } catch (e) {
+      flash(false, err(e));
+    }
+    busy[name] = false;
+    await loadMcp();
+    changed();
+  }
+
+  async function disconnectServer(name) {
+    busy[name] = true;
+    try {
+      await mcpDisconnect(name);
+    } catch (e) {
+      flash(false, err(e));
+    }
+    busy[name] = false;
+    await loadMcp();
+    changed();
+  }
+
+  async function saveServer(connect) {
+    const name = f.name.trim();
+    try {
+      const config = {
+        command: f.command.trim(),
+        args: f.args.split(/\r?\n/).map((a) => a.trim()).filter(Boolean),
+        env: parseEnv(f.env),
+        cwd: f.cwd.trim() || null,
+      };
+      await mcpUpsert(f.orig, name, config);
+    } catch (e) {
+      flash(false, err(e));
+      return;
+    }
+    view = 'list';
+    await loadMcp();
+    if (connect) await connectServer(name);
+    else flash(true, `« ${name} » enregistré. Clique sur Connecter pour le (re)lancer.`);
+    changed();
+  }
+
+  async function removeServer(s) {
+    if (confirm !== 'mc:' + s.name) {
+      confirm = 'mc:' + s.name;
+      return;
+    }
+    confirm = '';
+    try {
+      await mcpRemove(s.name);
+      await loadMcp();
+      flash(true, `« ${s.name} » retiré de mcp.json.`);
+      changed();
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  const allTrusted = (s) => s.tools.length > 0 && s.tools.every((t) => t.trusted);
+
+  async function setTrust(tools, on) {
+    try {
+      for (const t of tools) await trustTool(t.exposedName, on);
+    } catch (e) {
+      flash(false, err(e));
+    }
+    await loadMcp();
+  }
+
+  let importText = $state('');
+  async function doImport() {
+    try {
+      const names = await mcpImport(importText);
+      view = 'list';
+      await loadMcp();
+      flash(true, `Importé : ${names.join(', ')}. Clique sur Connecter pour les lancer.`);
+      changed();
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  let rawText = $state('');
+  async function openRaw() {
+    try {
+      rawText = await mcpGetConfig();
+      view = 'mcp-json';
+      msg = null;
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+  async function saveRaw() {
+    try {
+      await mcpSaveConfig(rawText);
+      view = 'list';
+      await loadMcp();
+      flash(true, 'mcp.json enregistré.');
+      changed();
+    } catch (e) {
+      flash(false, err(e));
+    }
+  }
+
+  const TITLES = {
+    list: 'Extensions',
+    'skill-edit': 'Modifier le skill',
+    'skill-new': 'Nouveau skill',
+    'acc-edit': 'Skill du compte',
+    'mcp-form': 'Serveur MCP',
+    'mcp-import': 'Importer du JSON',
+    'mcp-json': 'mcp.json',
+  };
+  let title = $derived(TITLES[view] ?? 'Extensions');
+</script>
+
+<svelte:window onkeydown={onkey} />
+
+<aside class="xt" class:embedded bind:this={root} aria-label="Extensions">
+  {#if !embedded || view !== 'list'}
+    <header>
+      {#if view !== 'list'}
+        <button class="icon" onclick={back} aria-label="Retour" title="Retour">←</button>
+      {/if}
+      <h2>{title}</h2>
+      {#if !embedded}
+        <button class="icon" onclick={() => onclose?.()} aria-label="Fermer" title="Fermer">✕</button>
+      {/if}
+    </header>
+  {/if}
+
+  {#if view === 'list' && !embedded}
+    <nav class="tabs">
+      <button class:on={tab === 'skills'} onclick={() => (tab = 'skills')}>Skills</button>
+      <button class:on={tab === 'mcp'} onclick={() => (tab = 'mcp')}>
+        MCP{#if mcp.servers.length} ({mcp.servers.filter((s) => s.connected).length}/{mcp.servers.length}){/if}
+      </button>
+    </nav>
+  {/if}
+
+  {#if msg}
+    <div class="msg" class:bad={!msg.ok} role="status">{msg.text}</div>
+  {/if}
+
+  <div class="body">
+    <!-- ================= SKILLS ================= -->
+    {#if view === 'list' && tab === 'skills'}
+      <p class="hint">
+        Écris <code>$nom</code> dans un message pour joindre un skill. Le modèle peut aussi en charger un lui-même.
+      </p>
+      <div class="bar">
+        <button class="pri" onclick={openNew}>+ Nouveau skill</button>
+        <button onclick={() => { loadLocal(); loadAccount(); }}>Actualiser</button>
+      </div>
+
+      <h3>Locaux ({local.length})</h3>
+      {#if local.length === 0}
+        <p class="hint">Aucun skill local. Crée-en un ou ajoute un dossier avec un <code>SKILL.md</code>.</p>
+      {/if}
+      {#each local as s (s.name)}
+        <section class="card">
+          <div class="row">
+            <strong>{s.name}</strong>
+            <span class="badge {s.source}">{SOURCES[s.source] ?? s.source}</span>
+          </div>
+          <p class="desc">{clean(s.description) || 'Sans description.'}</p>
+          {#if confirm === 'sk:' + s.name}
+            <p class="warn">
+              Supprime définitivement le dossier <code>{s.path}</code>
+              {#if s.source === 'utilisateur'} — il peut être partagé avec d'autres outils{/if}.
+            </p>
+            <div class="row">
+              <button class="danger" onclick={() => removeSkill(s)}>Confirmer la suppression</button>
+              <button onclick={() => (confirm = '')}>Annuler</button>
+            </div>
+          {:else}
+            <div class="row">
+              <button onclick={() => insertSkill(s.name)}>Insérer</button>
+              <button onclick={() => openEdit(s)}>Modifier</button>
+              <button class="ghostdanger" onclick={() => removeSkill(s)}>Retirer</button>
+            </div>
+          {/if}
+        </section>
+      {/each}
+
+      <h3>Compte France Student {#if accountLoading}<span class="mut">…</span>{/if}</h3>
+      {#if accountError}
+        <p class="warn">Liste indisponible : {accountError}</p>
+      {:else if !accountLoading && account.length === 0}
+        <p class="hint">Aucun skill sur le compte.</p>
+      {/if}
+      {#each account as s, i (accId(s) || i)}
+        <section class="card">
+          <div class="row"><strong>{s.name ?? s.title ?? accId(s)}</strong></div>
+          <p class="desc">{clean(s.description) || 'Sans description.'}</p>
+          {#if confirm === 'ac:' + accId(s)}
+            <p class="warn">Retire ce skill de ton compte France Student (définitif).</p>
+            <div class="row">
+              <button class="danger" onclick={() => removeAcc(s)}>Confirmer la suppression</button>
+              <button onclick={() => (confirm = '')}>Annuler</button>
+            </div>
+          {:else}
+            <div class="row">
+              <button onclick={() => insertSkill(s.name ?? accId(s))}>Insérer</button>
+              <button onclick={() => openAcc(s)}>Modifier</button>
+              <button class="ghostdanger" onclick={() => removeAcc(s)}>Retirer</button>
+            </div>
+          {/if}
+        </section>
+      {/each}
+
+    {:else if view === 'skill-new'}
+      <p class="hint">
+        Créé dans le dossier de l'app (<code>skills/&lt;nom&gt;/SKILL.md</code>). Le nom sert de mot-clé après <code>$</code>.
+      </p>
+      <label>Nom <input bind:value={nName} placeholder="mon-skill" spellcheck="false" /></label>
+      <label>
+        Description (quand l'utiliser)
+        <input bind:value={nDesc} placeholder="Résume un cours en fiches…" />
+      </label>
+      <label>
+        Instructions
+        <textarea bind:value={nBody} rows="12" placeholder="Explique au modèle comment faire…"></textarea>
+      </label>
+      <div class="bar">
+        <button class="pri" onclick={createSkill} disabled={!nName.trim() || !nBody.trim()}>Créer</button>
+        <button onclick={back}>Annuler</button>
+      </div>
+
+    {:else if view === 'skill-edit'}
+      <p class="hint">
+        Fichier <code>SKILL.md</code> complet (en-tête <code>---</code> compris) de <strong>{editName}</strong>. Si tu changes <code>name:</code>, le skill change de nom.
+      </p>
+      <textarea class="code tall" bind:value={editText} spellcheck="false"></textarea>
+      <div class="bar">
+        <button class="pri" onclick={saveEdit} disabled={!editText.trim()}>Enregistrer</button>
+        <button onclick={back}>Annuler</button>
+      </div>
+
+    {:else if view === 'acc-edit'}
+      <p class="hint">
+        Données du skill, en JSON. Enregistrer envoie <code>PATCH /skills/{accEditId}</code> (endpoint supposé : colle-moi l'erreur s'il échoue).
+      </p>
+      <textarea class="code tall" bind:value={accText} spellcheck="false"></textarea>
+      <div class="bar">
+        <button class="pri" onclick={saveAcc}>Enregistrer</button>
+        <button onclick={back}>Annuler</button>
+      </div>
+
+    <!-- ================= MCP ================= -->
+    {:else if view === 'list' && tab === 'mcp'}
+      <p class="hint">
+        Aucun serveur ne démarre seul. Chaque appel d'outil MCP demande confirmation, sauf « sans confirmation » (session seulement).
+      </p>
+      {#if mcp.error}<p class="warn">{mcp.error}</p>{/if}
+      {#if mcp.customRejected}
+        <p class="warn">Le serveur France Student refuse les outils personnalisés : les MCP ne seront pas utilisables par le modèle.</p>
+      {/if}
+      <div class="bar">
+        <button class="pri" onclick={() => openServerForm()}>+ Ajouter un serveur</button>
+        <button onclick={() => { importText = ''; view = 'mcp-import'; msg = null; }}>Importer du JSON</button>
+      </div>
+
+      {#if mcp.servers.length === 0 && !mcp.error}
+        <h3>Démarrage rapide</h3>
+        <div class="bar">
+          {#each PRESETS as p (p.name)}
+            <button onclick={() => openServerForm(p)}>{p.label}</button>
+          {/each}
+        </div>
+        <p class="hint">Il faut Node.js (<code>npx</code>) ou uv (<code>uvx</code>) sur ce PC.</p>
+      {/if}
+
+      {#each mcp.servers as s (s.name)}
+        <section class="card">
+          <div class="row">
+            <span class="dot" class:up={s.connected}></span>
+            <strong>{s.name}</strong>
+            <span class="mut">{s.connected ? `${s.tools.length} outil(s)` : 'arrêté'}</span>
+          </div>
+          <p class="desc mono">{s.command} {s.args.join(' ')}</p>
+          {#if confirm === 'mc:' + s.name}
+            <p class="warn">Retire « {s.name} » de <code>mcp.json</code>.</p>
+            <div class="row">
+              <button class="danger" onclick={() => removeServer(s)}>Confirmer</button>
+              <button onclick={() => (confirm = '')}>Annuler</button>
+            </div>
+          {:else}
+            <div class="row">
+              {#if s.connected}
+                <button disabled={busy[s.name]} onclick={() => disconnectServer(s.name)}>Déconnecter</button>
+              {:else}
+                <button class="pri" disabled={busy[s.name]} onclick={() => connectServer(s.name)}>
+                  {busy[s.name] ? 'Connexion…' : 'Connecter'}
+                </button>
+              {/if}
+              <button onclick={() => editServer(s)}>Modifier</button>
+              <button class="ghostdanger" onclick={() => removeServer(s)}>Retirer</button>
+            </div>
+          {/if}
+          {#if s.connected && s.tools.length}
+            <label class="chk">
+              <input type="checkbox" checked={allTrusted(s)} onchange={(e) => setTrust(s.tools, e.currentTarget.checked)} />
+              Sans confirmation (cette session)
+            </label>
+            <details>
+              <summary>Outils</summary>
+              {#each s.tools as t (t.exposedName)}
+                <label class="chk tool" title={t.description}>
+                  <input type="checkbox" checked={t.trusted} onchange={(e) => setTrust([t], e.currentTarget.checked)} />
+                  <span>{t.name}{#if t.readOnly} <em>(lecture)</em>{/if}</span>
+                </label>
+              {/each}
+            </details>
+          {/if}
+        </section>
+      {/each}
+
+      <h3>Configuration</h3>
+      <div class="bar">
+        <button onclick={openRaw}>Modifier mcp.json</button>
+        <button onclick={loadMcp}>Actualiser</button>
+      </div>
+
+    {:else if view === 'mcp-form'}
+      <p class="hint">
+        {#if f.orig}Enregistrer déconnecte le serveur ; reconnecte-le ensuite.{:else}Le serveur est écrit dans <code>mcp.json</code> ; il ne démarre que si tu cliques sur Connecter.{/if}
+      </p>
+      <label>Nom <input bind:value={f.name} placeholder="fichiers" spellcheck="false" /></label>
+      <label>Commande <input bind:value={f.command} placeholder="npx" spellcheck="false" /></label>
+      <label>
+        Arguments (un par ligne)
+        <textarea class="code" bind:value={f.args} rows="5" spellcheck="false" placeholder={'-y\n@modelcontextprotocol/server-filesystem\nC:\\Users\\Tom\\Documents'}></textarea>
+      </label>
+      <div class="bar"><button onclick={addDirArg}>+ Dossier…</button></div>
+      <label>
+        Variables d'environnement (NOM=valeur, une par ligne)
+        <textarea class="code" bind:value={f.env} rows="3" spellcheck="false" placeholder="API_KEY=…"></textarea>
+      </label>
+      <label>Dossier de lancement (facultatif) <input bind:value={f.cwd} spellcheck="false" /></label>
+      <div class="bar">
+        <button class="pri" onclick={() => saveServer(true)} disabled={!f.name.trim() || !f.command.trim()}>
+          Enregistrer et connecter
+        </button>
+        <button onclick={() => saveServer(false)} disabled={!f.name.trim() || !f.command.trim()}>Enregistrer</button>
+        <button onclick={back}>Annuler</button>
+      </div>
+
+    {:else if view === 'mcp-import'}
+      <p class="hint">
+        Colle un extrait au format Claude Desktop : <code>{'{ "mcpServers": { "nom": { "command": …, "args": […] } } }'}</code>. Les noms déjà présents sont refusés.
+      </p>
+      <textarea class="code tall" bind:value={importText} spellcheck="false" placeholder={'{\n  "mcpServers": {\n    …\n  }\n}'}></textarea>
+      <div class="bar">
+        <button class="pri" onclick={doImport} disabled={!importText.trim()}>Importer</button>
+        <button onclick={back}>Annuler</button>
+      </div>
+
+    {:else if view === 'mcp-json'}
+      <p class="hint">Édition directe (avancé). Le JSON est validé avant l'enregistrement.</p>
+      <textarea class="code tall" bind:value={rawText} spellcheck="false"></textarea>
+      <div class="bar">
+        <button class="pri" onclick={saveRaw}>Enregistrer</button>
+        <button onclick={back}>Annuler</button>
+      </div>
+    {/if}
+  </div>
+</aside>
+
+<style>
+  .xt {
+    --bg: #141821;
+    --card: #1a1f2b;
+    --line: #2a303d;
+    --txt: #d9dde6;
+    --mut: #8a92a3;
+    --acc: #3d7bff;
+    --bad: #ff5d6c;
+    --ok: #3ecf8e;
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(440px, 100vw);
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--txt);
+    border-left: 1px solid var(--line);
+    border-top: 2px solid var(--acc);
+    font-size: 13px;
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+  }
+  .xt.embedded {
+    position: static;
+    width: auto;
+    height: 100%;
+    z-index: auto;
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  h2 {
+    flex: 1;
+    margin: 0;
+    font-size: 15px;
+  }
+  h3 {
+    margin: 18px 0 8px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--mut);
+  }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tabs button {
+    background: none;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    padding: 10px 12px;
+    color: var(--mut);
+    cursor: pointer;
+  }
+  .tabs button.on {
+    color: var(--txt);
+    border-bottom-color: var(--acc);
+  }
+  .body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px 14px 24px;
+  }
+  .msg {
+    margin: 10px 14px 0;
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--ok);
+    background: rgba(62, 207, 142, 0.08);
+    word-break: break-word;
+  }
+  .msg.bad {
+    border-color: var(--bad);
+    background: rgba(255, 93, 108, 0.08);
+  }
+  .hint {
+    color: var(--mut);
+    line-height: 1.45;
+    margin: 0 0 10px;
+  }
+  .warn {
+    color: #ffb86b;
+    line-height: 1.45;
+    margin: 6px 0;
+    word-break: break-word;
+  }
+  .mut {
+    color: var(--mut);
+    font-size: 12px;
+  }
+  .bar,
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .card .row {
+    margin: 4px 0;
+  }
+  .desc {
+    margin: 4px 0 6px;
+    color: var(--mut);
+    line-height: 1.4;
+    word-break: break-word;
+  }
+  .mono,
+  code,
+  .code {
+    font-family: Consolas, 'Cascadia Mono', monospace;
+  }
+  code {
+    font-size: 12px;
+    color: #b9c4dd;
+  }
+  .badge {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border: 1px solid #7c5cd6;
+    color: #a78bfa;
+    border-radius: 3px;
+  }
+  .badge.projet {
+    border-color: #2a8f6a;
+    color: var(--ok);
+  }
+  .badge.app {
+    border-color: var(--acc);
+    color: var(--acc);
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #555d6e;
+  }
+  .dot.up {
+    background: var(--ok);
+  }
+  button {
+    font: inherit;
+    color: var(--txt);
+    background: #232938;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) {
+    border-color: var(--acc);
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  button.pri {
+    background: var(--acc);
+    border-color: var(--acc);
+    color: #fff;
+  }
+  button.danger {
+    background: var(--bad);
+    border-color: var(--bad);
+    color: #fff;
+  }
+  button.ghostdanger:hover:not(:disabled) {
+    border-color: var(--bad);
+    color: var(--bad);
+  }
+  button.icon {
+    background: none;
+    border: 1px solid transparent;
+    padding: 4px 8px;
+  }
+  label {
+    display: block;
+    margin: 0 0 10px;
+    color: var(--mut);
+  }
+  label input:not([type='checkbox']),
+  label textarea,
+  textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 4px;
+    padding: 6px 8px;
+    font: inherit;
+    color: var(--txt);
+    background: #0f131a;
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    resize: vertical;
+  }
+  textarea.code {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  textarea.tall {
+    min-height: 52vh;
+  }
+  input:focus,
+  textarea:focus {
+    outline: none;
+    border-color: var(--acc);
+  }
+  label.chk {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0 0;
+    color: var(--txt);
+  }
+  label.chk.tool {
+    margin-left: 4px;
+    color: var(--mut);
+  }
+  details {
+    margin-top: 6px;
+  }
+  summary {
+    cursor: pointer;
+    color: var(--mut);
+  }
+</style>

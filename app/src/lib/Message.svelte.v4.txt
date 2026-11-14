@@ -1,0 +1,22 @@
+<script>
+  import { marked } from 'marked';
+  import DOMPurify from 'dompurify';
+
+  let { text = '', reasoning = '' } = $props();
+
+  const html = $derived(DOMPurify.sanitize(marked.parse(text ?? '', { gfm: true, breaks: true })));
+
+  // Les liens n'ouvrent pas la webview de l'app.
+  function onclick(e) {
+    if (e.target instanceof Element && e.target.closest('a')) e.preventDefault();
+  }
+</script>
+
+{#if reasoning}
+  <details class="think">
+    <summary>Raisonnement</summary>
+    <pre>{reasoning}</pre>
+  </details>
+{/if}
+<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+<div class="md" {onclick}>{@html html}</div>

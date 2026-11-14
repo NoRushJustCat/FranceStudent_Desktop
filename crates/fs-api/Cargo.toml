@@ -1,0 +1,15 @@
+[package]
+name = "fs-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+futures-util.workspace = true
+eventsource-stream.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

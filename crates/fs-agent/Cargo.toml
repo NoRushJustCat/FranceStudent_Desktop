@@ -1,0 +1,4 @@
+[package]
+name = "fs-agent"
+version.workspace = true
+edition.workspace = true

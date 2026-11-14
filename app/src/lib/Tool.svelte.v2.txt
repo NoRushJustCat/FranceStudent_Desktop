@@ -1,0 +1,75 @@
+<script>
+  // tool : { callId, name, args, status, output }
+  // status : 'pending' (attend ton accord) | 'running' | 'ok' | 'error' | 'denied'
+  let { tool, onresolve } = $props();
+
+  const LABEL = {
+    list_directory: 'Lister',
+    read_file: 'Lire',
+    search_files: 'Chercher',
+    edit_file: 'Modifier',
+    write_file: 'Écrire',
+    run_command: 'Commande',
+  };
+  const STATE = {
+    pending: 'en attente',
+    running: 'en cours',
+    ok: 'ok',
+    error: 'erreur',
+    denied: 'refusé',
+  };
+  const MAX = 40;
+
+  const a = $derived(tool.args && typeof tool.args === 'object' ? tool.args : {});
+
+  const target = $derived.by(() => {
+    switch (tool.name) {
+      case 'run_command':
+        return '';
+      case 'list_directory':
+        return a.path ?? '.';
+      case 'search_files':
+        return `« ${a.pattern ?? ''} »` + (a.path ? ` dans ${a.path}` : '');
+      case 'read_file':
+        return (a.path ?? '') + (a.start_line ? `:${a.start_line}` : '');
+      default:
+        return a.path ?? '';
+    }
+  });
+
+  function lines(s) {
+    const l = String(s ?? '').split('\n');
+    return l.length > MAX ? [...l.slice(0, MAX), `… (+${l.length - MAX} lignes)`] : l;
+  }
+</script>
+
+<div class="tool {tool.status}">
+  <div class="thead">
+    <b>{LABEL[tool.name] ?? tool.name}</b>
+    <span class="tgt" title={target}>{target}</span>
+    <span class="spacer"></span>
+    <span class="st">{STATE[tool.status] ?? tool.status}</span>
+  </div>
+
+  {#if tool.name === 'run_command'}
+    <pre class="cmd">&gt; {a.command ?? ''}</pre>
+  {:else if tool.name === 'edit_file'}
+    <pre class="diff">{#each lines(a.old_string) as l}<span class="del">- {l}</span>{/each}{#each lines(a.new_string) as l}<span class="add">+ {l}</span>{/each}</pre>
+  {:else if tool.name === 'write_file'}
+    <pre class="diff">{#each lines(a.content) as l}<span class="add">+ {l}</span>{/each}</pre>
+  {/if}
+
+  {#if tool.status === 'pending'}
+    <div class="ask">
+      <button class="primary" onclick={() => onresolve?.(tool.callId, true)}>Autoriser</button>
+      <button onclick={() => onresolve?.(tool.callId, false)}>Refuser</button>
+    </div>
+  {/if}
+
+  {#if tool.output}
+    <details class="out" open={tool.status === 'error'}>
+      <summary>Sortie</summary>
+      <pre>{tool.output}</pre>
+    </details>
+  {/if}
+</div>

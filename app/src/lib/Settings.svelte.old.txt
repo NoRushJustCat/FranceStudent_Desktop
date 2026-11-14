@@ -1,0 +1,54 @@
+<script>
+  import * as api from './api.js';
+
+  let { settings, onclose, onsaved } = $props();
+
+  let baseUrl = $state(settings?.baseUrl ?? '');
+  let apiKey = $state('');
+  let error = $state('');
+  let saving = $state(false);
+
+  async function save() {
+    error = '';
+    saving = true;
+    try {
+      await api.saveSettings({ baseUrl, apiKey });
+      onsaved();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      saving = false;
+    }
+  }
+</script>
+
+<div class="overlay">
+  <form
+    class="dialog"
+    onsubmit={(e) => {
+      e.preventDefault();
+      save();
+    }}
+  >
+    <h2>Réglages</h2>
+    <label>
+      URL de l'API
+      <input bind:value={baseUrl} placeholder="https://api.francestudent.org" />
+    </label>
+    <label>
+      Clé API
+      <input
+        type="password"
+        bind:value={apiKey}
+        autocomplete="off"
+        placeholder={settings?.hasKey ? 'enregistrée — laisser vide pour la garder' : 'colle ta clé'}
+      />
+    </label>
+    <div class="dim">La clé est stockée dans le coffre d'identifiants de Windows, pas dans un fichier.</div>
+    {#if error}<div class="error">{error}</div>{/if}
+    <div class="row">
+      {#if settings?.hasKey}<button type="button" onclick={onclose}>Annuler</button>{/if}
+      <button class="primary" type="submit" disabled={saving}>Enregistrer</button>
+    </div>
+  </form>
+</div>

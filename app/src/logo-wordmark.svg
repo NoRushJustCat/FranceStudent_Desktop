@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 128" width="520" height="128" role="img" aria-label="FS Code">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b8cff"/>
+      <stop offset="1" stop-color="#2f5fe0"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)"/>
+  <path d="M39 44 L69 64 L39 84" fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="76" y="79" width="24" height="10" rx="5" fill="#ffffff" opacity="0.92"/>
+  <text x="144" y="82" font-family="Inter, 'Segoe UI', system-ui, sans-serif" font-size="60" font-weight="700" fill="#e6ebf5" letter-spacing="-1">FS <tspan fill="#5b8cff">Code</tspan></text>
+</svg>

@@ -1,0 +1,567 @@
+<script>
+  import { onMount, tick } from 'svelte';
+  import './extra.css';
+  import * as api from './lib/api.js';
+  import Message from './lib/Message.svelte';
+  import Tool from './lib/Tool.svelte';
+  import Settings from './lib/Settings.svelte';
+
+  // ---------- état ----------
+  let settings = $state(null);
+  let agents = $state([]);
+  let agentId = $state(null);
+  let chats = $state([]); // [{id, title}]
+  let chatId = $state(null);
+  let items = $state([]); // {key, kind:'user'|'assistant'|'tool', ...}
+  let input = $state('');
+  let busy = $state(false);
+  let error = $state('');
+  let showSettings = $state(false);
+  let usage = $state(null);
+  let ctx = $state(null);
+  let compacting = $state(false);
+  let mode = $state(localStorage.getItem('fscode.mode') === 'code' ? 'code' : 'chat');
+  let workdir = $state('');
+  let autoAccept = $state(false);
+  let renaming = $state(null);
+  let renameText = $state('');
+  let confirmDel = $state(null);
+  let box = $state(null);
+
+  let seq = 0;
+  let stick = true; // défilement auto tant qu'on est proche du bas
+  let delTimer;
+  const nid = () => ++seq;
+
+  const folderName = $derived(workdir.split(/[\\/]/).filter(Boolean).pop() ?? '');
+  const budget = $derived(readBudget(usage));
+  const ctxInfo = $derived(readCtx(ctx));
+  const rows = $derived(Math.min(8, Math.max(1, input.split('\n').length)));
+
+  // ---------- parseurs tolérants (formats API pas tous confirmés) ----------
+  function num(o, keys) {
+    for (const k of keys) {
+      const v = o?.[k];
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+    }
+    return null;
+  }
+
+  function fmtK(n) {
+    if (n < 1000) return String(Math.round(n));
+    return (n / 1000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '') + 'k';
+  }
+
+  function readBudget(u) {
+    const b = u?.chatBudget ?? u?.budget;
+    if (!b || typeof b !== 'object') return null;
+    let pct = num(b, ['usedPercent', 'percentUsed', 'usagePercent', 'percent', 'percentage']);
+    if (pct == null) {
+      const ratio = num(b, ['usedRatio', 'ratio', 'fractionUsed']);
+      if (ratio != null) pct = ratio * 100;
+    }
+    if (pct == null) {
+      const limit = num(b, ['limitUsd', 'limit', 'budgetUsd', 'budget', 'maxUsd', 'max', 'total', 'totalUsd', 'capUsd', 'cap']);
+      const used = num(b, ['usedUsd', 'used', 'spentUsd', 'spent', 'consumedUsd', 'consumed']);
+      const left = num(b, ['remainingUsd', 'remaining', 'leftUsd', 'left']);
+      if (limit && used != null) pct = (used / limit) * 100;
+      else if (limit && left != null) pct = (1 - left / limit) * 100;
+    }
+    if (pct == null) return null;
+    pct = Math.max(0, Math.min(100, Math.round(pct)));
+    const approx = !!(b.accountingUncertain ?? u.accountingUncertain);
+    return { pct, approx, tip: JSON.stringify(b).slice(0, 300) };
+  }
+
+  function readCtx(c) {
+    if (!c || typeof c !== 'object') return null;
+    const o = c.context && typeof c.context === 'object' ? c.context : c;
+    const used = num(o, ['usedTokens', 'tokensUsed', 'tokenCount', 'totalTokens', 'currentTokens', 'promptTokens', 'tokens', 'used']);
+    const max = num(o, ['contextWindow', 'maxTokens', 'windowSize', 'contextWindowTokens', 'limit', 'max']);
+    let pct = num(o, ['usedPercent', 'percentUsed', 'usagePercent', 'percent', 'percentage']);
+    if (pct == null && used != null && max) pct = (used / max) * 100;
+    if (used == null && pct == null) return null;
+    const parts = [];
+    if (used != null) parts.push(max ? `${fmtK(used)} / ${fmtK(max)}` : fmtK(used));
+    if (pct != null) parts.push(`${Math.round(pct)} %`);
+    return { label: parts.join(' · ') };
+  }
+
+  function asText(c) {
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) return c.map(asText).join('');
+    if (c && typeof c === 'object') return asText(c.text ?? c.content ?? c.value ?? '');
+    return '';
+  }
+
+  function parseChats(r) {
+    const arr = Array.isArray(r) ? r : (r?.chats ?? r?.items ?? r?.data ?? r?.results ?? []);
+    return arr
+      .map((c) => ({ id: String(c?.id ?? c?.chatId ?? ''), title: c?.title ?? c?.name ?? '' }))
+      .filter((c) => c.id !== '');
+  }
+
+  function parseMessages(chat) {
+    const raw = chat?.chatMessages ?? chat?.messages ?? [];
+    const out = [];
+    for (const m of raw) {
+      const role = String(m?.role ?? m?.type ?? m?.author ?? m?.sender ?? '').toLowerCase();
+      const text = asText(m?.content ?? m?.text ?? m?.message ?? '');
+      if (role.includes('user') || role.includes('human')) {
+        out.push({ key: nid(), kind: 'user', text });
+      } else if (role.includes('assistant') || role.includes('model') || role === 'ai' || role.includes('bot')) {
+        const reasoning = asText(m?.reasoning ?? m?.reasoningSummary ?? '');
+        if (text || reasoning) out.push({ key: nid(), kind: 'assistant', text, reasoning });
+      }
+    }
+    if (!out.length && raw.length) {
+      error = 'Historique : format inconnu (clés du 1er message : ' + Object.keys(raw[0] ?? {}).join(', ') + ')';
+    }
+    return out;
+  }
+
+  // ---------- chargement ----------
+  async function boot() {
+    try {
+      settings = await api.getSettings();
+    } catch (e) {
+      error = String(e);
+      return;
+    }
+    workdir = settings.lastWorkdir ?? '';
+    autoAccept = !!settings.autoAccept;
+    if (!settings.hasKey) {
+      showSettings = true;
+      return;
+    }
+    await Promise.all([loadAgents(), refreshChats(), refreshUsage()]);
+  }
+
+  async function loadAgents() {
+    try {
+      const list = await api.listAgents();
+      agents = list.filter((a) => a.isActive);
+      const want = settings?.lastAgentId;
+      const pick = agents.find((a) => a.id === want) ?? agents.find((a) => a.isDefault) ?? agents[0];
+      agentId = pick?.id ?? null;
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function refreshChats() {
+    try {
+      chats = parseChats(await api.listChats(60));
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function refreshUsage() {
+    try {
+      usage = await api.getUsage();
+    } catch {
+      /* jauge facultative */
+    }
+  }
+
+  async function refreshCtx() {
+    if (!chatId) {
+      ctx = null;
+      return;
+    }
+    try {
+      ctx = await api.getContext(chatId);
+    } catch {
+      ctx = null;
+    }
+  }
+
+  onMount(() => {
+    boot();
+  });
+
+  // ---------- défilement ----------
+  function onScroll() {
+    if (box) stick = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  }
+  function keepBottom() {
+    if (!stick) return;
+    tick().then(() => {
+      if (box) box.scrollTop = box.scrollHeight;
+    });
+  }
+
+  // ---------- réglages rapides ----------
+  function saveAgent(id) {
+    agentId = id;
+    api.saveSettings({ lastAgentId: id }).catch(() => {});
+  }
+
+  async function chooseFolder() {
+    try {
+      const p = await api.pickFolder();
+      if (p) {
+        workdir = p;
+        await api.saveSettings({ lastWorkdir: p });
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function setMode(m) {
+    if (busy) return;
+    mode = m;
+    localStorage.setItem('fscode.mode', m);
+    if (m === 'code' && !workdir) await chooseFolder();
+  }
+
+  function setAuto(v) {
+    autoAccept = v;
+    api.saveSettings({ autoAccept: v }).catch((e) => (error = String(e)));
+  }
+
+  async function onSaved() {
+    showSettings = false;
+    await boot();
+  }
+
+  // ---------- liste des chats ----------
+  function newChat() {
+    if (busy) return;
+    chatId = null;
+    items = [];
+    ctx = null;
+    error = '';
+  }
+
+  async function openChat(id) {
+    if (busy) return;
+    error = '';
+    try {
+      const c = await api.getChat(id);
+      chatId = id;
+      items = parseMessages(c);
+      const a = c?.agent?.id ?? c?.agentId;
+      if (typeof a === 'number' && agents.some((x) => x.id === a)) agentId = a;
+      stick = true;
+      keepBottom();
+      refreshCtx();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function setTitle(id, title) {
+    const c = chats.find((x) => x.id === id);
+    if (c) c.title = title;
+    else chats.unshift({ id, title });
+  }
+
+  function focusSel(node) {
+    node.focus();
+    node.select();
+  }
+
+  function startRename(c) {
+    renaming = c.id;
+    renameText = c.title ?? '';
+  }
+
+  async function commitRename(id) {
+    const t = renameText.trim();
+    renaming = null;
+    if (!t) return;
+    try {
+      await api.renameChat(id, t);
+      setTitle(id, t);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function askDelete(id) {
+    if (confirmDel === id) {
+      doDelete(id);
+      return;
+    }
+    confirmDel = id;
+    clearTimeout(delTimer);
+    delTimer = setTimeout(() => {
+      if (confirmDel === id) confirmDel = null;
+    }, 3000);
+  }
+
+  async function doDelete(id) {
+    confirmDel = null;
+    try {
+      await api.deleteChat(id);
+      chats = chats.filter((c) => c.id !== id);
+      if (chatId === id) {
+        chatId = null;
+        items = [];
+        ctx = null;
+      }
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  // ---------- envoi ----------
+  function pushText(field, text) {
+    let last = items[items.length - 1];
+    if (!last || last.kind !== 'assistant') {
+      items.push({ key: nid(), kind: 'assistant', text: '', reasoning: '' });
+      last = items[items.length - 1];
+    }
+    last[field] += text;
+  }
+
+  function onEvent(ev) {
+    switch (ev.type) {
+      case 'opened':
+        chatId = ev.chat_id;
+        if (!chats.some((c) => c.id === ev.chat_id)) chats.unshift({ id: ev.chat_id, title: '' });
+        break;
+      case 'title':
+        setTitle(ev.chat_id, ev.title);
+        break;
+      case 'delta':
+        pushText('text', ev.text);
+        break;
+      case 'reasoning':
+        pushText('reasoning', ev.text);
+        break;
+      case 'tool_call':
+        items.push({
+          key: nid(),
+          kind: 'tool',
+          callId: ev.call_id,
+          name: ev.name,
+          args: ev.args ?? {},
+          status: ev.needs_confirm ? 'pending' : 'running',
+          output: '',
+        });
+        break;
+      case 'tool_result': {
+        const t = items.find((x) => x.kind === 'tool' && x.callId === ev.call_id);
+        if (t) {
+          t.output = ev.output;
+          t.status = ev.denied ? 'denied' : ev.is_error ? 'error' : 'ok';
+        }
+        break;
+      }
+      case 'done':
+        chatId = ev.chat_id;
+        break;
+      case 'failed':
+        error = ev.message + (ev.code ? ` (${ev.code})` : '');
+        break;
+      case 'cancelled':
+        break;
+    }
+    keepBottom();
+  }
+
+  async function send() {
+    const content = input.trim();
+    if (!content || busy) return;
+    if (agentId == null) {
+      error = 'Choisis un modèle.';
+      return;
+    }
+    if (mode === 'code' && !workdir) {
+      error = 'Mode Code : choisis d\'abord un dossier de travail.';
+      return;
+    }
+    error = '';
+    input = '';
+    items.push({ key: nid(), kind: 'user', text: content });
+    busy = true;
+    stick = true;
+    keepBottom();
+    try {
+      await api.sendMessage(
+        { chatId, agentId, content, workdir: mode === 'code' ? workdir : null, autoAccept },
+        onEvent
+      );
+    } catch (e) {
+      error = String(e);
+    } finally {
+      busy = false;
+      for (const it of items) {
+        if (it.kind === 'tool' && (it.status === 'pending' || it.status === 'running')) {
+          it.status = 'error';
+          it.output = it.output || 'Interrompu';
+        }
+      }
+      refreshChats();
+      refreshUsage();
+      refreshCtx();
+    }
+  }
+
+  async function stop() {
+    if (!chatId) return;
+    try {
+      await api.cancelChat(chatId);
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  function resolve(callId, allow) {
+    const t = items.find((x) => x.kind === 'tool' && x.callId === callId);
+    if (t) t.status = allow ? 'running' : 'denied';
+    api.resolveTool(callId, allow).catch((e) => (error = String(e)));
+  }
+
+  async function compact() {
+    if (!chatId || busy || compacting) return;
+    compacting = true;
+    error = '';
+    try {
+      await api.compactChat(chatId);
+      await refreshCtx();
+    } catch (e) {
+      error = String(e);
+    } finally {
+      compacting = false;
+    }
+  }
+
+  function onKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      send();
+    }
+  }
+</script>
+
+<div class="shell">
+  <aside class="side">
+    <div class="brand">FS CODE</div>
+    <button class="primary wide" onclick={newChat} disabled={busy}>Nouveau chat</button>
+
+    <div class="chats">
+      {#each chats as c (c.id)}
+        <div class="chatrow">
+          {#if renaming === c.id}
+            <input
+              class="renamein"
+              bind:value={renameText}
+              use:focusSel
+              onkeydown={(e) => {
+                if (e.key === 'Enter') commitRename(c.id);
+                else if (e.key === 'Escape') renaming = null;
+              }}
+              onblur={() => (renaming = null)}
+            />
+          {:else}
+            <button class="chat" class:active={c.id === chatId} title={c.title} onclick={() => openChat(c.id)}>{c.title || 'Sans titre'}</button>
+            <div class="acts" class:show={confirmDel === c.id}>
+              <button class="mini" title="Renommer" onclick={() => startRename(c)}>✎</button>
+              <button
+                class="mini"
+                class:danger={confirmDel === c.id}
+                title="Supprimer"
+                disabled={busy && c.id === chatId}
+                onclick={() => askDelete(c.id)}>{confirmDel === c.id ? 'Supprimer ?' : '✕'}</button>
+            </div>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <select
+        bind:value={agentId}
+        disabled={busy || agents.length === 0}
+        onchange={(e) => saveAgent(Number(e.currentTarget.value))}>
+        {#each agents as a (a.id)}
+          <option value={a.id}>{a.name}</option>
+        {/each}
+      </select>
+
+      <div class="seg">
+        <button class:on={mode === 'chat'} onclick={() => setMode('chat')} disabled={busy}>Chat</button>
+        <button class:on={mode === 'code'} onclick={() => setMode('code')} disabled={busy}>Code</button>
+      </div>
+
+      {#if mode === 'code'}
+        <button class="folder" onclick={chooseFolder} disabled={busy} title={workdir || 'Choisir le dossier de travail'}>{folderName || 'Choisir un dossier…'}</button>
+        <label class="chk" title="Applique les modifs de fichiers sans demander. Les commandes demandent toujours.">
+          <input type="checkbox" checked={autoAccept} onchange={(e) => setAuto(e.currentTarget.checked)} />
+          Accepter auto les modifs
+        </label>
+      {/if}
+
+      <span class="spacer"></span>
+      <button onclick={() => (showSettings = true)}>Réglages</button>
+    </header>
+
+    <div class="messages" bind:this={box} onscroll={onScroll}>
+      {#if items.length === 0}
+        <div class="empty">
+          {#if mode === 'code' && workdir}
+            Mode Code — le modèle peut lire et modifier les fichiers de « {folderName} ».
+          {:else if mode === 'code'}
+            Mode Code — choisis un dossier de travail.
+          {:else}
+            Nouvelle conversation.
+          {/if}
+        </div>
+      {/if}
+
+      {#each items as it (it.key)}
+        {#if it.kind === 'tool'}
+          <Tool tool={it} onresolve={resolve} />
+        {:else}
+          <Message role={it.kind} text={it.text} reasoning={it.reasoning} />
+        {/if}
+      {/each}
+    </div>
+
+    {#if error}<div class="error">{error}</div>{/if}
+
+    <div class="composer">
+      <textarea
+        bind:value={input}
+        {rows}
+        onkeydown={onKey}
+        placeholder={mode === 'code'
+          ? 'Demande quelque chose sur ton code…  (Entrée : envoyer · Maj+Entrée : saut de ligne)'
+          : 'Écris un message…  (Entrée : envoyer · Maj+Entrée : saut de ligne)'}
+      ></textarea>
+      {#if busy}
+        <button onclick={stop}>Stop</button>
+      {:else}
+        <button class="primary" onclick={send} disabled={!input.trim()}>Envoyer</button>
+      {/if}
+    </div>
+  </main>
+
+  <footer class="status">
+    <span>{mode === 'code' ? 'Code' : 'Chat'}</span>
+    {#if mode === 'code' && workdir}<span title={workdir}>{folderName}</span>{/if}
+    <span class="spacer"></span>
+    {#if ctxInfo}
+      <span title="Occupation du contexte">ctx {ctxInfo.label}</span>
+      <button class="mini" onclick={compact} disabled={!chatId || busy || compacting}>{compacting ? '…' : 'Compacter'}</button>
+    {/if}
+    {#if budget}
+      <span title={budget.tip}>budget {budget.approx ? '~' : ''}{budget.pct} %</span>
+      <span class="gauge" class:warn={budget.pct >= 80}><i style="width: {budget.pct}%"></i></span>
+    {:else if usage}
+      <span title="Réponse /user/usage non reconnue">budget ?</span>
+    {/if}
+  </footer>
+</div>
+
+{#if showSettings && settings}
+  <Settings {settings} onclose={() => (showSettings = false)} onsaved={onSaved} />
+{/if}

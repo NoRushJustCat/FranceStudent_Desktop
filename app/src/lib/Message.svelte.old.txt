@@ -1,0 +1,29 @@
+<script>
+  import { marked } from 'marked';
+  import DOMPurify from 'dompurify';
+
+  let { msg } = $props();
+
+  const html = $derived(
+    msg.role === 'assistant'
+      ? DOMPurify.sanitize(marked.parse(msg.content ?? '', { async: false, breaks: true }))
+      : ''
+  );
+
+  // Un clic sur un lien ne doit jamais faire naviguer la fenêtre de l'app.
+  function guardLinks(e) {
+    if (e.target instanceof Element && e.target.closest('a')) e.preventDefault();
+  }
+</script>
+
+<div class="msg {msg.role}">
+  <div class="who">{msg.role === 'user' ? 'toi' : 'fs'}</div>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="body" onclick={guardLinks}>
+    {#if msg.reasoning}
+      <details class="think"><summary>Réflexion</summary><pre>{msg.reasoning}</pre></details>
+    {/if}
+    {#if msg.role === 'user'}{msg.content}{:else if msg.content}<div class="md">{@html html}</div>{:else if !msg.cancelled}<span class="dim">…</span>{/if}
+    {#if msg.cancelled}<div class="dim">[interrompu]</div>{/if}
+  </div>
+</div>

@@ -1,0 +1,106 @@
+<script>
+  import { saveSettings } from './api.js';
+
+  // settings : {baseUrl, hasKey, lastAgentId, lastWorkdir, autoAccept, eco}
+  let { settings, usage = null, onclose, onsaved } = $props();
+
+  let tab = $state('compte');
+  let baseUrl = $state(settings?.baseUrl ?? '');
+  let apiKey = $state('');
+  let autoAccept = $state(!!settings?.autoAccept);
+  let eco = $state(!!settings?.eco);
+  let err = $state('');
+  let saving = $state(false);
+
+  const tabs = [
+    ['compte', 'Compte'],
+    ['code', 'Code'],
+    ['eco', 'Économie'],
+    ['diag', 'Diagnostic'],
+  ];
+
+  async function save() {
+    saving = true;
+    err = '';
+    try {
+      await saveSettings({
+        baseUrl: baseUrl.trim() || null,
+        apiKey: apiKey.trim() || null,
+        autoAccept,
+        eco,
+      });
+      onsaved?.();
+    } catch (e) {
+      err = String(e);
+    }
+    saving = false;
+  }
+
+  const diag = $derived(
+    JSON.stringify({ settings: { ...settings, apiKey: undefined }, usage }, null, 2),
+  );
+</script>
+
+<div class="overlay" role="presentation" onmousedown={(e) => e.target === e.currentTarget && onclose?.()}>
+  <div class="dialog wide" role="dialog" aria-modal="true" aria-label="Réglages">
+    <h2>Réglages</h2>
+
+    <div class="tabs">
+      {#each tabs as [id, label] (id)}
+        <button class:on={tab === id} onclick={() => (tab = id)}>{label}</button>
+      {/each}
+    </div>
+
+    <div class="pane">
+      {#if tab === 'compte'}
+        <label>
+          URL de l'API
+          <input bind:value={baseUrl} spellcheck="false" placeholder="https://api.francestudent.org" />
+        </label>
+        <label>
+          Clé API {#if settings?.hasKey}<span class="badge ro">enregistrée</span>{/if}
+          <input
+            type="password"
+            bind:value={apiKey}
+            autocomplete="off"
+            placeholder={settings?.hasKey ? 'Laisser vide pour la conserver' : 'Colle ta clé ici'}
+          />
+        </label>
+        <div class="hint">La clé n'est jamais réaffichée.</div>
+      {:else if tab === 'code'}
+        <label class="chk">
+          <input type="checkbox" bind:checked={autoAccept} />
+          Accepter automatiquement les modifications de fichiers
+        </label>
+        <div class="hint">
+          Valable pour <code>edit_file</code> et <code>write_file</code> seulement. Les commandes
+          (<code>run_command</code>) et les outils MCP demandent toujours confirmation.
+        </div>
+        <div class="hint">
+          Dossier de travail : <span class="mono">{settings?.lastWorkdir ?? 'aucun'}</span> (à changer depuis la barre du haut).
+        </div>
+      {:else if tab === 'eco'}
+        <label class="chk">
+          <input type="checkbox" bind:checked={eco} />
+          Mode économie par défaut
+        </label>
+        <ul class="hint">
+          <li>Sorties d'outils plafonnées à 8 000 caractères.</li>
+          <li>10 étapes d'outils maximum par message.</li>
+          <li>Descriptions d'outils et de skills raccourcies.</li>
+          <li>Compaction automatique du contexte quand il devient gros.</li>
+        </ul>
+        <div class="hint">Le bouton « Éco » de la barre du haut l'active ou le coupe à tout moment.</div>
+      {:else}
+        <div class="hint">Données brutes, utiles pour corriger l'interface. La clé API n'y figure pas.</div>
+        <pre class="raw">{diag}</pre>
+      {/if}
+    </div>
+
+    {#if err}<div class="error">{err}</div>{/if}
+    <div class="row">
+      <button onclick={() => onclose?.()}>Annuler</button>
+      <button class="primary" onclick={save} disabled={saving}>Enregistrer</button>
+    </div>
+  </div>
+</div>

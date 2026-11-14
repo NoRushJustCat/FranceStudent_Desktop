@@ -1,0 +1,63 @@
+/* Compléments à app.css : mode Code, outils, actions de la liste de chats. */
+
+/* Barre du haut */
+.top { flex-wrap: wrap; row-gap: 6px; }
+.top select { max-width: 240px; }
+.seg { display: inline-flex; }
+.seg button { background: var(--panel); }
+.seg button + button { margin-left: -1px; }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.folder { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chk { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); cursor: pointer; user-select: none; }
+.chk input { margin: 0; accent-color: var(--accent); }
+
+/* Liste de chats : actions au survol */
+.chatrow { position: relative; flex: none; }
+.chatrow .chat { display: -webkit-box; }
+.acts { position: absolute; top: 5px; right: 4px; display: none; gap: 2px; }
+.chatrow:hover .acts, .chatrow:focus-within .acts, .acts.show { display: flex; }
+.acts button { height: 22px; line-height: 20px; background: var(--panel2); }
+.acts button.danger { color: var(--danger); border-color: var(--danger); }
+.renamein { width: 100%; min-height: 34px; }
+
+/* Cartes d'outils */
+.tool {
+  margin: 0 0 12px 44px;
+  max-width: 876px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--dim);
+  font-size: 12.5px;
+}
+.tool.pending { border-left-color: #e5a50a; }
+.tool.running { border-left-color: var(--accent); }
+.tool.ok { border-left-color: #3fb950; }
+.tool.error { border-left-color: var(--danger); }
+.tool.denied { border-left-color: var(--dim); opacity: 0.8; }
+.thead { display: flex; align-items: baseline; gap: 8px; padding: 4px 10px; min-width: 0; }
+.thead b { flex: none; font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.05em; }
+.tgt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px var(--mono); color: var(--dim); }
+.st { flex: none; font: 11px var(--mono); color: var(--dim); }
+.tool pre {
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  background: #0a0d12;
+  font: 12px/1.45 var(--mono);
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tool pre.cmd { color: #c9d4e5; }
+.diff .add { display: block; color: #7ee787; background: rgba(63, 185, 80, 0.12); }
+.diff .del { display: block; color: #ff9b9b; background: rgba(255, 107, 107, 0.12); }
+.ask { display: flex; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--line); }
+.tool details.out > summary { padding: 3px 10px; color: var(--dim); cursor: pointer; border-top: 1px solid var(--line); }
+
+/* Barre d'état */
+.status button.mini { height: 18px; line-height: 16px; }
+.gauge.warn i { background: #e5a50a; }
+
+/* Réglages */
+.dialog label.chk { flex-direction: row; align-items: center; gap: 8px; }

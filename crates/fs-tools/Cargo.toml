@@ -1,0 +1,9 @@
+[package]
+name = "fs-tools"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+regex = "1"
+serde_json.workspace = true
+tokio.workspace = true
