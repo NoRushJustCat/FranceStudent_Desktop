@@ -1,4 +1,4 @@
-# FS Code
+# France Student Desktop
 
 Application de bureau permettant de connecter les IA de **France Student** à l’ordinateur de l’utilisateur.
 
