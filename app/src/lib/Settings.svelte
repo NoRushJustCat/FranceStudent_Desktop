@@ -1,6 +1,7 @@
 <script>
   import { untrack } from 'svelte';
   import { saveSettings, openExternal } from './api.js';
+  import { getUserInstructions, updateUserInstructions } from './instructions.js';
   import Extensions from './Extensions.svelte';
   import { THEMES, normalizeTheme } from './themes.js';
 
@@ -202,10 +203,64 @@
     }
   }
 
+  let instr = $state('');
+  let instrSaved = $state('');
+  let instrLoaded = $state(false);
+  let instrLoading = $state(false);
+  let instrSaving = $state(false);
+  let instrMsg = $state('');
+  let instrErr = $state('');
+  let instrTried = false;
+  const instrDirty = $derived(instrLoaded && instr !== instrSaved);
+
+  const pickInstr = (d) =>
+    String(d?.customInstructions ?? d?.instructions?.customInstructions ?? '');
+
+  async function loadInstructions() {
+    instrLoading = true;
+    instrErr = '';
+    try {
+      const d = await getUserInstructions();
+      instrSaved = pickInstr(d);
+      instr = instrSaved;
+      instrLoaded = true;
+    } catch (err) {
+      instrErr = String(err?.message || err);
+    } finally {
+      instrLoading = false;
+    }
+  }
+
+  async function saveInstructions() {
+    if (instrSaving || !instrDirty) return;
+    instrSaving = true;
+    instrMsg = '';
+    instrErr = '';
+    try {
+      const d = await updateUserInstructions({ customInstructions: instr });
+      const back = d?.customInstructions ?? d?.instructions?.customInstructions;
+      instrSaved = back == null ? instr : String(back);
+      instr = instrSaved;
+      instrMsg = 'Instructions enregistrées.';
+    } catch (err) {
+      instrErr = String(err?.message || err);
+    } finally {
+      instrSaving = false;
+    }
+  }
+
+  $effect(() => {
+    if (tab === 'instructions' && !instrTried) {
+      instrTried = true;
+      loadInstructions();
+    }
+  });
+
   const navItems = [
     { id: 'apparence', label: 'Apparence' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'usage', label: 'Usage' },
+    { id: 'instructions', label: 'Instructions' },
     { id: 'compte', label: 'Compte et API' },
     { id: 'code', label: 'Mode Code' },
     { id: 'skills', label: 'Skills' },
@@ -623,6 +678,55 @@
             <button type="button" class="btn-ghost sm" onclick={() => onreset?.()}>
               Remettre à zéro
             </button>
+          </div>
+        </div>
+
+      {:else if tab === 'instructions'}
+        <header class="sec-head sec-head-row">
+          <div>
+            <h2>Instructions personnalisées</h2>
+            <p class="sec-sub">Consignes appliquées par l’IA à tes conversations.</p>
+          </div>
+          <button type="button" class="head-x" aria-label="Fermer" onclick={() => onclose?.()}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </header>
+
+        <div class="card form-card">
+          <div class="field">
+            <div class="field-head">
+              <label for="instr-text">Comment l’IA doit te répondre</label>
+              <span class="instr-count">{instr.length} caractères</span>
+            </div>
+            <textarea
+              id="instr-text"
+              class="input input-area"
+              placeholder="Ex. : réponds en français, de façon concise et structurée…"
+              disabled={!instrLoaded}
+              bind:value={instr}
+            ></textarea>
+          </div>
+
+          {#if instrErr}
+            <div class="msg-err">{instrErr}</div>
+          {/if}
+          {#if instrMsg && !instrDirty}
+            <div class="msg-ok">{instrMsg}</div>
+          {/if}
+
+          <div class="form-actions">
+            <button type="button" class="btn-primary" disabled={instrSaving || !instrDirty} onclick={saveInstructions}>
+              {instrSaving ? 'Enregistrement…' : 'Enregistrer'}
+            </button>
+            <button type="button" class="btn-ghost" disabled={!instrDirty || instrSaving} onclick={() => (instr = instrSaved)}>
+              Annuler
+            </button>
+            <button type="button" class="btn-ghost" disabled={!instr || instrSaving} onclick={() => (instr = '')}>
+              Vider
+            </button>
+            {#if !instrLoaded && !instrLoading}
+              <button type="button" class="btn-ghost" onclick={loadInstructions}>Réessayer</button>
+            {/if}
           </div>
         </div>
 
@@ -1654,6 +1758,20 @@
 
   .input-wrap .input {
     padding-right: 36px;
+  }
+
+  .input-area {
+    height: auto;
+    min-height: 190px;
+    padding: 10px 12px;
+    resize: vertical;
+    line-height: 1.5;
+    font-family: inherit;
+  }
+
+  .instr-count {
+    font-size: 11.5px;
+    color: var(--dim);
   }
 
   .eye-btn {

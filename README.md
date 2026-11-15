@@ -26,7 +26,7 @@ FS Code fournit une interface de chat capable d’interagir avec un projet local
 - Mode économie avec sorties d’outils limitées, moins d’étapes et compression automatique du contexte.
 - Gestion des agents, conversations, utilisation de l’API et contexte courant.
 - Support des extensions et des serveurs **MCP**.
-- Tunnel local intégré avec `cloudflared` pour le pont MCP.
+- Serveurs MCP locaux appelés via `run_command` (`mcp list`, `mcp tools`, `mcp call …`), sans tunnel, sur le principe de `fs-mcp-cli`.
 - Stockage sécurisé du token API dans le coffre-fort du système.
 
 ## Architecture
@@ -38,7 +38,7 @@ fscode/
 ├── app/
 │   ├── src/                 # Interface Svelte
 │   ├── src-tauri/           # Application native Tauri et commandes Rust
-│   ├── scripts/             # Scripts de préparation, dont cloudflared
+│   ├── scripts/             # Scripts de préparation
 │   ├── package.json
 │   └── vite.config.js
 ├── crates/
@@ -81,7 +81,7 @@ Pour développer le projet, il faut installer :
 - un accès à l’API France Student ;
 - un token de connexion France Student service IA.
 
-La commande `npm install` télécharge également le binaire `cloudflared` utilisé par le pont MCP.
+Les serveurs MCP sont lancés en local par l’application, selon la configuration de l’onglet MCP. Aucun tunnel ni binaire externe n’est nécessaire.
 
 ## Installation
 
@@ -175,6 +175,8 @@ Les opérations sont classées par niveau de risque :
 | `run_command` | Commande | Toujours |
 
 Même lorsque l’acceptation automatique des modifications est activée, l’exécution de commandes reste soumise à confirmation.
+
+Hors mode Code, `run_command` n’accepte que les commandes `mcp …`. `mcp list` et `mcp tools` sont libres ; `mcp call` demande confirmation.
 
 ## Limites actuelles
 

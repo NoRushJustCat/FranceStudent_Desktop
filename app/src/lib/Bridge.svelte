@@ -1,9 +1,9 @@
-<script>
+﻿<script>
   // Pastille flottante + panneau du pont MCP (serveur local, tunnel, enregistrement France Student).
   // Autonome : ne dépend d'aucun autre fichier de l'app, seulement des commandes Tauri `bridge_*`.
   import { invoke } from '@tauri-apps/api/core';
 
-  let { docked = false } = $props();
+  let { docked = false, inline = false } = $props();
 
   const POS_KEY = 'fscode.bridge.pos';
   const PHASES = { stopped: 'arrêté', starting: 'démarrage', running: 'actif', error: 'erreur' };
@@ -158,7 +158,7 @@
 
   // Interrogation régulière : plus vite quand le panneau est ouvert.
   $effect(() => {
-    const every = open ? 1500 : 3000;
+    const every = open || inline ? 1500 : 3000;
     refresh();
     const t = setInterval(refresh, every);
     return () => clearInterval(t);
@@ -204,7 +204,8 @@
 
 <svelte:window bind:innerWidth={winW} bind:innerHeight={winH} onkeydown={onKey} />
 
-<div class="bridge" class:docked bind:this={root} style={docked ? '' : place}>
+<div class="bridge" class:docked class:inline bind:this={root} style={docked || inline ? '' : place}>
+  {#if !inline}
   <button
     class="chip"
     type="button"
@@ -220,9 +221,10 @@
     <span class="dot {tone}" aria-hidden="true"></span>
     <span class="txt">{label}</span>
   </button>
+  {/if}
 
-  {#if open}
-    <div class="panel {docked ? 'down right' : (above ? 'up' : 'down') + ' ' + (alignRight ? 'right' : 'left')}">
+  {#if open || inline}
+    <div class="panel {inline ? 'inline' : docked ? 'down right' : (above ? 'up' : 'down') + ' ' + (alignRight ? 'right' : 'left')}">
       <div class="panel-scroll">
         <div class="head">
           <strong>Pont MCP</strong>
@@ -391,6 +393,24 @@
   .bridge.docked .chip[aria-expanded='true'] {
     background: var(--hover, #1f2c46);
     border-color: var(--accent-line, var(--line2));
+  }
+
+  .bridge.inline {
+    position: static;
+    z-index: auto;
+    font-size: 13px;
+  }
+
+  .panel.inline {
+    position: static;
+    width: auto;
+    box-shadow: none;
+    background: var(--panel2, #121a2a);
+  }
+
+  .panel.inline .panel-scroll {
+    max-height: none;
+    overflow: visible;
   }
 
   .chip {

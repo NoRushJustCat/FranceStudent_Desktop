@@ -1,4 +1,5 @@
 ﻿<script>
+  import ContextRing from './ContextRing.svelte';
   let {
     input = $bindable(''),
     enableWebSearch = $bindable(false),
@@ -9,6 +10,8 @@
     autoAccept = false,
     agents = [],
     curAgent = null,
+    ctx = null,
+    eco = false,
     skills = [],
     commands = [],
     attachments = [],
@@ -27,6 +30,7 @@
   let fileInput = $state(null);
   let dragging = $state(false);
   let dragDepth = $state(0);
+  let moreOpen = $state(false);
 
   let acOpen = $state(false);
   let acMenuEl = $state(null);
@@ -291,6 +295,8 @@
   }
 </script>
 
+<svelte:window onclick={(e) => { if (moreOpen && !e.target.closest?.('.more-wrap')) moreOpen = false; }} onkeydown={(e) => { if (e.key === 'Escape') moreOpen = false; }} />
+
 <div
   class="composer"
   class:dragging
@@ -479,7 +485,7 @@
             checked={autoAccept}
             onchange={(e) => onautochange(e.currentTarget.checked)}
           />
-          <span>Accepter auto</span>
+          <span>Auto</span>
         </label>
       {/if}
     </div>
@@ -494,34 +500,61 @@
         onchange={handleFileChange}
       />
 
-      <button
-        type="button"
-        class="tool-btn"
-        onclick={() => fileInput?.click()}
-        title="Ajouter une pièce jointe"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-        </svg>
-        <span>Pièce jointe</span>
-      </button>
+      <div class="more-wrap">
+        <button
+          type="button"
+          class="tool-btn more-btn"
+          class:active={moreOpen || enableWebSearch}
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          onclick={() => (moreOpen = !moreOpen)}
+          title="Pièce jointe, recherche Web…"
+          aria-label="Plus d'options"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          {#if enableWebSearch}<span class="more-dot" aria-hidden="true"></span>{/if}
+        </button>
 
-      <button
-        type="button"
-        class="web-pill"
-        class:active={enableWebSearch}
-        aria-pressed={enableWebSearch}
-        onclick={() => (enableWebSearch = !enableWebSearch)}
-        title="Activer la recherche Web"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="2" y1="12" x2="22" y2="12" />
-          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-        </svg>
-        <span>Web</span>
-      </button>
+        {#if moreOpen}
+          <div class="more-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              class="more-item"
+              onclick={() => {
+                moreOpen = false;
+                fileInput?.click();
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+              <span>Pièce jointe</span>
+            </button>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={enableWebSearch}
+              class="more-item"
+              class:active={enableWebSearch}
+              onclick={() => (enableWebSearch = !enableWebSearch)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              <span>Recherche Web</span>
+              <span class="more-check" aria-hidden="true">{enableWebSearch ? '✓' : ''}</span>
+            </button>
+          </div>
+        {/if}
+      </div>
 
+      <ContextRing {ctx} {eco} length={input.length} />
       {#if busy}
         <button
           type="button"
@@ -822,7 +855,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 8px;
     padding-top: 4px;
   }
@@ -831,8 +864,18 @@
   .bar-right {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 6px;
+  }
+
+  .bar-left {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .bar-right {
+    /* "+" passe à gauche (order), envoi reste à droite */
+    display: contents;
   }
 
   .select-wrap {
@@ -853,7 +896,7 @@
     font-size: 0.8rem;
     outline: none;
     cursor: pointer;
-    max-width: 210px;
+    max-width: 170px;
   }
 
   .select-chev {
@@ -916,7 +959,7 @@
   }
 
   .folder-btn {
-    max-width: 190px;
+    max-width: 140px;
   }
 
   .folder-btn span {
@@ -956,31 +999,86 @@
     display: none;
   }
 
-  .web-pill {
+  .more-wrap {
+    position: relative;
     display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    background: var(--panel2);
-    color: var(--dim);
-    border: 1px solid var(--line);
+    order: -1;
+  }
+
+  .more-btn {
+    position: relative;
+    width: 30px;
+    padding: 0;
+    justify-content: center;
     border-radius: 999px;
-    height: 30px;
-    padding: 0 11px;
-    font-size: 0.78rem;
-    cursor: pointer;
-    transition: all 0.15s ease;
   }
 
-  .web-pill:hover {
-    color: var(--text);
-    border-color: var(--line2);
-  }
-
-  .web-pill.active {
-    background: var(--accent-soft);
+  .more-btn.active {
     color: var(--accent-text);
     border-color: var(--accent-line);
-    box-shadow: 0 0 10px var(--accent-glow);
+    background: var(--accent-soft);
+  }
+
+  .more-dot {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--panel);
+  }
+
+  .more-menu {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 8px);
+    z-index: 30;
+    min-width: 190px;
+    padding: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    background: var(--raised);
+    border: 1px solid var(--accent-line, var(--line2));
+    border-radius: 12px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+  }
+
+  .more-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 0.82rem;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .more-item:hover:not(:disabled) {
+    background: var(--hover);
+    transform: none;
+    box-shadow: none;
+  }
+
+  .more-item.active {
+    color: var(--accent-text);
+  }
+
+  .more-item span:not(.more-check) {
+    flex: 1;
+  }
+
+  .more-check {
+    width: 14px;
+    text-align: right;
+    font-weight: 700;
   }
 
   .send-btn {
@@ -1021,4 +1119,56 @@
     color: #ffffff;
     font-size: 0.75rem;
   }
-</style>
+
+  /* fs-bar-wrap : la barre du bas s'adapte a la largeur (plus de chevauchement) */
+  .composer {
+    min-width: 0;
+  }
+  .bar {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    gap: 8px;
+    min-width: 0;
+  }
+  .bar-left {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 8px;
+  }
+  .bar-right {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    margin-left: auto;
+  }
+  .select-wrap {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .agent-select {
+    min-width: 0;
+    max-width: 100%;
+    text-overflow: ellipsis;
+  }
+  .seg {
+    flex: 0 0 auto;
+  }
+  .folder-btn {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+  .folder-btn span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .auto-check {
+    flex: 0 0 auto;
+  }</style>

@@ -109,9 +109,7 @@ fn parse_config(text: &str) -> Result<ConfigFile, String> {
         serde_json::from_str(text).map_err(|e| format!("mcp.json invalide : {e}"))?;
     for (name, s) in &cfg.mcp_servers {
         if !s.is_valid() {
-            return Err(format!(
-                "serveur « {name} » : `command` ou `url` manquant"
-            ));
+            return Err(format!("serveur « {name} » : `command` ou `url` manquant"));
         }
     }
     Ok(cfg)
@@ -357,10 +355,19 @@ impl HttpLink {
             };
 
             if let Some(res) = res_opt {
-                if let Some(s) = res.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
+                if let Some(s) = res
+                    .headers()
+                    .get("mcp-session-id")
+                    .and_then(|v| v.to_str().ok())
+                {
                     session = Some(s.to_string());
                 }
-                let ct = res.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
+                let ct = res
+                    .headers()
+                    .get(CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
                 if res.status().is_success() && ct.contains("text/event-stream") {
                     if let Ok(text) = res.text().await {
                         let mut lines = text.lines();
@@ -371,10 +378,14 @@ impl HttpLink {
                                     if let Some(d) = data_line.strip_prefix("data:") {
                                         let ep = d.trim();
                                         if !ep.is_empty() {
-                                            target_url = if ep.starts_with("http://") || ep.starts_with("https://") {
+                                            target_url = if ep.starts_with("http://")
+                                                || ep.starts_with("https://")
+                                            {
                                                 ep.to_string()
                                             } else if let Ok(base) = reqwest::Url::parse(&url) {
-                                                base.join(ep).map(|u| u.to_string()).unwrap_or_else(|_| ep.to_string())
+                                                base.join(ep)
+                                                    .map(|u| u.to_string())
+                                                    .unwrap_or_else(|_| ep.to_string())
                                             } else {
                                                 ep.to_string()
                                             };
@@ -723,7 +734,10 @@ impl Hub {
     }
 
     /// Charge tous les serveurs déclarés (app + dossier de travail du projet).
-    pub fn load_all_servers(config_dir: &Path, workdir: Option<&Path>) -> BTreeMap<String, ServerConfig> {
+    pub fn load_all_servers(
+        config_dir: &Path,
+        workdir: Option<&Path>,
+    ) -> BTreeMap<String, ServerConfig> {
         let mut map = BTreeMap::new();
         if let Ok(c) = load_config(config_dir) {
             map.extend(c);

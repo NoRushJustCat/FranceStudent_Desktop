@@ -10,7 +10,8 @@
 //! - `run_command` : `command`, `cwd`, `timeout_seconds`
 //!
 //! Tout est confiné au dossier de travail (`root`) : un chemin qui en sort
-//! (`..`, chemin absolu ailleurs, lien symbolique) est refusé.
+//! (`..`, chemin absolu ailleurs, lien symbolique) est refusé, sauf via
+//! `execute_full` (mode « système »).
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -29,6 +30,15 @@ const MAX_ENTRIES: usize = 500;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 const MAX_TIMEOUT_SECS: u64 = 300;
 const SKIP_DIRS: [&str; 4] = [".git", "node_modules", "target", "dist"];
+
+tokio::task_local! {
+    /// Vrai pendant `execute_full` : lève le confinement au dossier de travail.
+    static FULL: bool;
+}
+
+fn unrestricted() -> bool {
+    FULL.try_with(|v| *v).unwrap_or(false)
+}
 
 /// Noms d'outils déclarés au serveur (`clientTools`). Le serveur n'accepte
 /// que ce catalogue fixe : un autre nom donne une erreur 400.
@@ -94,6 +104,13 @@ pub async fn execute(root: &Path, name: &str, raw_args: &Value) -> Result<String
         other => return Err(format!("outil inconnu : {other}")),
     };
     Ok(clip(out))
+}
+
+/// Comme `execute`, mais sans confinement au dossier de travail : chemins
+/// absolus et `..` acceptés (mode « système »). `root` reste le dossier
+/// de base des chemins relatifs et des commandes.
+pub async fn execute_full(root: &Path, name: &str, raw_args: &Value) -> Result<String, String> {
+    FULL.scope(true, execute(root, name, raw_args)).await
 }
 
 // ---------- utilitaires ----------
@@ -247,7 +264,7 @@ fn resolve(root: &Path, rel: &str) -> Result<PathBuf, String> {
         full.push(n);
     }
 
-    if !path_starts_with(&full, root) {
+    if !unrestricted() && !path_starts_with(&full, root) {
         return Err(format!("chemin hors du dossier de travail : {rel}"));
     }
     Ok(full)

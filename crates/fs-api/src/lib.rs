@@ -551,6 +551,17 @@ impl Client {
             .await
     }
 
+    /// Recupere les instructions personnalisees (`GET /user/instructions`).
+    pub async fn get_user_instructions(&self) -> Result<Value> {
+        self.request(Method::GET, "/user/instructions", None).await
+    }
+
+    /// Met a jour les instructions personnalisees (`PATCH /user/instructions`, partiel).
+    pub async fn update_user_instructions(&self, body: Value) -> Result<Value> {
+        self.request(Method::PATCH, "/user/instructions", Some(body))
+            .await
+    }
+
     /// Envoie un fichier en `multipart/form-data` sur `path`.
     async fn upload_multipart(
         &self,

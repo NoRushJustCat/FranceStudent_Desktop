@@ -1,7 +1,6 @@
 ﻿<script>
   import { onDestroy } from 'svelte';
   import BrandLogo from './BrandLogo.svelte';
-  import { normalizeTheme } from './themes.js';
 
   let {
     chats = [],
@@ -30,14 +29,22 @@
     onrestore
   } = $props();
 
-  const FAV_THEMES = [
-    { id: 'sombre', label: 'Sombre', color: '#09090b' },
-    { id: 'gradien', label: 'Gradien', color: '#5865f2' },
-    { id: 'aurora', label: 'Aurora', color: '#6ee7c8' },
-    { id: 'clair', label: 'Clair', color: '#f4f4f5' }
+  const FILTERS = [
+    { id: 'all', label: 'Tous' },
+    { id: 'pinned', label: 'Épinglés' },
+    { id: 'messages', label: 'Signets' },
+    { id: 'archived', label: 'Archivés' }
   ];
 
-  let activeTheme = $derived(normalizeTheme(theme));
+  let filterOpen = $state(false);
+
+  function countFor(id) {
+    if (id === 'pinned') return pinnedChatsCount;
+    if (id === 'messages') return savedMessages.length;
+    if (id === 'archived') return archivedChats.length;
+    return 0;
+  }
+
   let editingId = $state(null);
   let editingTitle = $state('');
   let confirmDeleteId = $state(null);
@@ -153,6 +160,15 @@
   }
 </script>
 
+<svelte:window
+  onclick={(e) => {
+    if (filterOpen && !e.target.closest?.('.search-wrap')) filterOpen = false;
+  }}
+  onkeydown={(e) => {
+    if (e.key === 'Escape') filterOpen = false;
+  }}
+/>
+
 <aside class="sidebar">
   <header class="brand">
     <div class="brand-left">
@@ -161,36 +177,6 @@
         <span class="brand-title">France Student</span>
         <span class="brand-badge">Desktop</span>
       </div>
-    </div>
-
-    <div class="themes" role="group" aria-label="Sélecteur de thème">
-      {#each FAV_THEMES as t (t.id)}
-        <button
-          type="button"
-          class="theme-dot"
-          class:active={activeTheme === t.id}
-          style="--dot-color: {t.color}"
-          title={t.label}
-          aria-label={`Thème ${t.label}`}
-          aria-pressed={activeTheme === t.id}
-          onclick={() => ontheme?.(t.id)}
-        ></button>
-      {/each}
-      <button
-        type="button"
-        class="palette-btn"
-        title="Tous les thèmes (Apparence)"
-        aria-label="Ouvrir les 20 thèmes"
-        onclick={() => onsettings?.('apparence')}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="13.5" cy="6.5" r="0.5" fill="currentColor" />
-          <circle cx="17.5" cy="10.5" r="0.5" fill="currentColor" />
-          <circle cx="8.5" cy="7.5" r="0.5" fill="currentColor" />
-          <circle cx="6.5" cy="12.5" r="0.5" fill="currentColor" />
-          <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z" />
-        </svg>
-      </button>
     </div>
   </header>
 
@@ -232,63 +218,45 @@
           </svg>
         </button>
       {/if}
-    </div>
-
-    <div class="tabs" role="tablist" aria-label="Filtrer les éléments">
       <button
         type="button"
-        role="tab"
-        class="tab"
-        class:active={filterTab === 'all'}
-        aria-selected={filterTab === 'all'}
-        title="Toutes les discussions"
-        onclick={() => (filterTab = 'all')}
+        class="filter-btn"
+        class:active={filterTab !== 'all'}
+        aria-haspopup="menu"
+        aria-expanded={filterOpen}
+        aria-label="Filtrer"
+        title="Filtrer : Tous, Épinglés, Signets, Archivés"
+        onclick={() => (filterOpen = !filterOpen)}
       >
-        <span>Tous</span>
-      </button>
-      <button
-        type="button"
-        role="tab"
-        class="tab"
-        class:active={filterTab === 'pinned'}
-        aria-selected={filterTab === 'pinned'}
-        onclick={() => (filterTab = 'pinned')}
-        title="Discussions épinglées"
-      >
-        <span>Épinglés</span>
-        {#if pinnedChatsCount > 0}
-          <span class="tab-count">{pinnedChatsCount}</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+        </svg>
+        {#if filterTab !== 'all'}
+          <span class="filter-dot"></span>
         {/if}
       </button>
-      <button
-        type="button"
-        role="tab"
-        class="tab"
-        class:active={filterTab === 'messages'}
-        aria-selected={filterTab === 'messages'}
-        aria-label="Signets"
-        title="Messages ajoutés aux signets"
-        onclick={() => (filterTab = 'messages')}
-      >
-        <span>Signets</span>
-        {#if savedMessages.length > 0}
-          <span class="tab-count">{savedMessages.length}</span>
-        {/if}
-      </button>
-      <button
-        type="button"
-        role="tab"
-        class="tab"
-        class:active={filterTab === 'archived'}
-        aria-selected={filterTab === 'archived'}
-        title="Discussions archivées"
-        onclick={() => (filterTab = 'archived')}
-      >
-        <span>Archivés</span>
-        {#if archivedChats.length > 0}
-          <span class="tab-count">{archivedChats.length}</span>
-        {/if}
-      </button>
+      {#if filterOpen}
+        <div class="filter-menu" role="menu">
+          {#each FILTERS as f (f.id)}
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={filterTab === f.id}
+              class="filter-item"
+              class:active={filterTab === f.id}
+              onclick={() => {
+                filterTab = f.id;
+                filterOpen = false;
+              }}
+            >
+              <span class="filter-label">{f.label}</span>
+              {#if countFor(f.id) > 0}
+                <span class="tab-count">{countFor(f.id)}</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -617,43 +585,6 @@
     letter-spacing: 0.03em;
   }
 
-  .themes {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .theme-dot {
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.34);
-    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.32);
-    background: var(--dot-color);
-    cursor: pointer;
-    padding: 0;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  :global(:root[data-theme='light']) .theme-dot {
-    border-color: rgba(15, 23, 42, 0.28);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
-  }
-
-  .theme-dot:hover {
-    transform: scale(1.15);
-  }
-
-  .theme-dot.active {
-    box-shadow: 0 0 0 1.5px var(--panel), 0 0 0 3px #ffffff;
-  }
-
-  :global(:root[data-theme='clair']) .theme-dot.active,
-  :global(:root[data-theme='fs-light']) .theme-dot.active {
-    box-shadow: 0 0 0 1.5px var(--panel), 0 0 0 3px #0f172a;
-  }
-
   .top-actions {
     display: flex;
     flex-direction: column;
@@ -702,7 +633,7 @@
 
   .search-input {
     width: 100%;
-    padding: 7px 28px 7px 30px;
+    padding: 7px 60px 7px 30px;
     border: 1px solid var(--line);
     border-radius: var(--radius-sm);
     background: var(--panel2);
@@ -723,7 +654,7 @@
 
   .search-clear {
     position: absolute;
-    right: 6px;
+    right: 34px;
     width: 20px;
     height: 20px;
     border: none;
@@ -745,7 +676,7 @@
 
   .search-spin {
     position: absolute;
-    right: 9px;
+    right: 38px;
     width: 12px;
     height: 12px;
     border: 2px solid var(--line2);
@@ -760,43 +691,87 @@
     }
   }
 
-  .tabs {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 4px;
-    padding: 3px;
-    background: var(--panel2);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-  }
-
-  .tab {
+  .filter-btn {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    margin-top: -13px;
+    width: 26px;
+    height: 26px;
+    padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 5px;
-    height: 29px;
-    padding: 0 6px;
-    border: 1px solid transparent;
-    border-radius: calc(var(--radius-sm) - 2px);
+    border: none;
+    border-radius: 999px;
     background: transparent;
     color: var(--dim);
-    font-size: 11.5px;
-    line-height: 1;
-    font-weight: 500;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    transition: background 0.15s ease, color 0.15s ease;
   }
 
-  .tab:hover {
+  .filter-btn:hover:not(:disabled) {
+    background: var(--hover);
     color: var(--text);
-    background: transparent;
-    border-color: transparent;
+    transform: none;
+    box-shadow: none;
   }
 
-  .tab.active {
+  .filter-btn.active {
+    color: var(--accent-text);
+  }
+
+  .filter-dot {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--panel2);
+  }
+
+  .filter-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    z-index: 40;
+    min-width: 170px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px;
+    border: 1px solid var(--line2);
+    border-radius: 12px;
+    background: var(--raised);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  }
+
+  .filter-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .filter-item:hover:not(:disabled) {
+    background: var(--hover);
+    transform: none;
+    box-shadow: none;
+  }
+
+  .filter-item.active {
     background: var(--accent-soft);
-    border-color: var(--accent-line);
     color: var(--accent-text);
     font-weight: 600;
   }
@@ -810,27 +785,6 @@
     background: var(--accent-soft);
     border: 1px solid var(--accent-line);
     color: var(--accent-text);
-  }
-
-  .palette-btn {
-    width: 24px;
-    height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: var(--panel2);
-    color: var(--dim);
-    cursor: pointer;
-    padding: 0;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-  }
-
-  .palette-btn:hover {
-    color: var(--text);
-    background: var(--hover);
-    border-color: var(--accent-line);
   }
 
   .empty-title {

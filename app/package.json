@@ -4,11 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "postinstall": "node scripts/fetch-cloudflared.mjs",
-    "fetch-cloudflared": "node scripts/fetch-cloudflared.mjs",
-    "predev": "node scripts/fetch-cloudflared.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/fetch-cloudflared.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri"

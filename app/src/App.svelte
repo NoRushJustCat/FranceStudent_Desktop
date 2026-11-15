@@ -1,4 +1,4 @@
-<script>
+﻿<script>
   // France Student Desktop : fenêtre principale.
   // Chaque chat ouvert = une « session » en mémoire. Changer de chat ne fait que changer
   // la session affichée : les générations en cours continuent en arrière-plan.
@@ -8,9 +8,11 @@
   import Sidebar from './lib/Sidebar.svelte';
   import BrandLogo from './lib/BrandLogo.svelte';
   import Composer from './lib/Composer.svelte';
-  import Bridge from './lib/Bridge.svelte';
   import Message from './lib/Message.svelte';
   import Tool from './lib/Tool.svelte';
+  import DiffPanel from './lib/DiffPanel.svelte';
+  import { term as termState } from './lib/termstore.svelte.js';
+  import PermMode from './lib/PermMode.svelte';
   import Settings from './lib/Settings.svelte';
   import { THEMES, normalizeTheme } from './lib/themes.js';
 
@@ -142,6 +144,15 @@
   let tally = $state({ calls: 0, prompt: 0, output: 0, messages: 0 });
 
   let showSettings = $state(false);
+  let showDiff = $state(false);
+  let panelTab = $state('files');
+  function toggleDp(t) {
+    if (showDiff && panelTab === t) showDiff = false;
+    else {
+      panelTab = t;
+      showDiff = true;
+    }
+  }
   let settingsTab = $state('compte');
   let showJump = $state(false);
   let scrolled = $state(false);
@@ -211,7 +222,7 @@
     const pick = (ks) => ks.map((k) => num(c[k])).find((v) => v != null) ?? null;
     const used = pick(['promptTokens', 'tokens', 'usedTokens', 'contextTokens', 'totalTokens', 'used']);
     if (used == null) return null;
-    return { used, max: pick(['maxTokens', 'contextWindow', 'contextSize', 'limit', 'max']) };
+    return { used, max: pick(['maxTokens', 'contextWindow', 'contextSize', 'limit', 'max']), raw: c };
   }
 
   const parseArgs = (a) => {
@@ -327,6 +338,7 @@
   const curAgent = $derived(cur ? cur.agentId : agentId);
   const busy = $derived(!!cur?.busy);
   const items = $derived(cur?.items ?? []);
+  const diffCount = $derived(items.filter((i) => i.name === 'edit_file' || i.name === 'write_file').length);
   const error = $derived(cur?.error || gerr);
   const ctxInfo = $derived(cur?.ctx ?? null);
   const budget = $derived(readBudget(usage));
@@ -1186,7 +1198,7 @@
                 output: tally.output + o,
                 messages: tally.messages + 1,
               };
-              if (ev.prompt_tokens != null) s.ctx = { used: ev.prompt_tokens, max: s.ctx?.max ?? null };
+              if (ev.prompt_tokens != null) s.ctx = { used: ev.prompt_tokens, max: s.ctx?.max ?? null, raw: s.ctx?.raw ?? null };
               saveMemo(s);
               break;
             }
@@ -1251,7 +1263,7 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
-<div class="app" class:code={mode === 'code'}>
+<div class="app" class:code={mode === 'code'} class:withdiff={showDiff}>
   <Sidebar
     chats={displayedChats}
     {chatsLoaded}
@@ -1292,49 +1304,27 @@
         <span class="pill live" out:fade={{ duration: ms(120) }}>Génération en cours</span>
       {/if}
 
-      <Bridge docked={true} />
-
-      <button
-        class="pill anim-fade top-act"
-        class:active={sidebarTab === 'messages'}
-        onclick={() => (sidebarTab = sidebarTab === 'messages' ? 'all' : 'messages')}
-        title="Messages enregistrés (signets)"
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
-        <span>Signets</span>
-        {#if savedMessages.length > 0}<span class="cnt">{savedMessages.length}</span>{/if}
-      </button>
-
       {#if eco}
         <button class="pill eco anim-fade" onclick={() => openSettings('usage')} title="Mode économie actif">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
           <span>ÉCO</span>
         </button>
       {/if}
-      <button
-        type="button"
-        class="pill anim-fade ctx-pill"
-        class:dimmed={!ctxInfo}
-        onclick={() => openSettings('usage')}
-        title="Contexte du chat"
-      >
-        Contexte {ctxText}
-      </button>
       {#if budget}
         <button class="pill anim-fade" onclick={() => openSettings('usage')} title="Budget utilisé">
           Budget {budget.uncertain ? '~' : ''}{Math.round(budget.pct)}&#8239;%
           <span class="mg" class:warn={budget.pct >= 80}><i style="width:{budget.pct}%"></i></span>
         </button>
       {/if}
-      <button
-        class="pill anim-fade top-act"
-        onclick={() => openSettings('apparence')}
-        title="Paramètres"
-        aria-label="Ouvrir les paramètres"
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
-        <span>Paramètres</span>
+      <button type="button" class="pill anim-fade dfbtn" class:on={showDiff && panelTab === 'files'} onclick={() => toggleDp('files')} title="Fichiers modifiés ({diffCount})" aria-label="Fichiers modifiés">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="12" y1="10" x2="12" y2="16"/></svg>
+        {#if diffCount}<span class="dfn">{diffCount}</span>{/if}
       </button>
+      <button type="button" class="pill anim-fade dfbtn" class:on={showDiff && panelTab === 'term'} onclick={() => toggleDp('term')} title="Terminal" aria-label="Terminal">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
+        {#if termState.unread}<span class="dfn">{termState.unread}</span>{/if}
+      </button>
+    <PermMode />
       {#if busy}
         <div class="prog" transition:fade={{ duration: ms(160) }}></div>
       {/if}
@@ -1493,6 +1483,8 @@
           {curAgent}
           {skills}
           commands={COMMANDS}
+          ctx={ctxInfo}
+          {eco}
           {attachments}
           onerror={(m) => (gerr = m)}
           onattachfiles={handleAttachFiles}
@@ -1521,6 +1513,9 @@
       </div>
     </div>
   </section>
+  {#if showDiff}
+    <DiffPanel {items} cwd={curWorkdir} bind:tab={panelTab} onclose={() => (showDiff = false)} />
+  {/if}
 </div>
 
 {#if showSettings && settings}
@@ -1714,6 +1709,75 @@
     background: color-mix(in srgb, var(--ok) 12%, transparent);
   }
 
+  /* diff-compact */
+  .app.withdiff {
+  /* diff-resize */
+  grid-template-columns: 276px minmax(0, 1fr) max(320px, min(var(--dpw, clamp(320px, 32vw, 460px)), calc(100vw - 616px)));
+  }
+
+  .top {
+    overflow: hidden;
+  }
+
+  .top .pill {
+    flex-shrink: 0;
+  }
+
+  .top .ttl {
+    flex: 0 1 auto;
+    min-width: 48px;
+  }
+
+  @media (max-width: 1100px) {
+    .app.withdiff {
+      grid-template-columns: 276px minmax(0, 1fr);
+    }
+  }
+
+  @media (min-width: 1101px) and (max-width: 1500px) {
+    .app.withdiff .top {
+      padding: 0 12px;
+      gap: 6px;
+    }
+    .app.withdiff .top .pill {
+      padding: 0 8px;
+    }
+    .app.withdiff .pill.ctx-pill {
+      min-width: 0;
+    }
+    .app.withdiff .pill.live,
+    .app.withdiff .pill .mg {
+      display: none;
+    }
+  }
+
+  @media (min-width: 1101px) and (max-width: 1250px) {
+    .app.withdiff .pill.modep,
+    .app.withdiff .pill.eco span {
+      display: none;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .app.withdiff {
+      grid-template-columns: 224px minmax(0, 1fr);
+    }
+  }
+
+  .dfbtn {
+    cursor: pointer;
+    padding: 0 8px;
+  }
+
+  .dfbtn.on {
+    color: var(--accent-text);
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+  }
+
+  .dfn {
+    font-variant-numeric: tabular-nums;
+  }
   .mg {
     display: inline-flex;
     align-items: center;
@@ -2119,33 +2183,6 @@
     box-shadow: none;
   }
 
-  .pill.top-act {
-    cursor: pointer;
-    transition: border-color 0.14s, background 0.14s, color 0.14s;
-  }
-
-  .pill.top-act:hover,
-  .pill.top-act.active {
-    border-color: var(--accent-line);
-    background: var(--accent-soft);
-    color: var(--accent-text);
-  }
-
-  .top-act .cnt {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 5px;
-    border-radius: 999px;
-    background: var(--accent-soft);
-    border: 1px solid var(--accent-line);
-    color: var(--accent-text);
-    font-size: 10.5px;
-    font-weight: 600;
-  }
-
   .pill.ctx-pill {
     min-width: 152px;
     justify-content: center;
@@ -2339,5 +2376,60 @@
     .cards {
       grid-template-columns: 1fr;
     }
+  }
+  /* diff-smooth */
+  .app,
+  .app.withdiff {
+    --dpcol: max(300px, min(var(--dpw, clamp(320px, 32vw, 460px)), calc(100vw - 616px)));
+    transition: grid-template-columns 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .app {
+    grid-template-columns: 276px minmax(0, 1fr) 0px;
+    overflow: hidden;
+  }
+
+  .app.withdiff {
+    grid-template-columns: 276px minmax(0, 1fr) var(--dpcol);
+  }
+
+  :global(html.dp-drag) .app,
+  :global(html.dp-drag) .app.withdiff {
+    transition: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .app,
+    .app.withdiff {
+      transition: none;
+    }
+  }
+
+  @media (max-width: 1500px) {
+    .app.withdiff .top {
+      padding: 0 12px;
+      gap: 6px;
+    }
+    .app.withdiff .top .pill {
+      padding: 0 8px;
+    }
+    .app.withdiff .pill.live,
+    .app.withdiff .pill .mg,
+    .app.withdiff .pill.eco span {
+      display: none;
+    }
+  }
+  /* fs-btn-radius */
+  .pill.dfbtn {
+    position: relative;
+    justify-content: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 7px;
+    border-radius: 8px;
+  }
+
+  .pill.dfbtn .dfn {
+    border-radius: 6px;
   }
 </style>
