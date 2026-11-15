@@ -3,6 +3,8 @@
   // Autonome : ne dépend d'aucun autre fichier de l'app, seulement des commandes Tauri `bridge_*`.
   import { invoke } from '@tauri-apps/api/core';
 
+  let { docked = false } = $props();
+
   const POS_KEY = 'fscode.bridge.pos';
   const PHASES = { stopped: 'arrêté', starting: 'démarrage', running: 'actif', error: 'erreur' };
   const EMPTY = {
@@ -40,14 +42,32 @@
   let winH = $state(800);
   let root = $state(null);
   let pos = $state(loadPos()); // null = bas-droite ; sinon coin haut-gauche en px
+  let urlCopied = $state(false);
+  let confirmDangerous = $state(false);
   let drag = null; // non réactif : état du glissement en cours
+  let copyTimer = null;
+
+  async function copyUrl() {
+    if (!s.url) return;
+    try {
+      await navigator.clipboard.writeText(s.url);
+      urlCopied = true;
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => (urlCopied = false), 1800);
+    } catch {
+      /* presse-papiers indisponible */
+    }
+  }
 
   const active = $derived(s.phase === 'running');
   const tone = $derived(
     s.phase === 'running' ? 'ok' : s.phase === 'starting' ? 'warn' : s.phase === 'error' ? 'danger' : 'faint',
   );
   const label = $derived.by(() => {
-    if (s.phase === 'running') return `Pont MCP · actif · ${s.tools} outil${s.tools > 1 ? 's' : ''}`;
+    if (s.phase === 'running') {
+      const srv = s.servers.length ? `${s.servers.length} serveur${s.servers.length > 1 ? 's' : ''} · ` : '';
+      return `Pont MCP · ${srv}${s.tools} outil${s.tools > 1 ? 's' : ''}`;
+    }
     if (s.phase === 'starting') return `Pont MCP · ${s.step || 'démarrage'}…`;
     if (s.phase === 'error') return 'Pont MCP · erreur';
     return 'Pont MCP · arrêté';
@@ -165,97 +185,154 @@
     try {
       s = await invoke('bridge_set', { autoStart, autoAllow });
       fault = '';
+      if (autoAllow === false || autoAllow === true) confirmDangerous = false;
     } catch (e) {
       fault = String(e);
       await refresh();
+    }
+  }
+
+  function onAutoAllowChange(e) {
+    if (s.autoAllow) {
+      setOpt(null, false);
+    } else {
+      e.currentTarget.checked = false;
+      confirmDangerous = true;
     }
   }
 </script>
 
 <svelte:window bind:innerWidth={winW} bind:innerHeight={winH} onkeydown={onKey} />
 
-<div class="bridge" bind:this={root} style={place}>
+<div class="bridge" class:docked bind:this={root} style={docked ? '' : place}>
   <button
     class="chip"
     type="button"
     aria-expanded={open}
-    title="Pont MCP · glisser pour déplacer · double-clic : position d’origine"
-    onpointerdown={down}
-    onpointermove={move}
-    onpointerup={up}
-    onpointercancel={cancel}
-    onclick={keyClick}
-    ondblclick={reset}
+    title={docked ? 'Pont MCP · cliquer pour ouvrir' : 'Pont MCP · glisser pour déplacer · double-clic : position d’origine'}
+    onpointerdown={docked ? undefined : down}
+    onpointermove={docked ? undefined : move}
+    onpointerup={docked ? undefined : up}
+    onpointercancel={docked ? undefined : cancel}
+    onclick={docked ? () => (open = !open) : keyClick}
+    ondblclick={docked ? undefined : reset}
   >
-    <span class="dot {tone}"></span>
+    <span class="dot {tone}" aria-hidden="true"></span>
     <span class="txt">{label}</span>
   </button>
 
   {#if open}
-    <div class="panel {above ? 'up' : 'down'} {alignRight ? 'right' : 'left'}">
-      <div class="head">
-        <strong>Pont MCP</strong>
-        <span class="pill {tone}">{PHASES[s.phase] ?? s.phase}</span>
-      </div>
+    <div class="panel {docked ? 'down right' : (above ? 'up' : 'down') + ' ' + (alignRight ? 'right' : 'left')}">
+      <div class="panel-scroll">
+        <div class="head">
+          <strong>Pont MCP</strong>
+          <div class="head-right">
+            <span class="pill {tone}">{PHASES[s.phase] ?? s.phase}</span>
+            {#if active}
+              <button
+                class="btn compact danger"
+                type="button"
+                disabled={busy}
+                onclick={toggle}
+              >
+                Arrêter
+              </button>
+            {/if}
+          </div>
+        </div>
 
-      {#if s.phase === 'starting'}
-        <p class="muted">Étape : {s.step || '…'}</p>
-      {/if}
-
-      <div class="row">
-        <button class="btn primary" type="button" disabled={busy || s.phase === 'starting'} onclick={toggle}>
-   {active ? 'Arrêter' : s.phase === 'starting' ? 'Démarrage…' : 'Démarrer'}
-        </button>
-        {#if !active}
-   <button
-     class="btn"
-     type="button"
-     disabled={busy || s.phase === 'starting'}
-     onclick={clean}
-     title="Supprime l’entrée périmée restée chez France Student"
-          >
-            Nettoyer
-          </button>
+        {#if s.phase === 'starting'}
+          <p class="muted">Étape : {s.step || '…'}</p>
         {/if}
-      </div>
+
+        {#if !active}
+          <div class="row">
+            <button
+              class="btn primary"
+              type="button"
+              disabled={busy || s.phase === 'starting'}
+              onclick={toggle}
+            >
+              {s.phase === 'starting' ? 'Démarrage…' : 'Démarrer'}
+            </button>
+            <button
+              class="btn"
+              type="button"
+              disabled={busy || s.phase === 'starting'}
+              onclick={clean}
+              title="Supprime l’entrée périmée restée chez France Student"
+            >
+              Nettoyer
+            </button>
+          </div>
+        {/if}
 
       <dl class="info">
         {#if s.url}
-   <dt>URL</dt>
-   <dd><code>{s.url}</code></dd>
- {/if}
- {#if s.serverId}
-   <dt>ID FS</dt>
+          <dt>URL</dt>
+          <dd class="url-row">
+            <code class="url-code" title={s.url}>{s.url}</code>
+            <button
+              type="button"
+              class="copy-mini"
+              title={urlCopied ? 'Copiée' : 'Copier l’URL'}
+              aria-label={urlCopied ? 'URL copiée' : 'Copier l’URL'}
+              onclick={copyUrl}
+            >
+              {#if urlCopied}
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 5" /></svg>
+              {:else}
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.5" /><path d="M3.5 10.5H3a1.5 1.5 0 0 1-1.5-1.5V3A1.5 1.5 0 0 1 3 1.5h6A1.5 1.5 0 0 1 10.5 3v.5" /></svg>
+              {/if}
+            </button>
+          </dd>
+        {/if}
+        {#if s.serverId}
+          <dt>ID FS</dt>
           <dd><code>{s.serverId}</code></dd>
- {/if}
+        {/if}
         {#if s.port}
           <dt>Port</dt>
-   <dd>{s.port}</dd>
- {/if}
+          <dd><code>{s.port}</code></dd>
+        {/if}
         <dt>Serveurs</dt>
- <dd>{s.servers.length ? s.servers.join(', ') : '—'}</dd>
+        <dd>{s.servers.length ? s.servers.join(', ') : '—'}</dd>
         <dt>Outils</dt>
- <dd>{s.tools}</dd>
- <dt>Requêtes</dt>
- <dd>{s.hits}</dd>
+        <dd>{s.tools}</dd>
+        <dt>Requêtes</dt>
+        <dd>{s.hits}</dd>
       </dl>
 
-      <label class="opt">
- <input
-          type="checkbox"
-          checked={s.autoStart}
-          onchange={(e) => setOpt(e.currentTarget.checked, null)}
-        />
-        Démarrer avec l’app
-      </label>
-      <label class="opt" class:bad={s.autoAllow}>
-        <input
-   type="checkbox"
-   checked={s.autoAllow}
-   onchange={(e) => setOpt(null, e.currentTarget.checked)}
-        />
- Autoriser sans confirmation (dangereux)
-      </label>
+        <label class="opt">
+          <input
+            type="checkbox"
+            checked={s.autoStart}
+            onchange={(e) => setOpt(e.currentTarget.checked, null)}
+          />
+          Démarrer avec l’app
+        </label>
+        <label class="opt opt-danger" class:bad={s.autoAllow}>
+          <input
+            type="checkbox"
+            checked={s.autoAllow}
+            onchange={onAutoAllowChange}
+          />
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg>
+          <span>Autoriser sans confirmation (dangereux)</span>
+        </label>
+      {#if confirmDangerous && !s.autoAllow}
+        <div class="opt bad opt-confirm">
+          <span>Exécuter tous les outils MCP sans demander&nbsp;?</span>
+          <div class="row">
+            <button type="button" class="btn danger" onclick={() => setOpt(null, true)}>Confirmer</button>
+            <button type="button" class="btn" onclick={() => (confirmDangerous = false)}>Annuler</button>
+          </div>
+        </div>
+      {/if}
 
       {#if s.error}
         <div class="msg danger">{s.error}</div>
@@ -264,19 +341,26 @@
         <div class="msg danger">{fault}</div>
       {/if}
       {#each s.warnings as note}
- <div class="msg warn">{note}</div>
+        <div class="msg warn">{note}</div>
       {/each}
 
       {#if s.registerNote}
- <details>
-   <summary>Réponse France Student</summary>
+        <details>
+          <summary>
+            <svg class="chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.5 8 6 4 9.5" /></svg>
+            Réponse France Student
+          </summary>
           <pre>{s.registerNote}</pre>
- </details>
+        </details>
       {/if}
       <details>
- <summary>Journal ({s.log.length})</summary>
+        <summary>
+          <svg class="chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.5 8 6 4 9.5" /></svg>
+          Journal ({s.log.length})
+        </summary>
         <pre>{logText || '(vide)'}</pre>
       </details>
+      </div>
     </div>
   {/if}
 </div>
@@ -290,19 +374,38 @@
     color: var(--text, #e6e6e6);
   }
 
+  .bridge.docked {
+    position: relative;
+    z-index: 45;
+  }
+
+  .bridge.docked .chip {
+    cursor: pointer;
+    border-radius: 999px;
+    padding: 4px 10px;
+    background: var(--panel2, #121a2a);
+    border-color: var(--line, #202c44);
+  }
+
+  .bridge.docked .chip:hover,
+  .bridge.docked .chip[aria-expanded='true'] {
+    background: var(--hover, #1f2c46);
+    border-color: var(--accent-line, var(--line2));
+  }
+
   .chip {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     max-width: 300px;
-    padding: 4px 8px;
+    padding: 4px 10px;
     background: var(--panel, #161616);
     color: inherit;
     border: 1px solid var(--line2, #3a3a3a);
-    border-radius: var(--r, 0px);
+    border-radius: 999px;
     font: inherit;
-    font-family: var(--mono, ui-monospace, monospace);
-    font-size: 11px;
+    font-size: 11.5px;
+    font-weight: 500;
     cursor: grab;
     user-select: none;
     touch-action: none;
@@ -323,6 +426,7 @@
     flex: none;
     width: 8px;
     height: 8px;
+    border-radius: 50%;
     background: var(--faint, #777);
   }
   .dot.ok {
@@ -338,22 +442,38 @@
   .panel {
     position: absolute;
     box-sizing: border-box;
-    width: min(340px, calc(100vw - 24px));
-    max-height: min(520px, calc(100vh - 60px));
-    overflow: auto;
-    padding: 10px;
+    width: min(350px, calc(100vw - 24px));
     background: var(--panel, #161616);
     border: 1px solid var(--line2, #3a3a3a);
-    border-radius: var(--r, 0px);
+    border-radius: var(--radius-sm, 10px);
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.54), 0 0 0 1px rgba(0, 0, 0, 0.16);
+  }
+  .panel-scroll {
+    max-height: min(520px, calc(100vh - 60px));
+    overflow: auto;
+    padding: 14px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
+  }
+  .panel.down.right::before {
+    content: '';
+    position: absolute;
+    top: -6px;
+    right: 22px;
+    width: 10px;
+    height: 10px;
+    background: var(--panel, #161616);
+    border-top: 1px solid var(--line2, #3a3a3a);
+    border-left: 1px solid var(--line2, #3a3a3a);
+    transform: rotate(45deg);
+    pointer-events: none;
   }
   .panel.up {
     bottom: calc(100% + 6px);
   }
   .panel.down {
-    top: calc(100% + 6px);
+    top: calc(100% + 9px);
   }
   .panel.right {
     right: 0;
@@ -368,12 +488,24 @@
     justify-content: space-between;
     gap: 8px;
   }
+  .head-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn.compact {
+    padding: 3px 9px;
+    font-size: 11.5px;
+    line-height: 1.3;
+  }
   .pill {
-    padding: 1px 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
     border: 1px solid var(--line2, #3a3a3a);
     color: var(--dim, #aaa);
-    font-family: var(--mono, ui-monospace, monospace);
+    font-family: var(--font-sans, inherit);
     font-size: 11px;
+    font-weight: 500;
   }
   .pill.ok {
     color: var(--ok, #3fb950);
@@ -410,8 +542,13 @@
     background: var(--raised, #202020);
   }
   .btn.primary {
+    background: var(--accent, #4c9aff);
     border-color: var(--accent, #4c9aff);
-    color: var(--accent, #4c9aff);
+    color: var(--on-accent, #ffffff);
+  }
+  .btn.danger {
+    border-color: color-mix(in srgb, var(--danger, #f85149) 45%, var(--line2));
+    color: var(--danger, #f85149);
   }
   .btn:disabled {
     opacity: 0.5;
@@ -421,8 +558,9 @@
   .info {
     display: grid;
     grid-template-columns: auto 1fr;
-    gap: 2px 10px;
+    gap: 4px 10px;
     margin: 0;
+    align-items: center;
   }
   .info dt {
     color: var(--dim, #aaa);
@@ -430,7 +568,39 @@
   .info dd {
     margin: 0;
     min-width: 0;
-    overflow-wrap: anywhere;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .url-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .url-code {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .copy-mini {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+    border-radius: 6px;
+    border: 1px solid var(--line2);
+    background: var(--panel2);
+    color: var(--dim);
+    cursor: pointer;
+  }
+  .copy-mini:hover {
+    color: var(--text);
+    border-color: var(--accent-line);
   }
   code {
     font-family: var(--mono, ui-monospace, monospace);
@@ -441,16 +611,36 @@
   .opt {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 7px;
     cursor: pointer;
   }
-  .opt.bad {
+  .opt-danger {
+    border-top: 1px solid var(--line);
+    padding-top: 9px;
+    margin-top: 2px;
     color: var(--danger, #f85149);
+    font-weight: 500;
+  }
+  .opt.bad {
+    margin-top: 2px;
+    padding: 7px 9px;
+    border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--danger, #f85149) 35%, transparent);
+    background: var(--danger-soft, rgba(248, 81, 73, 0.1));
+    color: var(--danger, #f85149);
+    font-size: 11.5px;
+  }
+  .opt-confirm {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    cursor: default;
   }
 
   .msg {
     padding: 6px 8px;
     border: 1px solid var(--line2, #3a3a3a);
+    border-radius: 7px;
     overflow-wrap: anywhere;
     user-select: text;
   }
@@ -464,8 +654,25 @@
   }
 
   summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    list-style: none;
     cursor: pointer;
     color: var(--dim, #aaa);
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  summary .chev {
+    width: 12px;
+    height: 12px;
+    margin-left: -2px;
+    flex: none;
+    transition: transform 0.15s ease;
+  }
+  details[open] > summary .chev {
+    transform: rotate(90deg);
   }
   pre {
     margin: 6px 0 0;

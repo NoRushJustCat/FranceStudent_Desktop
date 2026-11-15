@@ -9,9 +9,10 @@ mod skills;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use fs_api::{Agent, ChatEvent, Client, ToolCall, ToolResult};
+use fs_api::{Agent, ChatEvent, Client, StreamOptions, ToolCall, ToolResult};
 use fs_tools::Risk;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -60,18 +61,150 @@ fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
-fn client(app: &AppHandle, state: &State<'_, AppState>) -> Result<Client, String> {
+static ECO_TOKEN_CACHE: OnceLock<Mutex<Option<(String, u64)>>> = OnceLock::new();
+static ACTIVE_CLIENT_KEY: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn b64url_decode(input: &str) -> Option<Vec<u8>> {
+    let mut acc: u32 = 0;
+    let mut bits: u8 = 0;
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    for b in input.bytes() {
+        let v = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'-' | b'+' => 62,
+            b'_' | b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        };
+        acc = (acc << 6) | (v as u32);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+fn jwt_exp(tok: &str) -> Option<u64> {
+    let payload = tok.split('.').nth(1)?;
+    let bytes = b64url_decode(payload)?;
+    let v: Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("exp").and_then(|x| x.as_u64())
+}
+
+fn eco_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join(".gemini/config/plugins/eco-quota"))
+}
+
+fn has_eco_credentials() -> bool {
+    eco_dir()
+        .map(|d| d.join("fs_credentials.json").exists())
+        .unwrap_or(false)
+}
+
+async fn refresh_eco_token() -> Option<(String, u64)> {
+    let dir = eco_dir()?;
+    let raw = tokio::fs::read_to_string(dir.join("fs_credentials.json")).await.ok()?;
+    let creds: Value = serde_json::from_str(&raw).ok()?;
+    let session_token = creds.get("sessionToken")?.as_str()?.trim().to_string();
+    let device_id = creds.get("deviceId")?.as_str()?.trim().to_string();
+    if session_token.is_empty() || device_id.is_empty() {
+        return None;
+    }
+
+    let cookie = format!("next-auth.session-token={session_token}; francestudent-device-id={device_id}");
+    let http = reqwest::Client::new();
+    let resp = http
+        .get("https://ia.francestudent.org/api/auth/api-token")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:157.0) Gecko/20100101 Firefox/157.0")
+        .header("Accept", "*/*")
+        .header("Origin", "https://ia.francestudent.org")
+        .header("Referer", "https://ia.francestudent.org/")
+        .header("francestudent-client-platform", "web_fs_ai")
+        .header("francestudent-client-version", "4005601")
+        .header("francestudent-device-id", &device_id)
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let data: Value = resp.json().await.ok()?;
+    let tok = data.get("accessToken")?.as_str()?.trim().to_string();
+    if tok.is_empty() {
+        return None;
+    }
+    let expires_in = data.get("expiresIn").and_then(|v| v.as_u64()).unwrap_or(300);
+    let _ = tokio::fs::write(dir.join("fs_token.txt"), &tok).await;
+    Some((tok, now_secs() + expires_in))
+}
+
+async fn resolve_api_key() -> Option<String> {
+    let stored = fs_store::get_key();
+    if let Some(ref k) = stored {
+        if !k.starts_with("eyJ") {
+            return Some(k.clone());
+        }
+        if jwt_exp(k).is_some_and(|exp| now_secs() + 30 < exp) {
+            return Some(k.clone());
+        }
+    }
+
+    let cache = ECO_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some((ref tok, exp)) = *guard {
+            if now_secs() + 30 < exp {
+                return Some(tok.clone());
+            }
+        }
+    }
+
+    if let Some((tok, exp)) = refresh_eco_token().await {
+        if let Ok(mut guard) = cache.lock() {
+            *guard = Some((tok.clone(), exp));
+        }
+        return Some(tok);
+    }
+
+    stored
+}
+
+async fn client(app: &AppHandle, state: &State<'_, AppState>) -> Result<Client, String> {
+    let key = resolve_api_key()
+        .await
+        .ok_or("Clé API manquante : ouvre les réglages.")?;
+    let active = ACTIVE_CLIENT_KEY.get_or_init(|| Mutex::new(None));
+    let same_key = active
+        .lock()
+        .map(|g| g.as_deref() == Some(key.as_str()))
+        .unwrap_or(false);
+
     let mut slot = state
         .client
         .lock()
         .map_err(|_| "état interne verrouillé".to_string())?;
-    if let Some(c) = slot.as_ref() {
-        return Ok(c.clone());
+    if same_key {
+        if let Some(c) = slot.as_ref() {
+            return Ok(c.clone());
+        }
     }
     let settings = fs_store::load(&config_dir(app)?);
-    let key = fs_store::get_key().ok_or("Clé API manquante : ouvre les réglages.")?;
     let c = Client::new(&settings.base_url, &key).map_err(|e| e.to_string())?;
     *slot = Some(c.clone());
+    if let Ok(mut g) = active.lock() {
+        *g = Some(key);
+    }
     Ok(c)
 }
 
@@ -102,7 +235,7 @@ fn get_settings(app: AppHandle) -> Result<SettingsView, String> {
     let s = fs_store::load(&config_dir(&app)?);
     Ok(SettingsView {
         base_url: s.base_url,
-        has_key: fs_store::get_key().is_some(),
+        has_key: fs_store::get_key().is_some() || has_eco_credentials(),
         last_agent_id: s.last_agent_id,
         last_workdir: s.last_workdir,
         auto_accept: s.auto_accept,
@@ -166,7 +299,10 @@ fn save_settings(
 /// Sélecteur de dossier natif. `None` si l'utilisateur annule.
 #[tauri::command]
 async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
-    match app.dialog().file().blocking_pick_folder() {
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(|e| e.to_string())?;
+    match picked {
         Some(p) => {
             let path = p.into_path().map_err(|e| e.to_string())?;
             Ok(Some(path.to_string_lossy().into_owned()))
@@ -179,13 +315,13 @@ async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn list_agents(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<Agent>, String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.agents().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn get_usage(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.usage().await.map_err(|e| e.to_string())
 }
 
@@ -196,7 +332,7 @@ async fn list_chats(
     limit: Option<u32>,
     cursor: Option<String>,
 ) -> Result<Value, String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.list_chats(limit.unwrap_or(40), cursor.as_deref())
         .await
         .map_err(|e| e.to_string())
@@ -208,7 +344,7 @@ async fn get_chat(
     state: State<'_, AppState>,
     chat_id: String,
 ) -> Result<Value, String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.get_chat(&chat_id).await.map_err(|e| e.to_string())
 }
 
@@ -218,7 +354,7 @@ async fn delete_chat(
     state: State<'_, AppState>,
     chat_id: String,
 ) -> Result<(), String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.delete_chat(&chat_id).await.map_err(|e| e.to_string())
 }
 
@@ -229,10 +365,193 @@ async fn rename_chat(
     chat_id: String,
     title: String,
 ) -> Result<(), String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.rename_chat(&chat_id, title.trim())
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn pin_chat(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    chat_id: String,
+    pinned: bool,
+) -> Result<(), String> {
+    let c = client(&app, &state).await?;
+    c.pin_chat(&chat_id, pinned).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn archive_chat(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    chat_id: String,
+) -> Result<(), String> {
+    let c = client(&app, &state).await?;
+    c.archive_chat(&chat_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn search_chats(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.search_chats(query.trim(), limit.unwrap_or(20))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fork_edit_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+    content: String,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.fork_edit_message(&chat_id, &message_id, &content)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_saved_messages(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.list_saved_messages(limit.unwrap_or(50), cursor.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.save_message(&chat_id, &message_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn unsave_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+) -> Result<(), String> {
+    let c = client(&app, &state).await?;
+    c.unsave_message(&chat_id, &message_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_archived_chats(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.list_archived_chats(limit.unwrap_or(40))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn restore_chat(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    chat_id: String,
+) -> Result<(), String> {
+    let c = client(&app, &state).await?;
+    c.restore_chat(&chat_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_notification_prefs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.get_notification_preferences()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_notification_prefs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    prefs: Value,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.update_notification_preferences(prefs)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn upload_attachment(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+    filename: String,
+    content_type: String,
+    bytes: Vec<u8>,
+) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    if kind == "image" {
+        c.upload_image(&filename, &content_type, bytes)
+            .await
+            .map_err(|e| e.to_string())
+    } else {
+        c.upload_file_v2(&filename, &content_type, bytes)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("https://") && !trimmed.starts_with("http://") {
+        return Err("Seules les URL http(s) peuvent être ouvertes.".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| format!("Impossible d'ouvrir le lien : {e}"))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| format!("Impossible d'ouvrir le lien : {e}"))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(trimmed)
+            .spawn()
+            .map_err(|e| format!("Impossible d'ouvrir le lien : {e}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -241,7 +560,7 @@ async fn get_context(
     state: State<'_, AppState>,
     chat_id: String,
 ) -> Result<Value, String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.context(&chat_id).await.map_err(|e| e.to_string())
 }
 
@@ -251,7 +570,7 @@ async fn compact_chat(
     state: State<'_, AppState>,
     chat_id: String,
 ) -> Result<Value, String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.compact(&chat_id).await.map_err(|e| e.to_string())
 }
 
@@ -277,7 +596,7 @@ async fn cancel_chat(
         }
     }
     if let Some(id) = chat_id {
-        let c = client(&app, &state)?;
+        let c = client(&app, &state).await?;
         let _ = c.cancel(&id).await; // idempotent ; rien à annuler n'est pas une erreur
     }
     Ok(())
@@ -306,7 +625,7 @@ fn list_skills(app: AppHandle, workdir: Option<String>) -> Result<Vec<skills::Sk
 /// Skills du compte France Student. Endpoint supposé (`GET /skills`) : à confirmer.
 #[tauri::command]
 async fn account_skills(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.get_json("/skills").await.map_err(|e| e.to_string())
 }
 
@@ -605,6 +924,9 @@ async fn send_message(
     auto_accept: bool,
     eco: Option<bool>,
     run_id: Option<String>,
+    images: Option<Vec<String>>,
+    files: Option<Vec<String>>,
+    enable_web_search: Option<bool>,
     on_event: Channel<UiEvent>,
 ) -> Result<(), String> {
     let run = run_id
@@ -615,6 +937,12 @@ async fn send_message(
         m.insert(run.clone(), flag.clone());
     }
 
+    let opts = StreamOptions {
+        images: images.unwrap_or_default(),
+        files: files.unwrap_or_default(),
+        enable_web_search: enable_web_search.unwrap_or(false),
+    };
+
     let result = run_message(
         &app,
         &state,
@@ -624,6 +952,7 @@ async fn send_message(
         workdir,
         auto_accept,
         eco,
+        opts,
         &run,
         &flag,
         &on_event,
@@ -649,11 +978,12 @@ async fn run_message(
     workdir: Option<String>,
     auto_accept: bool,
     eco: Option<bool>,
+    opts: StreamOptions,
     run: &str,
     flag: &AtomicBool,
     on_event: &Channel<UiEvent>,
 ) -> Result<(), String> {
-    let c = client(app, state)?;
+    let c = client(app, state).await?;
 
     let dir = config_dir(app)?;
     let eco = eco.unwrap_or_else(|| fs_store::load(&dir).eco);
@@ -740,7 +1070,7 @@ async fn run_message(
                 stop = true;
                 let _ = on_event.send(UiEvent::Cancelled);
             }
-            ChatEvent::Mcp(text) => {
+            ChatEvent::Mcp(text) | ChatEvent::Notice(text) => {
                 let _ = on_event.send(UiEvent::Notice { text });
             }
             ChatEvent::Other(ty) => {
@@ -754,10 +1084,21 @@ async fn run_message(
 
         let r = match &target {
             Some(id) => {
-                c.send_message(id, &content, Some(agent_id), &tools, &results, handler)
+                c.send_message_with_options(
+                    id,
+                    &content,
+                    Some(agent_id),
+                    &tools,
+                    &results,
+                    &opts,
+                    handler,
+                )
+                .await
+            }
+            None => {
+                c.stream_chat_with_options(agent_id, &content, &tools, &opts, handler)
                     .await
             }
-            None => c.stream_chat(agent_id, &content, &tools, handler).await,
         };
         r.map_err(|e| explain(e, root.is_some()))?;
 
@@ -784,62 +1125,6 @@ async fn run_message(
         }
 
         if calls.is_empty() {
-            // Ancien « bypass » par blocs mcp-call : désactivé (le pont cloudflared le remplace).
-            let mcp_blocks: Vec<mcp::McpBlockCall> = Vec::new();
-            if !mcp_blocks.is_empty() {
-                let mut block_results = Vec::new();
-                for (b_idx, block) in mcp_blocks.into_iter().enumerate() {
-                    let call_id = format!("mcp_block_{}_{}", api_calls, b_idx);
-                    let tool_name = format!("mcp__{}__{}", block.server, block.tool);
-                    let trusted: HashSet<String> = state.trusted.lock().map(|g| g.clone()).unwrap_or_default();
-                    let needs_confirm = !trusted.contains(&tool_name) && !auto_accept;
-
-                    let _ = on_event.send(UiEvent::ToolCall {
-                        call_id: call_id.clone(),
-                        name: tool_name.clone(),
-                        origin: "mcp".to_string(),
-                        args: block.arguments.clone(),
-                        needs_confirm,
-                    });
-
-                    let allowed = if needs_confirm {
-                        ask(state, run, &call_id).await
-                    } else {
-                        true
-                    };
-
-                    let (output, is_error) = if !allowed {
-                        ("Refusé par l'utilisateur.".to_string(), true)
-                    } else {
-                        match state
-                            .mcp
-                            .call_tool_auto(&dir, root.as_deref(), &block.server, &block.tool, block.arguments)
-                            .await
-                        {
-                            Ok((o, err)) => (o, err),
-                            Err(e) => (format!("Erreur MCP : {e}"), true),
-                        }
-                    };
-
-                    let _ = on_event.send(UiEvent::ToolResult {
-                        call_id: call_id.clone(),
-                        output: preview(&output),
-                        is_error,
-                        denied: !allowed,
-                    });
-
-                    block_results.push(format!(
-                        "[Résultat MCP {}.{}] :\n{}",
-                        block.server, block.tool, output
-                    ));
-                }
-
-                // Relance le modèle avec les résultats des blocs MCP
-                content = block_results.join("\n\n");
-                results.clear();
-                continue;
-            }
-
             let _ = on_event.send(UiEvent::Done {
                 chat_id: chat_id.clone(),
                 message_id,
@@ -989,6 +1274,19 @@ fn main() {
             get_chat,
             delete_chat,
             rename_chat,
+            pin_chat,
+            archive_chat,
+            search_chats,
+            fork_edit_message,
+            list_saved_messages,
+            save_message,
+            unsave_message,
+            list_archived_chats,
+            restore_chat,
+            get_notification_prefs,
+            update_notification_prefs,
+            upload_attachment,
+            open_external,
             get_context,
             compact_chat,
             cancel_chat,

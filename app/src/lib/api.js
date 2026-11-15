@@ -30,6 +30,37 @@ export const listChats = (limit = 40, cursor = null) => invoke('list_chats', { l
 export const getChat = (chatId) => invoke('get_chat', { chatId });
 export const deleteChat = (chatId) => invoke('delete_chat', { chatId });
 export const renameChat = (chatId, title) => invoke('rename_chat', { chatId, title });
+export const pinChat = (chatId, pinned) => invoke('pin_chat', { chatId, pinned: !!pinned });
+export const archiveChat = (chatId) => invoke('archive_chat', { chatId });
+export const searchChats = (query, limit = 20) => invoke('search_chats', { query, limit });
+export const forkEditMessage = (chatId, messageId, content) =>
+  invoke('fork_edit_message', { chatId, messageId, content });
+export const listSavedMessages = (limit = 50, cursor = null) =>
+  invoke('list_saved_messages', { limit, cursor });
+export const saveMessage = (chatId, messageId) =>
+  invoke('save_message', { chatId, messageId });
+export const unsaveMessage = (chatId, messageId) =>
+  invoke('unsave_message', { chatId, messageId });
+export const listArchivedChats = (limit = 40) =>
+  invoke('list_archived_chats', { limit });
+export const restoreChat = (chatId) => invoke('restore_chat', { chatId });
+export const getNotificationPrefs = () => invoke('get_notification_prefs');
+export const updateNotificationPrefs = (prefs) =>
+  invoke('update_notification_prefs', { prefs });
+export const openExternal = (url) => invoke('open_external', { url });
+
+export async function uploadAttachment(file, kind = null) {
+  const ct = file.type || 'application/octet-stream';
+  const resolvedKind = kind || (ct.startsWith('image/') ? 'image' : 'file');
+  const buf = await file.arrayBuffer();
+  return invoke('upload_attachment', {
+    kind: resolvedKind,
+    filename: file.name || (resolvedKind === 'image' ? 'image.png' : 'fichier.bin'),
+    contentType: ct,
+    bytes: Array.from(new Uint8Array(buf)),
+  });
+}
+
 export const getContext = (chatId) => invoke('get_context', { chatId });
 export const compactChat = (chatId) => invoke('compact_chat', { chatId });
 
@@ -93,7 +124,10 @@ export const trustTool = (name, on) => invoke('trust_tool', { name, on });
 //   | done{chat_id,message_id,prompt_tokens,output_tokens,total_prompt_tokens,total_output_tokens,api_calls,eco}
 //   | failed{code,message,retryable} | cancelled
 // La promesse se résout quand tout est terminé (outils compris).
-export function sendMessage({ chatId, agentId, content, workdir, autoAccept, eco, runId }, onEvent) {
+export function sendMessage(
+  { chatId, agentId, content, workdir, autoAccept, eco, runId, images, files, enableWebSearch },
+  onEvent
+) {
   const channel = new Channel();
   channel.onmessage = onEvent;
   return invoke('send_message', {
@@ -104,6 +138,9 @@ export function sendMessage({ chatId, agentId, content, workdir, autoAccept, eco
     autoAccept: !!autoAccept,
     eco: eco ?? null,
     runId: runId ?? null,
+    images: images?.length ? images : null,
+    files: files?.length ? files : null,
+    enableWebSearch: !!enableWebSearch,
     onEvent: channel,
   });
 }

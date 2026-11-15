@@ -28,7 +28,7 @@
   // `workdir` : dossier du mode Code (pour les skills du projet). `onchange` : optionnel.
   // `embedded` : affiché dans la fenêtre Réglages (le parent choisit l'onglet via `section`).
   // `oninsert(nom)` : si fourni, appelé à la place de l'écriture directe dans le composer.
-  let { onclose, workdir = null, onchange, embedded = false, section = 'skills', oninsert } = $props();
+  let { onclose = null, workdir = null, onchange, embedded = false, section = 'skills', oninsert } = $props();
 
   let root = $state();
   let tab = $state('skills');
@@ -50,6 +50,11 @@
 
   const dir = () => workdir ?? savedWorkdir ?? null;
   const err = (e) => String(e?.message ?? e);
+  const safeDisplay = (s) =>
+    String(s ?? '')
+      .replace(/[A-Za-z]:\\Users\\[^\\\s"']+/gi, '%USERPROFILE%')
+      .replace(/\/(?:home|Users)\/[^/\s"']+/g, '$HOME')
+      .replace(/:\/\/([^:@/\s]+):[^@/\s]+@/g, '://$1:****@');
   const flash = (ok, text) => {
     msg = { ok, text };
   };
@@ -182,6 +187,8 @@
   let nName = $state('');
   let nDesc = $state('');
   let nBody = $state('');
+  let nameInvalid = $derived(nName.trim().length > 0 && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(nName.trim()));
+  const fmtArgs = (args) => (args || []).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(' ');
 
   function openNew() {
     nName = '';
@@ -440,32 +447,98 @@
     'skill-edit': 'Modifier le skill',
     'skill-new': 'Nouveau skill',
     'acc-edit': 'Skill du compte',
-    'mcp-form': 'Serveur MCP',
+    'mcp-form': 'Nouveau serveur MCP',
     'mcp-import': 'Importer du JSON',
     'mcp-json': 'mcp.json',
   };
-  let title = $derived(TITLES[view] ?? 'Extensions');
+  let title = $derived(view === 'mcp-form' && f.orig ? 'Modifier le serveur MCP' : TITLES[view] ?? 'Extensions');
 </script>
 
 <svelte:window onkeydown={onkey} />
 
 <aside class="xt" class:embedded bind:this={root} aria-label="Extensions">
-  {#if !embedded || view !== 'list'}
-    <header>
+  {#if embedded && view === 'list'}
+    <header class="sec-head sec-head-row">
+      <div>
+        <h2>{tab === 'skills' ? 'Skills' : 'MCP'}</h2>
+        <p class="sec-sub">
+          {#if tab === 'skills'}
+            Skills locaux, skills du compte et insertion rapide avec <code>$nom</code>.
+          {:else}
+            Serveurs MCP locaux, autorisations par outil et configuration <code>mcp.json</code>.
+          {/if}
+        </p>
+      </div>
+      {#if onclose}
+        <button type="button" class="head-x" onclick={() => onclose?.()} aria-label="Fermer" title="Fermer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      {/if}
+    </header>
+  {:else if embedded}
+    <header class="sec-head sub-head">
+      <div class="sec-head-row">
+        <div class="sub-title-row">
+          <button type="button" class="icon" onclick={back} aria-label="Retour" title="Retour">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <h2>{title}</h2>
+        </div>
+        {#if onclose}
+          <button type="button" class="head-x" onclick={() => onclose?.()} aria-label="Fermer" title="Fermer">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        {/if}
+      </div>
+      <p class="sec-sub">
+        {#if view === 'skill-edit'}
+          Édition directe du fichier <code>SKILL.md</code>.
+        {:else if view === 'skill-new'}
+          Création d’un skill local invoquable avec <code>$nom</code>.
+        {:else if view === 'acc-edit'}
+          Édition JSON du skill synchronisé sur ton compte.
+        {:else if view === 'mcp-form'}
+          Configuration d’un serveur MCP local et de ses variables.
+        {:else if view === 'mcp-import'}
+          Importation groupée depuis un extrait Claude Desktop.
+        {:else if view === 'mcp-json'}
+          Édition brute du fichier de configuration <code>mcp.json</code>.
+        {/if}
+      </p>
+    </header>
+  {:else}
+    <header class="drawer-head">
       {#if view !== 'list'}
-        <button class="icon" onclick={back} aria-label="Retour" title="Retour">←</button>
+        <button type="button" class="icon" onclick={back} aria-label="Retour" title="Retour">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="15 18 9 12 15 6" />
+          </svg>
+        </button>
       {/if}
       <h2>{title}</h2>
-      {#if !embedded}
-        <button class="icon" onclick={() => onclose?.()} aria-label="Fermer" title="Fermer">✕</button>
+      {#if onclose}
+        <button type="button" class="icon" onclick={() => onclose?.()} aria-label="Fermer" title="Fermer">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
       {/if}
     </header>
   {/if}
 
   {#if view === 'list' && !embedded}
     <nav class="tabs">
-      <button class:on={tab === 'skills'} onclick={() => (tab = 'skills')}>Skills</button>
-      <button class:on={tab === 'mcp'} onclick={() => (tab = 'mcp')}>
+      <button type="button" class:on={tab === 'skills'} onclick={() => (tab = 'skills')}>Skills</button>
+      <button type="button" class:on={tab === 'mcp'} onclick={() => (tab = 'mcp')}>
         MCP{#if mcp.servers.length} ({mcp.servers.filter((s) => s.connected).length}/{mcp.servers.length}){/if}
       </button>
     </nav>
@@ -478,15 +551,17 @@
   <div class="body">
     <!-- ================= SKILLS ================= -->
     {#if view === 'list' && tab === 'skills'}
-      <p class="hint">
-        Écris <code>$nom</code> dans un message pour joindre un skill. Le modèle peut aussi en charger un lui-même.
-      </p>
-      <div class="bar">
-        <button class="pri" onclick={openNew}>+ Nouveau skill</button>
-        <button onclick={() => { loadLocal(); loadAccount(); }}>Actualiser</button>
+      {#if !embedded}
+        <p class="hint">
+          Écris <code>$nom</code> dans un message pour joindre un skill. Le modèle peut aussi en charger un lui-même.
+        </p>
+      {/if}
+      <div class="bar top-bar">
+        <button type="button" class="pri" onclick={openNew}>+ Nouveau skill</button>
+        <button type="button" onclick={() => { loadLocal(); loadAccount(); }}>Actualiser</button>
       </div>
 
-      <h3>Locaux ({local.length})</h3>
+      <h3>Locaux et intégrés ({local.length})</h3>
       {#if local.length === 0}
         <p class="hint">Aucun skill local. Crée-en un ou ajoute un dossier avec un <code>SKILL.md</code>.</p>
       {/if}
@@ -500,23 +575,23 @@
           {#if confirm === 'sk:' + s.name}
             <p class="warn">
               Supprime définitivement le dossier <code>{s.path}</code>
-              {#if s.source === 'utilisateur'} — il peut être partagé avec d'autres outils{/if}.
+              {#if s.source === 'app'} (intégré au dossier de l’app){:else if s.source === 'utilisateur'} — il peut être partagé avec d’autres outils{/if}.
             </p>
-            <div class="row">
-              <button class="danger" onclick={() => removeSkill(s)}>Confirmer la suppression</button>
-              <button onclick={() => (confirm = '')}>Annuler</button>
+            <div class="row card-actions">
+              <button type="button" class="danger" onclick={() => removeSkill(s)}>Confirmer la suppression</button>
+              <button type="button" onclick={() => (confirm = '')}>Annuler</button>
             </div>
           {:else}
-            <div class="row">
-              <button onclick={() => insertSkill(s.name)}>Insérer</button>
-              <button onclick={() => openEdit(s)}>Modifier</button>
-              <button class="ghostdanger" onclick={() => removeSkill(s)}>Retirer</button>
+            <div class="row card-actions">
+              <button type="button" onclick={() => insertSkill(s.name)}>Insérer</button>
+              <button type="button" onclick={() => openEdit(s)}>Modifier</button>
+              <button type="button" class="ghostdanger push-right" onclick={() => removeSkill(s)}>Retirer</button>
             </div>
           {/if}
         </section>
       {/each}
 
-      <h3>Compte France Student {#if accountLoading}<span class="mut">…</span>{/if}</h3>
+      <h3>Compte France Student ({account.length}) {#if accountLoading}<span class="mut">…</span>{/if}</h3>
       {#if accountError}
         <p class="warn">Liste indisponible : {accountError}</p>
       {:else if !accountLoading && account.length === 0}
@@ -524,120 +599,141 @@
       {/if}
       {#each account as s, i (accId(s) || i)}
         <section class="card">
-          <div class="row"><strong>{s.name ?? s.title ?? accId(s)}</strong></div>
+          <div class="row">
+            <strong>{s.name ?? s.title ?? accId(s)}</strong>
+            <span class="badge account">COMPTE</span>
+          </div>
           <p class="desc">{clean(s.description) || 'Sans description.'}</p>
           {#if confirm === 'ac:' + accId(s)}
             <p class="warn">Retire ce skill de ton compte France Student (définitif).</p>
-            <div class="row">
-              <button class="danger" onclick={() => removeAcc(s)}>Confirmer la suppression</button>
-              <button onclick={() => (confirm = '')}>Annuler</button>
+            <div class="row card-actions">
+              <button type="button" class="danger" onclick={() => removeAcc(s)}>Confirmer la suppression</button>
+              <button type="button" onclick={() => (confirm = '')}>Annuler</button>
             </div>
           {:else}
-            <div class="row">
-              <button onclick={() => insertSkill(s.name ?? accId(s))}>Insérer</button>
-              <button onclick={() => openAcc(s)}>Modifier</button>
-              <button class="ghostdanger" onclick={() => removeAcc(s)}>Retirer</button>
+            <div class="row card-actions">
+              <button type="button" onclick={() => insertSkill(s.name ?? accId(s))}>Insérer</button>
+              <button type="button" onclick={() => openAcc(s)}>Modifier</button>
+              <button type="button" class="ghostdanger push-right" onclick={() => removeAcc(s)}>Retirer</button>
             </div>
           {/if}
         </section>
       {/each}
 
     {:else if view === 'skill-new'}
-      <p class="hint">
-        Créé dans le dossier de l'app (<code>skills/&lt;nom&gt;/SKILL.md</code>). Le nom sert de mot-clé après <code>$</code>.
-      </p>
-      <label>Nom <input bind:value={nName} placeholder="mon-skill" spellcheck="false" /></label>
-      <label>
-        Description (quand l'utiliser)
-        <input bind:value={nDesc} placeholder="Résume un cours en fiches…" />
-      </label>
-      <label>
-        Instructions
-        <textarea bind:value={nBody} rows="12" placeholder="Explique au modèle comment faire…"></textarea>
-      </label>
-      <div class="bar">
-        <button class="pri" onclick={createSkill} disabled={!nName.trim() || !nBody.trim()}>Créer</button>
-        <button onclick={back}>Annuler</button>
-      </div>
+      <section class="card form-card">
+        <p class="hint">
+          Enregistré dans <code>skills/&lt;nom&gt;/SKILL.md</code> (badge <strong>APP</strong>).
+        </p>
+        <label>
+          <span>Nom <span class="req">*</span></span>
+          <input bind:value={nName} placeholder="mon-skill" spellcheck="false" aria-invalid={nameInvalid} />
+          <span class="field-hint" class:err-txt={nameInvalid}>Minuscules, chiffres et tirets uniquement (ex.&nbsp;<code>mon-skill</code>).</span>
+        </label>
+        <label>
+          <span>Description (quand l’utiliser)</span>
+          <input bind:value={nDesc} placeholder="Quand je veux résumer un cours en fiches…" />
+        </label>
+        <label>
+          <span>Instructions <span class="req">*</span></span>
+          <textarea bind:value={nBody} rows="8" placeholder="Explique au modèle comment faire…"></textarea>
+        </label>
+        <div class="bar form-bar">
+          <button type="button" class="pri" onclick={createSkill} disabled={!nName.trim() || nameInvalid || !nBody.trim()}>Créer</button>
+          <button type="button" class="ghost" onclick={back}>Annuler</button>
+        </div>
+      </section>
 
     {:else if view === 'skill-edit'}
-      <p class="hint">
-        Fichier <code>SKILL.md</code> complet (en-tête <code>---</code> compris) de <strong>{editName}</strong>. Si tu changes <code>name:</code>, le skill change de nom.
-      </p>
-      <textarea class="code tall" bind:value={editText} spellcheck="false"></textarea>
-      <div class="bar">
-        <button class="pri" onclick={saveEdit} disabled={!editText.trim()}>Enregistrer</button>
-        <button onclick={back}>Annuler</button>
-      </div>
+      <section class="card form-card">
+        <p class="hint">
+          Fichier <code>SKILL.md</code> complet (en-tête <code>---</code> compris) de <strong>{editName}</strong>. Si tu changes <code>name:</code>, le skill change de nom.
+        </p>
+        <textarea class="code tall" bind:value={editText} spellcheck="false"></textarea>
+        <div class="bar form-bar">
+          <button type="button" class="pri" onclick={saveEdit} disabled={!editText.trim()}>Enregistrer</button>
+          <button type="button" class="ghost" onclick={back}>Annuler</button>
+        </div>
+      </section>
 
     {:else if view === 'acc-edit'}
-      <p class="hint">
-        Données du skill, en JSON. Enregistrer envoie <code>PATCH /skills/{accEditId}</code> (endpoint supposé : colle-moi l'erreur s'il échoue).
-      </p>
-      <textarea class="code tall" bind:value={accText} spellcheck="false"></textarea>
-      <div class="bar">
-        <button class="pri" onclick={saveAcc}>Enregistrer</button>
-        <button onclick={back}>Annuler</button>
-      </div>
+      <section class="card form-card">
+        <p class="hint">
+          Données du skill, en JSON. Enregistrer envoie <code>PATCH /skills/{accEditId}</code>.
+        </p>
+        <textarea class="code tall" bind:value={accText} spellcheck="false"></textarea>
+        <div class="bar form-bar">
+          <button type="button" class="pri" onclick={saveAcc}>Enregistrer</button>
+          <button type="button" class="ghost" onclick={back}>Annuler</button>
+        </div>
+      </section>
 
     <!-- ================= MCP ================= -->
     {:else if view === 'list' && tab === 'mcp'}
       <p class="hint">
-        Aucun serveur ne démarre seul. Chaque appel d'outil MCP demande confirmation, sauf « sans confirmation » (session seulement).
+        Aucun serveur ne démarre seul. Chaque appel d’outil MCP demande confirmation, sauf <span class="nowrap">«&#8239;sans confirmation&#8239;»</span> <span class="nowrap">(session seulement).</span>
       </p>
       {#if mcp.error}<p class="warn">{mcp.error}</p>{/if}
       {#if mcp.customRejected}
         <p class="warn">Le serveur France Student refuse les outils personnalisés : les MCP ne seront pas utilisables par le modèle.</p>
       {/if}
-      <div class="bar">
-        <button class="pri" onclick={() => openServerForm()}>+ Ajouter un serveur</button>
-        <button onclick={() => { importText = ''; view = 'mcp-import'; msg = null; }}>Importer du JSON</button>
+      <div class="bar top-bar">
+        <button type="button" class="pri" onclick={() => openServerForm()}>+ Ajouter un serveur</button>
+        <button type="button" onclick={() => { importText = ''; view = 'mcp-import'; msg = null; }}>Importer du JSON</button>
+        <button type="button" onclick={loadMcp}>Actualiser</button>
       </div>
 
       {#if mcp.servers.length === 0 && !mcp.error}
         <h3>Démarrage rapide</h3>
         <div class="bar">
           {#each PRESETS as p (p.name)}
-            <button onclick={() => openServerForm(p)}>{p.label}</button>
+            <button type="button" onclick={() => openServerForm(p)}>{p.label}</button>
           {/each}
         </div>
         <p class="hint">Il faut Node.js (<code>npx</code>) ou uv (<code>uvx</code>) sur ce PC.</p>
+      {:else if mcp.servers.length > 0}
+        <h3>Serveurs ({mcp.servers.length})</h3>
       {/if}
 
       {#each mcp.servers as s (s.name)}
         <section class="card">
           <div class="row">
-            <span class="dot" class:up={s.connected}></span>
+            <span class="dot" class:up={s.connected} aria-hidden="true"></span>
             <strong>{s.name}</strong>
-            <span class="mut">{s.connected ? `${s.tools.length} outil(s)` : 'arrêté'}</span>
+            <span class="mut">
+              {s.connected ? `connecté · ${s.tools.length} outil${s.tools.length > 1 ? 's' : ''}` : 'arrêté'}
+            </span>
           </div>
-          <p class="desc mono">{s.command} {s.args.join(' ')}</p>
+          <p class="desc mono cmd-line" title={safeDisplay(`${s.command} ${fmtArgs(s.args)}`)}>{safeDisplay(`${s.command} ${fmtArgs(s.args)}`)}</p>
           {#if confirm === 'mc:' + s.name}
             <p class="warn">Retire « {s.name} » de <code>mcp.json</code>.</p>
-            <div class="row">
-              <button class="danger" onclick={() => removeServer(s)}>Confirmer</button>
-              <button onclick={() => (confirm = '')}>Annuler</button>
+            <div class="row card-actions">
+              <button type="button" class="danger" onclick={() => removeServer(s)}>Confirmer</button>
+              <button type="button" onclick={() => (confirm = '')}>Annuler</button>
             </div>
           {:else}
-            <div class="row">
+            <div class="row card-actions">
               {#if s.connected}
-                <button disabled={busy[s.name]} onclick={() => disconnectServer(s.name)}>Déconnecter</button>
+                <button type="button" disabled={busy[s.name]} onclick={() => disconnectServer(s.name)}>Déconnecter</button>
               {:else}
-                <button class="pri" disabled={busy[s.name]} onclick={() => connectServer(s.name)}>
+                <button type="button" class="pri" disabled={busy[s.name]} onclick={() => connectServer(s.name)}>
                   {busy[s.name] ? 'Connexion…' : 'Connecter'}
                 </button>
               {/if}
-              <button onclick={() => editServer(s)}>Modifier</button>
-              <button class="ghostdanger" onclick={() => removeServer(s)}>Retirer</button>
+              <button type="button" onclick={() => editServer(s)}>Modifier</button>
+              <button type="button" class="ghostdanger push-right" onclick={() => removeServer(s)}>Retirer</button>
             </div>
           {/if}
           {#if s.connected && s.tools.length}
-            <label class="chk">
+            <label class="chk" class:chk-danger={allTrusted(s)}>
               <input type="checkbox" checked={allTrusted(s)} onchange={(e) => setTrust(s.tools, e.currentTarget.checked)} />
               Sans confirmation (cette session)
             </label>
             <details>
-              <summary>Outils</summary>
+              <summary class="tools-sum">
+                <svg class="chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 2.5 8 6 4 9.5" /></svg>
+                <span>Outils ({s.tools.length})</span>
+              </summary>
               {#each s.tools as t (t.exposedName)}
                 <label class="chk tool" title={t.description}>
                   <input type="checkbox" checked={t.trusted} onchange={(e) => setTrust([t], e.currentTarget.checked)} />
@@ -651,65 +747,81 @@
 
       <h3>Configuration</h3>
       <div class="bar">
-        <button onclick={openRaw}>Modifier mcp.json</button>
-        <button onclick={loadMcp}>Actualiser</button>
+        <button type="button" onclick={openRaw}>Modifier mcp.json</button>
       </div>
 
     {:else if view === 'mcp-form'}
-      <p class="hint">
-        {#if f.orig}Enregistrer déconnecte le serveur ; reconnecte-le ensuite.{:else}Le serveur est écrit dans <code>mcp.json</code> ; il ne démarre que si tu cliques sur Connecter.{/if}
-      </p>
-      <label>Nom <input bind:value={f.name} placeholder="fichiers" spellcheck="false" /></label>
-      <label>Commande <input bind:value={f.command} placeholder="npx" spellcheck="false" /></label>
-      <label>
-        Arguments (un par ligne)
-        <textarea class="code" bind:value={f.args} rows="5" spellcheck="false" placeholder={'-y\n@modelcontextprotocol/server-filesystem\nC:\\Users\\Tom\\Documents'}></textarea>
-      </label>
-      <div class="bar"><button onclick={addDirArg}>+ Dossier…</button></div>
-      <label>
-        Variables d'environnement (NOM=valeur, une par ligne)
-        <textarea class="code" bind:value={f.env} rows="3" spellcheck="false" placeholder="API_KEY=…"></textarea>
-      </label>
-      <label>Dossier de lancement (facultatif) <input bind:value={f.cwd} spellcheck="false" /></label>
-      <div class="bar">
-        <button class="pri" onclick={() => saveServer(true)} disabled={!f.name.trim() || !f.command.trim()}>
-          Enregistrer et connecter
-        </button>
-        <button onclick={() => saveServer(false)} disabled={!f.name.trim() || !f.command.trim()}>Enregistrer</button>
-        <button onclick={back}>Annuler</button>
-      </div>
+      <section class="card form-card mcp-form-card">
+        <p class="hint">
+          {#if f.orig}Enregistrer déconnecte le serveur&#8239;; reconnecte-le ensuite.{:else}Écrit dans <code>mcp.json</code>&#8239;; démarre après un clic sur «&#8239;Connecter&#8239;» ou «&#8239;Enregistrer et connecter&#8239;».{/if}
+        </p>
+        <div class="form-grid-2">
+          <label><span>Nom <span class="req">*</span></span><input bind:value={f.name} placeholder="fichiers" spellcheck="false" /></label>
+          <label><span>Commande <span class="req">*</span></span><input class="mono" bind:value={f.command} placeholder="npx" spellcheck="false" /></label>
+        </div>
+        <label>
+          <span>Arguments (un par ligne)</span>
+          <textarea class="code" bind:value={f.args} rows="2" spellcheck="false" placeholder={'-y @modelcontextprotocol/server-filesystem'}></textarea>
+        </label>
+        <div class="bar compact-bar">
+          <button type="button" class="with-ico" onclick={addDirArg}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            Ajouter un dossier aux arguments…
+          </button>
+        </div>
+        <label>
+          <span>Variables d’environnement (<code>NOM=valeur</code>, une par ligne)</span>
+          <textarea class="code" bind:value={f.env} rows="2" spellcheck="false" placeholder="API_KEY=…"></textarea>
+        </label>
+        <label><span>Dossier de lancement</span><input class="mono" bind:value={f.cwd} placeholder={'C:\\Projet'} spellcheck="false" /></label>
+        <div class="bar form-bar">
+          <button type="button" class="pri" onclick={() => saveServer(true)} disabled={!f.name.trim() || !f.command.trim()}>
+            Enregistrer et connecter
+          </button>
+          <button type="button" class="sec" onclick={() => saveServer(false)} disabled={!f.name.trim() || !f.command.trim()}>Enregistrer</button>
+          <button type="button" class="ghost" onclick={back}>Annuler</button>
+        </div>
+      </section>
 
     {:else if view === 'mcp-import'}
-      <p class="hint">
-        Colle un extrait au format Claude Desktop : <code>{'{ "mcpServers": { "nom": { "command": …, "args": […] } } }'}</code>. Les noms déjà présents sont refusés.
-      </p>
-      <textarea class="code tall" bind:value={importText} spellcheck="false" placeholder={'{\n  "mcpServers": {\n    …\n  }\n}'}></textarea>
-      <div class="bar">
-        <button class="pri" onclick={doImport} disabled={!importText.trim()}>Importer</button>
-        <button onclick={back}>Annuler</button>
-      </div>
+      <section class="card form-card">
+        <p class="hint">
+          Colle un extrait au format Claude Desktop&#8239;: <code class="wrap-code">{'{ "mcpServers": { "nom": { "command": …, "args": […] } } }'}</code>. Les noms déjà présents sont refusés.
+        </p>
+        <textarea class="code tall" bind:value={importText} spellcheck="false" placeholder={'{\n  "mcpServers": {\n    …\n  }\n}'}></textarea>
+        <div class="bar form-bar">
+          <button type="button" class="pri" onclick={doImport} disabled={!importText.trim()}>Importer</button>
+          <button type="button" class="ghost" onclick={back}>Annuler</button>
+        </div>
+      </section>
 
     {:else if view === 'mcp-json'}
-      <p class="hint">Édition directe (avancé). Le JSON est validé avant l'enregistrement.</p>
-      <textarea class="code tall" bind:value={rawText} spellcheck="false"></textarea>
-      <div class="bar">
-        <button class="pri" onclick={saveRaw}>Enregistrer</button>
-        <button onclick={back}>Annuler</button>
-      </div>
+      <section class="card form-card">
+        <p class="hint">Édition directe (avancé). Le JSON est validé avant l’enregistrement.</p>
+        <textarea class="code tall" bind:value={rawText} spellcheck="false"></textarea>
+        <div class="bar form-bar">
+          <button type="button" class="pri" onclick={saveRaw}>Enregistrer</button>
+          <button type="button" class="ghost" onclick={back}>Annuler</button>
+        </div>
+      </section>
     {/if}
   </div>
 </aside>
 
 <style>
   .xt {
-    --bg: #141821;
-    --card: #1a1f2b;
-    --line: #2a303d;
-    --txt: #d9dde6;
-    --mut: #8a92a3;
-    --acc: #3d7bff;
-    --bad: #ff5d6c;
-    --ok: #3ecf8e;
+    --xt-bg: var(--bg, #141821);
+    --xt-card: var(--panel, #1a1f2b);
+    --xt-line: var(--line, #2a303d);
+    --xt-line2: var(--line2, #384152);
+    --xt-txt: var(--text, #d9dde6);
+    --xt-mut: var(--dim, #8a92a3);
+    --xt-acc: var(--accent, #3d7bff);
+    --xt-bad: var(--danger, #ff5d6c);
+    --xt-ok: var(--ok, #3ecf8e);
+    --xt-warn: var(--warn, #e3b341);
+    --xt-input: var(--code-bg, #0f131a);
+    --xt-panel2: var(--panel2, #232938);
     position: fixed;
     top: 0;
     right: 0;
@@ -718,59 +830,120 @@
     z-index: 60;
     display: flex;
     flex-direction: column;
-    background: var(--bg);
-    color: var(--txt);
-    border-left: 1px solid var(--line);
-    border-top: 2px solid var(--acc);
+    background: var(--xt-bg);
+    color: var(--xt-txt);
+    border-left: 1px solid var(--xt-line);
+    border-top: 2px solid var(--xt-acc);
     font-size: 13px;
     box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
   }
   .xt.embedded {
     position: static;
     width: auto;
-    height: 100%;
+    height: auto;
     z-index: auto;
     border: 0;
     box-shadow: none;
     background: transparent;
   }
-  header {
+  .drawer-head {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 12px 14px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--xt-line);
   }
-  h2 {
+  .drawer-head h2 {
     flex: 1;
     margin: 0;
     font-size: 15px;
+    font-weight: 600;
+  }
+  .sec-head {
+    margin-bottom: 20px;
+  }
+  .sec-head-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .sub-head {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 20px;
+  }
+  .sub-head .sec-head-row {
+    width: 100%;
+    align-items: center;
+  }
+  .sub-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .sec-head h2 {
+    margin: 0 0 6px;
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--xt-txt);
+  }
+  .sub-head h2 {
+    margin: 0;
+  }
+  .sec-sub {
+    margin: 0;
+    font-size: 13px;
+    color: var(--xt-mut);
+  }
+  .head-x {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--xt-txt);
+    opacity: 0.72;
+    display: inline-grid;
+    place-items: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .head-x:hover {
+    opacity: 1;
+    background: var(--xt-bg2);
+    border-color: var(--xt-line);
   }
   h3 {
-    margin: 18px 0 8px;
+    margin: 20px 0 8px;
     font-size: 11px;
+    font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--mut);
+    color: var(--xt-mut);
   }
   .tabs {
     display: flex;
     gap: 4px;
     padding: 0 14px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--xt-line);
   }
   .tabs button {
     background: none;
+    height: auto;
     border: 0;
     border-bottom: 2px solid transparent;
     border-radius: 0;
     padding: 10px 12px;
-    color: var(--mut);
+    color: var(--xt-mut);
     cursor: pointer;
   }
   .tabs button.on {
-    color: var(--txt);
-    border-bottom-color: var(--acc);
+    color: var(--xt-txt);
+    border-bottom-color: var(--xt-acc);
   }
   .body {
     flex: 1;
@@ -778,31 +951,40 @@
     overflow-y: auto;
     padding: 12px 14px 24px;
   }
+  .xt.embedded .body {
+    padding: 0 0 28px;
+    overflow: visible;
+  }
   .msg {
     margin: 10px 14px 0;
-    padding: 8px 10px;
-    border-radius: 4px;
-    border: 1px solid var(--ok);
-    background: rgba(62, 207, 142, 0.08);
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--xt-ok) 45%, transparent);
+    background: color-mix(in srgb, var(--xt-ok) 10%, transparent);
+    color: var(--xt-txt);
     word-break: break-word;
   }
+  .xt.embedded .msg {
+    margin: 0 0 12px;
+  }
   .msg.bad {
-    border-color: var(--bad);
-    background: rgba(255, 93, 108, 0.08);
+    border-color: color-mix(in srgb, var(--xt-bad) 45%, transparent);
+    background: color-mix(in srgb, var(--xt-bad) 10%, transparent);
+    color: var(--xt-bad);
   }
   .hint {
-    color: var(--mut);
-    line-height: 1.45;
-    margin: 0 0 10px;
+    color: var(--xt-mut);
+    line-height: 1.5;
+    margin: 0 0 12px;
   }
   .warn {
-    color: #ffb86b;
+    color: var(--xt-warn);
     line-height: 1.45;
     margin: 6px 0;
     word-break: break-word;
   }
   .mut {
-    color: var(--mut);
+    color: var(--xt-mut);
     font-size: 12px;
   }
   .bar,
@@ -810,98 +992,229 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     margin: 8px 0;
   }
+  .top-bar {
+    margin: 0 0 14px;
+  }
   .card {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
+    background: var(--xt-card);
+    border: 1px solid var(--xt-line);
+    border-radius: 12px;
+    padding: 15px 17px;
+    margin-bottom: 10px;
+  }
+  .form-card {
+    padding: 16px 18px;
+  }
+  .mcp-form-card .hint {
+    margin-bottom: 10px;
+    font-size: 12.5px;
+  }
+  .mcp-form-card label {
+    margin: 0 0 9px;
+  }
+  .form-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .compact-bar {
+    margin: -2px 0 9px;
+  }
+  .nowrap {
+    white-space: nowrap;
+  }
+  .form-bar {
+    margin: 12px 0 0;
+  }
+  .mcp-form-card .form-bar {
+    margin: 8px 0 0;
   }
   .card .row {
-    margin: 4px 0;
+    margin: 2px 0;
+  }
+  .card .card-actions {
+    margin: 10px 0 0;
   }
   .desc {
-    margin: 4px 0 6px;
-    color: var(--mut);
-    line-height: 1.4;
-    word-break: break-word;
+    margin: 6px 0 2px;
+    color: var(--xt-mut);
+    font-size: 12.5px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  .cmd-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 12px;
   }
   .mono,
   code,
   .code {
-    font-family: Consolas, 'Cascadia Mono', monospace;
+    font-family: var(--font-mono, Consolas, 'Cascadia Mono', monospace);
   }
   code {
     font-size: 12px;
-    color: #b9c4dd;
+    color: var(--xt-txt);
+    background: var(--xt-panel2);
+    border: 1px solid var(--xt-line);
+    border-radius: 5px;
+    padding: 1px 5px;
+    white-space: nowrap;
+  }
+  code.wrap-code {
+    white-space: normal;
+    word-break: break-word;
   }
   .badge {
+    font-family: var(--font-sans, inherit);
     font-size: 10px;
+    font-weight: 600;
     letter-spacing: 0.05em;
-    padding: 1px 6px;
-    border: 1px solid #7c5cd6;
-    color: #a78bfa;
-    border-radius: 3px;
+    padding: 2px 7px;
+    border: 1px solid color-mix(in srgb, var(--xt-acc) 45%, var(--xt-line2));
+    background: color-mix(in srgb, var(--xt-acc) 12%, transparent);
+    color: var(--xt-acc);
+    border-radius: 999px;
+  }
+  .badge.utilisateur {
+    border-color: color-mix(in srgb, #8b5cf6 45%, var(--xt-line2));
+    background: color-mix(in srgb, #8b5cf6 12%, transparent);
+    color: color-mix(in srgb, #a78bfa 85%, var(--xt-txt));
   }
   .badge.projet {
-    border-color: #2a8f6a;
-    color: var(--ok);
+    border-color: color-mix(in srgb, var(--xt-ok) 45%, var(--xt-line2));
+    background: color-mix(in srgb, var(--xt-ok) 12%, transparent);
+    color: var(--xt-ok);
   }
-  .badge.app {
-    border-color: var(--acc);
-    color: var(--acc);
+  .badge.account {
+    border-color: var(--xt-line2);
+    background: var(--xt-panel2);
+    color: var(--xt-txt);
+    opacity: 0.88;
   }
   .dot {
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #555d6e;
+    background: var(--faint, #555d6e);
+    flex-shrink: 0;
   }
   .dot.up {
-    background: var(--ok);
+    background: var(--xt-ok);
   }
   button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 14px;
     font: inherit;
-    color: var(--txt);
-    background: #232938;
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    padding: 5px 10px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--xt-txt);
+    background: var(--xt-panel2);
+    border: 1px solid var(--xt-line2);
+    border-radius: 8px;
     cursor: pointer;
+    transition: border-color 0.14s, background 0.14s, color 0.14s;
   }
   button:hover:not(:disabled) {
-    border-color: var(--acc);
+    border-color: var(--xt-line2);
+    background: var(--hover, var(--xt-panel2));
   }
   button:disabled {
-    opacity: 0.5;
-    cursor: default;
+    opacity: 0.45;
+    cursor: not-allowed;
   }
   button.pri {
-    background: var(--acc);
-    border-color: var(--acc);
-    color: #fff;
+    background: var(--xt-acc);
+    border-color: var(--xt-acc);
+    color: var(--on-accent, #ffffff);
+    font-weight: 600;
+  }
+  button.pri:disabled {
+    opacity: 1;
+    background: var(--xt-panel2);
+    border-color: var(--xt-line2);
+    color: var(--xt-mut);
+  }
+  button.pri:hover:not(:disabled) {
+    filter: brightness(1.08);
+    border-color: var(--xt-acc);
+  }
+  button.sec {
+    background: var(--xt-panel2);
+    border-color: var(--xt-line2);
+    color: var(--xt-txt);
+  }
+  button.ghost {
+    background: transparent;
+    border-color: transparent;
+    color: var(--xt-mut);
+  }
+  button.ghost:hover:not(:disabled) {
+    background: var(--hover, var(--xt-panel2));
+    border-color: transparent;
+    color: var(--xt-txt);
   }
   button.danger {
-    background: var(--bad);
-    border-color: var(--bad);
+    background: var(--xt-bad);
+    border-color: var(--xt-bad);
     color: #fff;
+    font-weight: 600;
+  }
+  button.ghostdanger {
+    background: transparent;
+    color: color-mix(in srgb, var(--xt-bad) 82%, var(--xt-txt));
   }
   button.ghostdanger:hover:not(:disabled) {
-    border-color: var(--bad);
-    color: var(--bad);
+    border-color: var(--xt-bad);
+    background: color-mix(in srgb, var(--xt-bad) 10%, transparent);
+    color: var(--xt-bad);
+  }
+  .push-right {
+    margin-left: auto;
   }
   button.icon {
-    background: none;
-    border: 1px solid transparent;
-    padding: 4px 8px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid var(--xt-line);
+    color: var(--xt-txt);
+    display: inline-grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+  button.icon:hover {
+    background: var(--hover, var(--xt-panel2));
+    border-color: var(--xt-line2);
   }
   label {
     display: block;
-    margin: 0 0 10px;
-    color: var(--mut);
+    margin: 0 0 14px;
+    color: var(--xt-txt);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .req {
+    color: var(--xt-bad);
+  }
+  .field-hint {
+    display: block;
+    margin-top: 5px;
+    font-size: 11.5px;
+    font-weight: 400;
+    color: var(--xt-mut);
+  }
+  .field-hint.err-txt {
+    color: var(--xt-bad);
   }
   label input:not([type='checkbox']),
   label textarea,
@@ -909,43 +1222,85 @@
     display: block;
     width: 100%;
     box-sizing: border-box;
-    margin-top: 4px;
-    padding: 6px 8px;
+    margin-top: 6px;
+    padding: 8px 11px;
     font: inherit;
-    color: var(--txt);
-    background: #0f131a;
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    resize: vertical;
+    font-weight: 400;
+    color: var(--xt-txt);
+    background: var(--xt-input);
+    border: 1px solid var(--xt-line2);
+    border-radius: 8px;
+    resize: none;
+  }
+  label input.mono:not([type='checkbox']),
+  label input.mono:not([type='checkbox'])::placeholder,
+  label textarea.code,
+  textarea.code {
+    font-family: var(--font-mono, Consolas, 'Cascadia Mono', monospace);
+    font-size: 12.5px;
+  }
+  label input:not([type='checkbox']) {
+    height: 36px;
+    padding: 0 11px;
+  }
+  input[aria-invalid='true'] {
+    border-color: var(--xt-bad);
   }
   textarea.code {
     font-size: 12px;
-    line-height: 1.4;
+    line-height: 1.45;
   }
   textarea.tall {
-    min-height: 52vh;
+    min-height: 48vh;
   }
   input:focus,
   textarea:focus {
     outline: none;
-    border-color: var(--acc);
+    border-color: var(--xt-acc);
   }
   label.chk {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin: 6px 0 0;
-    color: var(--txt);
+    gap: 7px;
+    margin: 10px 0 0;
+    font-size: 12.5px;
+    font-weight: 400;
+    color: var(--xt-txt);
+    cursor: pointer;
+  }
+  label.chk-danger {
+    padding: 7px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--xt-warn) 40%, transparent);
+    background: color-mix(in srgb, var(--xt-warn) 10%, transparent);
+    color: var(--xt-warn);
   }
   label.chk.tool {
-    margin-left: 4px;
-    color: var(--mut);
+    margin: 6px 0 0 18px;
+    color: var(--xt-mut);
   }
   details {
-    margin-top: 6px;
+    margin-top: 10px;
   }
-  summary {
+  summary.tools-sum {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    list-style: none;
     cursor: pointer;
-    color: var(--mut);
+    color: var(--xt-mut);
+    font-size: 12.5px;
+  }
+  summary.tools-sum::-webkit-details-marker {
+    display: none;
+  }
+  summary.tools-sum .chev {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+  details[open] > summary.tools-sum .chev {
+    transform: rotate(90deg);
   }
 </style>

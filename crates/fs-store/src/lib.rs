@@ -31,7 +31,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             base_url: DEFAULT_BASE_URL.to_string(),
-            last_agent_id: None,
+            last_agent_id: Some(-2001),
             last_workdir: None,
             auto_accept: false,
             eco: false,
@@ -61,19 +61,28 @@ fn entry() -> Result<keyring::Entry, keyring::Error> {
     keyring::Entry::new(SERVICE, ACCOUNT)
 }
 
-/// Clé API : coffre du système d'abord, variable `FS_KEY` en repli (dev).
+/// Clé API : coffre du système d'abord, variable `FS_KEY`, puis session FranceStudent active.
 pub fn get_key() -> Option<String> {
     let stored = entry()
         .ok()
         .and_then(|e| e.get_password().ok())
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty());
-    stored.or_else(|| {
-        std::env::var("FS_KEY")
-            .ok()
-            .map(|k| k.trim().to_string())
-            .filter(|k| !k.is_empty())
-    })
+    stored
+        .or_else(|| {
+            std::env::var("FS_KEY")
+                .ok()
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+        })
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(std::path::PathBuf::from)
+                .map(|p| p.join(".gemini/config/plugins/eco-quota/fs_token.txt"))
+                .and_then(|p| fs::read_to_string(p).ok())
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+        })
 }
 
 pub fn set_key(key: &str) -> Result<(), String> {

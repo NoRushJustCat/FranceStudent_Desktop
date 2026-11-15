@@ -6,7 +6,7 @@
 //   CLOUDFLARED_VERSION  version à télécharger (ex. 2025.8.1), défaut : la dernière
 //   CLOUDFLARED_FORCE=1  re-télécharge même si le fichier existe
 import { execSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,8 +24,10 @@ function targetTriple() {
 
 const ASSETS = {
   "x86_64-pc-windows-msvc": "cloudflared-windows-amd64.exe",
+  "x86_64-pc-windows-gnu": "cloudflared-windows-amd64.exe",
   "aarch64-pc-windows-msvc": "cloudflared-windows-amd64.exe", // pas de build arm64 : émulation x64
   "i686-pc-windows-msvc": "cloudflared-windows-386.exe",
+  "i686-pc-windows-gnu": "cloudflared-windows-386.exe",
   "x86_64-unknown-linux-gnu": "cloudflared-linux-amd64",
   "aarch64-unknown-linux-gnu": "cloudflared-linux-arm64",
   "x86_64-apple-darwin": "cloudflared-darwin-amd64.tgz",
@@ -54,18 +56,30 @@ const base = v
 const url = `${base}/${asset}`;
 
 console.log(`[cloudflared] téléchargement ${url}`);
-let data;
+mkdirSync(dir, { recursive: true });
+let data = null;
 try {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   data = Buffer.from(await res.arrayBuffer());
 } catch (e) {
-  console.error(`[cloudflared] échec du téléchargement : ${e.message}`);
-  console.error(`[cloudflared] télécharge-le à la main et place-le ici : ${dest}`);
-  process.exit(1);
+  const localWin = "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe";
+  if (isWin && existsSync(localWin)) {
+    copyFileSync(localWin, dest);
+    console.log(`[cloudflared] copié depuis installation locale : ${dest}`);
+    process.exit(0);
+  }
+  try {
+    const tmpDl = join(dir, asset);
+    execSync(`curl.exe -fsSL -L "${url}" -o "${tmpDl}"`, { stdio: "inherit" });
+    data = readFileSync(tmpDl);
+    rmSync(tmpDl, { force: true });
+  } catch (e2) {
+    console.error(`[cloudflared] échec du téléchargement : ${e.message}`);
+    console.error(`[cloudflared] télécharge-le à la main et place-le ici : ${dest}`);
+    process.exit(1);
+  }
 }
-
-mkdirSync(dir, { recursive: true });
 
 if (asset.endsWith(".tgz")) {
   // macOS : archive contenant un unique binaire « cloudflared ».

@@ -131,21 +131,6 @@ fn short(s: &str, max: usize) -> String {
     t
 }
 
-/// Texte de description de l'outil `load_skill` : liste courte des skills.
-pub fn catalog(skills: &[SkillInfo], desc_max: usize) -> String {
-    let mut s = String::from(
-        "Charge les instructions d'un skill local (fichier SKILL.md). Skills disponibles :\n",
-    );
-    for k in skills.iter().take(40) {
-        s.push_str(&format!(
-            "- {} : {}\n",
-            k.name,
-            short(&k.description, desc_max)
-        ));
-    }
-    s
-}
-
 fn find<'a>(skills: &'a [SkillInfo], name: &str) -> Option<&'a SkillInfo> {
     skills.iter().find(|s| s.name.eq_ignore_ascii_case(name))
 }

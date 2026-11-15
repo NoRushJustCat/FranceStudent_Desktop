@@ -133,7 +133,7 @@ pub async fn account_skill_delete(
     id: String,
 ) -> Result<(), String> {
     safe_id(&id)?;
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.send_json("DELETE", &format!("/skills/{id}"), None)
         .await
         .map(|_| ())
@@ -149,7 +149,7 @@ pub async fn account_skill_update(
     body: Value,
 ) -> Result<Value, String> {
     safe_id(&id)?;
-    let c = client(&app, &state)?;
+    let c = client(&app, &state).await?;
     c.send_json("PATCH", &format!("/skills/{id}"), Some(body))
         .await
         .map_err(|e| e.to_string())

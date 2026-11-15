@@ -1,21 +1,25 @@
 <script>
-  // FS Code : fenêtre principale.
+  // France Student Desktop : fenêtre principale.
   // Chaque chat ouvert = une « session » en mémoire. Changer de chat ne fait que changer
   // la session affichée : les générations en cours continuent en arrière-plan.
-  import { onMount, tick, untrack } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import * as api from './lib/api.js';
+  import Sidebar from './lib/Sidebar.svelte';
+  import BrandLogo from './lib/BrandLogo.svelte';
+  import Composer from './lib/Composer.svelte';
+  import Bridge from './lib/Bridge.svelte';
   import Message from './lib/Message.svelte';
   import Tool from './lib/Tool.svelte';
   import Settings from './lib/Settings.svelte';
+  import { THEMES, normalizeTheme } from './lib/themes.js';
 
   const CODE_AGENT = -2003;
   const MEMO_KEY = 'fscode.chatmeta';
-  const STATE_LABEL = {
-    busy: 'Génération en cours',
-    wait: 'Attend ta confirmation',
-    unread: 'Nouvelle réponse',
-  };
+  const THEME_KEY = 'fs-theme';
+  const NOTIF_KEY = 'fscode.notif';
+  const SAVED_KEY = 'fscode.saved_messages';
+
   const CHAT_CARDS = [
     { t: 'Expliquer un cours', d: 'Une notion difficile, expliquée simplement', p: 'Explique-moi simplement : ' },
     { t: 'Résumer un texte', d: 'Les idées clés en quelques points', p: 'Résume ce texte en 5 points clés :\n\n' },
@@ -27,16 +31,16 @@
     { t: 'Ajouter une fonction', d: 'Écrire et brancher le code', p: 'Ajoute cette fonctionnalité : ' },
   ];
 
-  // mouvement : durée nulle si le système demande moins d'animations
   const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const ms = (n) => (calm ? 0 : n);
 
-  // Notices du pont MCP : masque le bruit, met en forme le reste.
   function parseNote(t) {
     const s = String(t ?? '');
     let m;
     if (/^France Student a émis un événement\s+«\s*response\.mcp_call/i.test(s)) return { kind: 'hide' };
-    if ((m = /^MCP\s+«\s*(.+?)\s*»\s*:\s*(\d+)\s+outils?/i.exec(s))) return { kind: 'list', server: m[1], count: m[2] };
+    if ((m = /^MCP\s+«\s*(.+?)\s*»\s*:\s*(\d+)\s+outils?/i.exec(s))) {
+      return { kind: 'list', server: m[1], count: m[2] };
+    }
     if ((m = /^MCP appel\s+(\S+)\s*:\s*(\S+?)(?:\s+[—–-]+\s+(sortie|erreur)\s*:\s*([\s\S]*))?$/i.exec(s))) {
       const [srv, ...rest] = m[1].split('__');
       return {
@@ -52,52 +56,131 @@
   }
   const CALL_LABEL = { completed: 'terminé', failed: 'échec', in_progress: 'en cours' };
 
+  function loadInitialTheme() {
+    try {
+      const saved = normalizeTheme(localStorage.getItem(THEME_KEY));
+      if (saved && THEMES.some((t) => t.id === saved)) return saved;
+    } catch {
+      /* ignore */
+    }
+    return 'sombre';
+  }
+
+  function loadInitialNotif() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(NOTIF_KEY) || 'null');
+      if (raw && typeof raw === 'object') {
+        return {
+          enabled: !!raw.enabled,
+          desktopComplete: raw.desktopComplete !== false,
+          toolConfirm: raw.toolConfirm !== false,
+          appUpdates: raw.appUpdates !== false,
+          offersAndSubscriptions: !!raw.offersAndSubscriptions,
+        };
+      }
+    } catch {
+      /* ignore */
+    }
+    return {
+      enabled: false,
+      desktopComplete: true,
+      toolConfirm: true,
+      appUpdates: true,
+      offersAndSubscriptions: false,
+    };
+  }
+
+  function readLocalSaved() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]');
+      return Array.isArray(raw) ? raw : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function writeLocalSaved(list) {
+    try {
+      localStorage.setItem(SAVED_KEY, JSON.stringify(list));
+    } catch {
+      /* ignore */
+    }
+  }
+
   // ---- état global ----
+  let theme = $state(loadInitialTheme());
+  let sidebarTab = $state('all');
+  let savedMessages = $state(readLocalSaved());
+  let archivedChats = $state([]);
+  let notifSettings = $state(loadInitialNotif());
+  let toastData = $state(null);
+  let toastTimer = null;
   let settings = $state(null);
   let agents = $state([]);
-  let agentId = $state(null); // agent du brouillon (nouveau chat)
+  let agentId = $state(null);
   let pickedAgent = false;
   let chatAgent = null;
   let chats = $state([]);
   let chatsLoaded = $state(false);
+  let searchQuery = $state('');
+  let searching = $state(false);
+  let searchResults = $state(null);
+  let searchTimer = null;
+  let searchSeq = 0;
+
   let input = $state('');
-  let draftMode = $state('chat'); // mode du brouillon
-  let workdir = $state(null); // dernier dossier choisi (valeur par défaut)
+  let enableWebSearch = $state(false);
+  let attachments = $state([]); // [{ localId, kind, name, size, previewUrl, status, error, uploadedId }]
+  let draftMode = $state('chat');
+  let workdir = $state(null);
   let gerr = $state('');
   let eco = $state(false);
   let autoAccept = $state(false);
   let usage = $state(null);
   let skills = $state([]);
-  let last = $state(null); // dernier message : tokens et appels
+  let last = $state(null);
   let tally = $state({ calls: 0, prompt: 0, output: 0, messages: 0 });
 
   let showSettings = $state(false);
   let settingsTab = $state('compte');
-  let q = $state('');
-  let renaming = $state(null);
-  let renameText = $state('');
-  let confirmDel = $state(null);
   let showJump = $state(false);
-  let sel = $state(0);
+  let scrolled = $state(false);
 
-  // ---- sessions : {uid, chatId, items, busy, loading, error, runId, unread, mode, workdir,
-  //      agentId, ctx, scroll, atBottom} ----
+  let forkModal = $state(null); // { chatId, messageId, content }
+  let forkBusy = $state(false);
+  let forkTa = $state(null);
+
+  // ---- sessions ----
   let sessions = $state([]);
-  let viewUid = $state(null); // null = brouillon « nouveau chat »
+  let viewUid = $state(null);
 
-  let box; // zone de défilement
-  let ta; // textarea
+  let box;
+  let composer = $state(null);
   let uidSeq = 0;
   let runSeq = 0;
   let skillSeq = 0;
+  let attSeq = 0;
   let raf = 0;
-  const drafts = new Map(); // texte en cours de frappe, par session (ou 'new')
+  const drafts = new Map();
 
-  // ---- utilitaires tolérants (formats API pas tous connus) ----
+  $effect(() => {
+    const clean = normalizeTheme(theme);
+    if (clean !== theme) {
+      theme = clean;
+      return;
+    }
+    document.documentElement.dataset.theme = clean;
+    try {
+      localStorage.setItem(THEME_KEY, clean);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // ---- utilitaires ----
   const asArray = (r, keys) => (Array.isArray(r) ? r : (keys.map((k) => r?.[k]).find(Array.isArray) ?? []));
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-  const fmt = (n) => (n == null ? '–' : n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n));
-  const baseName = (p) => (p ? (p.split(/[\\/]/).filter(Boolean).pop() ?? p) : '');
+  const fmt = (n) => (n == null ? '–' : n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + '\u202fk' : String(n));
 
   function readBudget(u) {
     const b = u?.chatBudget ?? u?.budget ?? u;
@@ -122,6 +205,7 @@
       uncertain: !!(b.accountingUncertain ?? u?.accountingUncertain),
     };
   }
+
   function readCtx(c) {
     if (!c || typeof c !== 'object') return null;
     const pick = (ks) => ks.map((k) => num(c[k])).find((v) => v != null) ?? null;
@@ -129,6 +213,7 @@
     if (used == null) return null;
     return { used, max: pick(['maxTokens', 'contextWindow', 'contextSize', 'limit', 'max']) };
   }
+
   const parseArgs = (a) => {
     if (typeof a !== 'string') return a ?? {};
     try {
@@ -137,7 +222,7 @@
       return { raw: a };
     }
   };
-  // Historique d'un chat -> éléments d'affichage. Ne doit jamais planter, même si le format change.
+
   function toItems(chat) {
     const arr = chat?.chatMessages ?? chat?.messages ?? [];
     const out = [];
@@ -149,11 +234,12 @@
         let text = m?.content ?? m?.text ?? '';
         if (Array.isArray(text)) text = text.map((p) => (typeof p === 'string' ? p : (p?.text ?? ''))).join('');
         text = String(text ?? '');
+        const msgId = m?.id ? String(m.id) : null;
         if (isUser) {
-          if (text.trim()) out.push({ kind: 'user', text });
+          if (text.trim()) out.push({ kind: 'user', id: msgId, text });
           continue;
         }
-        if (text.trim()) out.push({ kind: 'assistant', text, reasoning: '' });
+        if (text.trim()) out.push({ kind: 'assistant', id: msgId, text, reasoning: '' });
         const results = new Map();
         for (const r of m?.toolResults ?? m?.tool_results ?? []) {
           results.set(String(r?.callId ?? r?.call_id ?? r?.id), r);
@@ -163,24 +249,50 @@
           if (!name) continue;
           const id = String(tc?.callId ?? tc?.call_id ?? tc?.id ?? out.length);
           const r = results.get(id);
+          const isMcp = tc?.origin === 'mcp' || String(name).startsWith('mcp__') || /^(fs_|git_)/.test(String(name));
+          const isSkill = tc?.origin === 'skill';
           out.push({
             kind: 'tool',
             callId: id,
             name,
-            origin: 'local',
+            origin: isSkill ? 'skill' : isMcp ? 'mcp' : 'local',
             args: parseArgs(tc?.arguments ?? tc?.args ?? tc?.function?.arguments),
             status: r?.isError || r?.is_error ? 'error' : 'ok',
             output: String(r?.output ?? ''),
           });
         }
       } catch {
-        /* message illisible : on l'ignore */
+        /* ignore malformed message */
       }
     }
     return out;
   }
 
-  // mémo local (mode et dossier par chat, car l'API ne les renvoie pas)
+  function isTurnEnd(list, idx) {
+    for (let k = idx + 1; k < list.length; k++) {
+      if (list[k].kind === 'user') return true;
+      if (list[k].kind === 'assistant' || list[k].kind === 'tool') return false;
+    }
+    return true;
+  }
+
+  function lastAssistantInTurn(list, idx) {
+    for (let k = idx; k >= 0; k--) {
+      if (list[k].kind === 'user') return null;
+      if (list[k].kind === 'assistant') return list[k];
+    }
+    return null;
+  }
+
+  function canShowTurnActions(list, idx, isBusy) {
+    if (!isTurnEnd(list, idx)) return false;
+    if (!isBusy) return true;
+    for (let k = idx + 1; k < list.length; k++) {
+      if (list[k].kind === 'user') return true;
+    }
+    return false;
+  }
+
   function readMemo() {
     try {
       return JSON.parse(localStorage.getItem(MEMO_KEY) || '{}') || {};
@@ -218,16 +330,19 @@
   const error = $derived(cur?.error || gerr);
   const ctxInfo = $derived(cur?.ctx ?? null);
   const budget = $derived(readBudget(usage));
-  const ctxText = $derived(ctxInfo ? fmt(ctxInfo.used) + (ctxInfo.max ? ' / ' + fmt(ctxInfo.max) : '') : '–');
+  const ctxText = $derived(ctxInfo ? fmt(ctxInfo.used) + (ctxInfo.max ? ' / ' + fmt(ctxInfo.max) : '') : '0 / 200 k');
   const topTitle = $derived(
     cur?.chatId ? (chats.find((c) => c.id === cur.chatId)?.title ?? 'Chat') : 'Nouveau chat',
   );
   const cards = $derived(mode === 'code' ? CODE_CARDS : CHAT_CARDS);
-  const shown = $derived.by(() => {
-    const f = q.trim().toLowerCase();
-    return f ? chats.filter((c) => c.title.toLowerCase().includes(f)) : chats;
+
+  const displayedChats = $derived.by(() => {
+    const f = searchQuery.trim().toLowerCase();
+    if (!f) return chats;
+    if (searchResults !== null) return searchResults;
+    return chats.filter((c) => c.title.toLowerCase().includes(f));
   });
-  // points de suspension « l'IA réfléchit » : dernier élément = message de l'utilisateur ou outil terminé
+
   const typing = $derived.by(() => {
     if (!busy) return false;
     const l = items[items.length - 1];
@@ -237,89 +352,20 @@
   });
   const typingAvatar = $derived(items.length === 0 || items[items.length - 1].kind === 'user');
 
-  // ---- menu d'autocomplétion : « / » = commandes + skills, « $ » = skills ----
   const COMMANDS = [
     { name: 'nouveau', alias: ['new'], desc: 'Nouveau chat', run: () => newChat() },
+    { name: 'parametres', alias: ['reglages', 'settings', 'options'], desc: 'Ouvrir les paramètres', run: () => openSettings('compte') },
+    { name: 'stop', alias: ['arreter'], desc: 'Arrêter la génération', run: () => stop() },
     { name: 'chat', desc: 'Passer en mode Chat', run: () => setMode('chat') },
     { name: 'code', desc: 'Passer en mode Code', run: () => setMode('code') },
     { name: 'dossier', alias: ['folder', 'cd'], only: 'code', desc: 'Choisir le dossier de travail', run: () => chooseFolder() },
     { name: 'auto', only: 'code', desc: 'Accepter auto les modifs : activer / désactiver', run: () => setAuto(!autoAccept) },
     { name: 'eco', desc: 'Mode économie : activer / désactiver', run: () => setEco(!eco) },
     { name: 'compacter', alias: ['compact'], desc: 'Compacter le contexte du chat', run: () => compact() },
-    { name: 'stop', alias: ['arreter'], desc: 'Arrêter la génération', run: () => stop() },
-    { name: 'reglages', alias: ['settings', 'options'], desc: 'Ouvrir les réglages', run: () => openSettings('compte') },
-    { name: 'contexte', alias: ['context'], desc: 'Contexte et mode économie', run: () => openSettings('eco') },
+    { name: 'contexte', alias: ['context'], desc: 'Contexte du chat et mode économie', run: () => openSettings('usage') },
     { name: 'compteurs', alias: ['stats', 'reset'], desc: 'Remettre les compteurs à zéro', run: () => resetTally() },
     { name: 'skills', desc: 'Lister les skills ($)', run: () => (input = '$') },
   ];
-  let menuOff = $state(null); // texte pour lequel Échap a fermé le menu
-  const fold = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const menuTrig = $derived.by(() => {
-    let m = /^\/([\p{L}\d_.-]*)$/u.exec(input); // « / » seulement en tout début de message
-    if (m) return { ch: '/', q: fold(m[1]) };
-    m = /(?:^|\s)\$([\p{L}\d_.-]*)$/u.exec(input);
-    return m ? { ch: '$', q: fold(m[1]) } : null;
-  });
-  const menu = $derived.by(() => {
-    const t = menuTrig;
-    if (!t || menuOff === input) return [];
-    // 0 = commence par la saisie, 1 = la contient, 2 = saisie vide, -1 = sans rapport
-    const rank = (names) => {
-      const ns = names.map(fold);
-      if (!t.q) return 2;
-      if (ns.some((n) => n.startsWith(t.q))) return 0;
-      return ns.some((n) => n.includes(t.q)) ? 1 : -1;
-    };
-    const out = [];
-    if (t.ch === '/') {
-      for (const c of COMMANDS) {
-        if (c.only && c.only !== mode) continue;
-        const sc = rank([c.name, ...(c.alias ?? [])]);
-        if (sc >= 0) out.push({ kind: 'cmd', label: '/' + c.name, desc: c.desc, tag: c.only ?? '', sc, c });
-      }
-    }
-    for (const s of skills) {
-      const sc = rank([s.name]);
-      if (sc >= 0) out.push({ kind: 'skill', label: '$' + s.name, desc: s.description, tag: s.source ?? '', sc, name: s.name });
-    }
-    out.sort((a, b) => a.sc - b.sc || (a.kind === b.kind ? 0 : a.kind === 'cmd' ? -1 : 1));
-    return out.slice(0, 8);
-  });
-  $effect(() => {
-    menuTrig;
-    sel = 0;
-  });
-  $effect(() => {
-    sel;
-    menu;
-    tick().then(() => document.querySelector('.sugg button.on')?.scrollIntoView({ block: 'nearest' }));
-  });
-  function pickMenu(m) {
-    if (!m) return;
-    if (m.kind === 'skill') {
-      const re = menuTrig?.ch === '/' ? /^\/[\p{L}\d_.-]*$/u : /\$[\p{L}\d_.-]*$/u;
-      input = input.replace(re, () => '$' + m.name + ' ');
-    } else {
-      input = '';
-      Promise.resolve(m.c.run()).catch((e) => (gerr = String(e)));
-    }
-    tick().then(() => ta?.focus());
-  }
-  function insertSkill(name) {
-    const sep = input && !/\s$/.test(input) ? ' ' : '';
-    input = input + sep + '$' + name + ' ';
-    showSettings = false;
-    tick().then(() => ta?.focus());
-  }
-
-  // hauteur du textarea : suit le contenu, 220 px max
-  $effect(() => {
-    input;
-    const el = ta;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 220) + 'px';
-  });
 
   // ---- sessions ----
   function mkSession(init) {
@@ -340,7 +386,7 @@
       atBottom: true,
       ...init,
     });
-    return sessions[sessions.length - 1]; // le proxy réactif, pas l'objet brut
+    return sessions[sessions.length - 1];
   }
   const byChat = (id) => sessions.find((s) => s.chatId === id);
   function dropSession(s) {
@@ -372,9 +418,9 @@
   }
   const onScroll = () => {
     showJump = !nearBottom();
+    scrolled = (box?.scrollTop ?? 0) > 6;
   };
 
-  // quitter la vue actuelle : mémorise le brouillon et la position
   function leave() {
     const s = cur;
     drafts.set(s ? s.uid : 'new', input);
@@ -383,13 +429,13 @@
       s.atBottom = nearBottom();
     }
   }
-  // arriver sur une vue : restaure le brouillon et la position
   async function arrive(s) {
     input = drafts.get(s ? s.uid : 'new') ?? '';
     await tick();
     if (!box) return;
     box.scrollTop = !s || s.atBottom !== false ? box.scrollHeight : (s.scroll ?? 0);
     showJump = !nearBottom();
+    scrolled = (box?.scrollTop ?? 0) > 6;
   }
   function go(uid) {
     if (uid === viewUid) return;
@@ -402,8 +448,9 @@
   }
   function newChat() {
     go(null);
-    tick().then(() => ta?.focus());
+    tick().then(() => composer?.focus());
   }
+
   async function openChat(id) {
     const ex = byChat(id);
     if (ex) {
@@ -446,14 +493,16 @@
   }
 
   // ---- chargement ----
+  const mapChatSummary = (c) => ({
+    id: String(c.id ?? c.chatId),
+    title: c.title ?? c.name ?? 'Sans titre',
+    pinned: !!(c.pinned ?? c.isPinned),
+  });
+
   async function loadChats() {
     try {
       const r = await api.listChats(40, null);
-      const fresh = asArray(r, ['chats', 'items', 'data']).map((c) => ({
-        id: String(c.id ?? c.chatId),
-        title: c.title ?? c.name ?? 'Sans titre',
-      }));
-      // un chat tout juste créé peut ne pas encore figurer dans la liste du serveur
+      const fresh = asArray(r, ['chats', 'items', 'data']).map(mapChatSummary);
       const keep = chats.filter(
         (c) => !fresh.some((f) => f.id === c.id) && sessions.some((s) => s.chatId === c.id && s.busy),
       );
@@ -467,7 +516,7 @@
     try {
       usage = await api.getUsage();
     } catch {
-      /* jauge facultative */
+      /* facultative */
     }
   }
   async function loadCtx(s) {
@@ -490,21 +539,222 @@
     }
   }
   $effect(() => {
-    // recharge les skills quand le mode ou le dossier de la vue change
     const m = mode;
     const w = curWorkdir;
     untrack(() => loadSkills(m, w));
   });
+  function normalizeSavedItem(m) {
+    const chatId = m?.chatId ?? m?.chat_id ?? m?.chat?.id ?? null;
+    const messageId = m?.messageId ?? m?.message_id ?? m?.message?.id ?? m?.id ?? null;
+    let content = m?.content ?? m?.text ?? m?.message?.content ?? m?.message?.text ?? '';
+    if (Array.isArray(content)) {
+      content = content.map((p) => (typeof p === 'string' ? p : (p?.text ?? ''))).join('');
+    }
+    const chatTitle =
+      m?.chatTitle ??
+      m?.chat_title ??
+      m?.chat?.title ??
+      chats.find((c) => c.id === chatId)?.title ??
+      'Discussion';
+    return {
+      id: m?.id ?? `${chatId}:${messageId}`,
+      chatId,
+      messageId,
+      content: String(content || ''),
+      chatTitle,
+      createdAt: m?.createdAt ?? m?.created_at ?? null,
+    };
+  }
+
+  async function loadSavedMessages() {
+    try {
+      const r = await api.listSavedMessages(50, null);
+      const arr = asArray(r, ['savedMessages', 'messages', 'items', 'data']).map(normalizeSavedItem);
+      savedMessages = arr;
+      writeLocalSaved(arr);
+    } catch {
+      savedMessages = readLocalSaved();
+    }
+  }
+
+  async function loadArchivedChats() {
+    try {
+      const r = await api.listArchivedChats(40);
+      archivedChats = asArray(r, ['chats', 'archivedChats', 'items', 'data']);
+    } catch {
+      archivedChats = [];
+    }
+  }
+
+  async function loadNotifPrefs() {
+    try {
+      const r = await api.getNotificationPrefs();
+      if (r && typeof r === 'object') {
+        const next = {
+          ...notifSettings,
+          ...(typeof r.enabled === 'boolean' ? { enabled: r.enabled } : {}),
+          ...(typeof r.desktopComplete === 'boolean' ? { desktopComplete: r.desktopComplete } : {}),
+          ...(typeof r.toolConfirm === 'boolean' ? { toolConfirm: r.toolConfirm } : {}),
+          ...(typeof r.appUpdates === 'boolean' ? { appUpdates: r.appUpdates } : {}),
+          ...(typeof r.offersAndSubscriptions === 'boolean'
+            ? { offersAndSubscriptions: r.offersAndSubscriptions }
+            : {}),
+        };
+        notifSettings = next;
+        try {
+          localStorage.setItem(NOTIF_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* ignore si absent */
+    }
+  }
+
+  function showToast(title, body = '') {
+    toastData = { title, body };
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => (toastData = null), 4800);
+  }
+
+  async function notifyUser(title, body = '', { force = false } = {}) {
+    if (!force && !notifSettings.enabled) return;
+    showToast(title, body);
+    try {
+      if (typeof Notification !== 'undefined') {
+        if (Notification.permission === 'default') {
+          await Notification.requestPermission().catch(() => {});
+        }
+        if (Notification.permission === 'granted') {
+          new Notification(title, { body });
+        }
+      }
+    } catch {
+      /* toast déjà affiché */
+    }
+  }
+
+  async function handleNotifChange(next) {
+    notifSettings = next;
+    try {
+      localStorage.setItem(NOTIF_KEY, JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+    if (next.enabled && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      await Notification.requestPermission().catch(() => {});
+    }
+    api.updateNotificationPrefs(next).catch(() => {});
+  }
+
+  async function testNotification() {
+    await notifyUser('Notifications activées', 'Tu recevras les alertes sur cet appareil.', {
+      force: true,
+    });
+  }
+
+  function isMessagePinned(chatId, messageId) {
+    if (!chatId || !messageId) return false;
+    return savedMessages.some(
+      (m) => String(m.chatId) === String(chatId) && String(m.messageId) === String(messageId),
+    );
+  }
+
+  async function togglePinMessage(item, chatId) {
+    if (!chatId || !item?.id) return;
+    const pinned = isMessagePinned(chatId, item.id);
+    if (pinned) {
+      const prev = savedMessages;
+      savedMessages = savedMessages.filter(
+        (m) => !(String(m.chatId) === String(chatId) && String(m.messageId) === String(item.id)),
+      );
+      writeLocalSaved(savedMessages);
+      try {
+        await api.unsaveMessage(chatId, item.id);
+        showToast('Message retiré des signets');
+      } catch (e) {
+        gerr = String(e);
+        savedMessages = prev;
+        writeLocalSaved(prev);
+      }
+    } else {
+      const optimistic = normalizeSavedItem({
+        id: `${chatId}:${item.id}`,
+        chatId,
+        messageId: item.id,
+        content: item.text,
+        chatTitle: chats.find((c) => c.id === chatId)?.title || 'Discussion',
+      });
+      savedMessages = [optimistic, ...savedMessages];
+      writeLocalSaved(savedMessages);
+      try {
+        await api.saveMessage(chatId, item.id);
+        showToast('Message ajouté aux signets');
+        await loadSavedMessages();
+      } catch {
+        showToast('Message ajouté aux signets (local)');
+      }
+    }
+  }
+
+  async function handleOpenSavedMessage(msg) {
+    if (!msg?.chatId) return;
+    await openChat(msg.chatId);
+  }
+
+  async function handleUnsaveMessage(msg) {
+    if (!msg?.chatId || !msg?.messageId) return;
+    savedMessages = savedMessages.filter(
+      (m) => !(String(m.chatId) === String(msg.chatId) && String(m.messageId) === String(msg.messageId)),
+    );
+    writeLocalSaved(savedMessages);
+    try {
+      await api.unsaveMessage(msg.chatId, msg.messageId);
+      showToast('Message retiré des signets');
+    } catch {
+      /* garde la suppression locale */
+    }
+  }
+
+  async function handleCopySavedMessage(msg) {
+    try {
+      await navigator.clipboard.writeText(msg?.content || msg?.text || '');
+      showToast('Message copié dans le presse-papiers');
+    } catch (e) {
+      gerr = String(e);
+    }
+  }
+
+  async function handleRestoreChat(chat) {
+    if (!chat?.id) return;
+    try {
+      await api.restoreChat(chat.id);
+      archivedChats = archivedChats.filter((x) => x.id !== chat.id);
+      await loadChats();
+      showToast('Discussion restaurée', chat.title || 'Sans titre');
+    } catch (e) {
+      gerr = String(e);
+    }
+  }
+
   async function loadAll() {
     try {
       agents = (await api.listAgents()).filter((a) => a.isActive !== false);
       const saved = settings?.lastAgentId;
       pickedAgent = saved != null && agents.some((a) => a.id === saved);
-      agentId = pickedAgent ? saved : (agents.find((a) => a.isDefault)?.id ?? agents[0]?.id ?? null);
+      agentId = pickedAgent
+        ? saved
+        : (agents.find((a) => a.id === -2001)?.id ??
+          agents.find((a) => a.isDefault)?.id ??
+          agents[0]?.id ??
+          saved ??
+          -2001);
     } catch (e) {
       gerr = String(e);
+      if (agentId == null) agentId = settings?.lastAgentId ?? -2001;
     }
-    await Promise.all([loadChats(), loadUsage()]);
+    await Promise.all([loadChats(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs()]);
   }
   async function loadSettings() {
     settings = await api.getSettings();
@@ -526,48 +776,168 @@
       return;
     }
     await loadAll();
-    tick().then(() => ta?.focus());
+    tick().then(() => composer?.focus());
   });
 
-  // ---- liste des chats ----
-  function startRename(c) {
-    renaming = c.id;
-    renameText = c.title;
+  // ---- actions sidebar ----
+  function handleSearch(q) {
+    searchQuery = q;
+    clearTimeout(searchTimer);
+    const trimmed = q.trim();
+    if (!trimmed) {
+      searching = false;
+      searchResults = null;
+      return;
+    }
+    if (trimmed.length < 2) {
+      searching = false;
+      searchResults = null;
+      return;
+    }
+    const seq = ++searchSeq;
+    searching = true;
+    searchTimer = setTimeout(async () => {
+      try {
+        const res = await api.searchChats(trimmed, 30);
+        if (seq !== searchSeq) return;
+        searchResults = asArray(res, ['chats', 'items', 'data']).map(mapChatSummary);
+      } catch {
+        if (seq === searchSeq) searchResults = null;
+      } finally {
+        if (seq === searchSeq) searching = false;
+      }
+    }, 280);
   }
-  async function renameKey(e, c) {
-    if (e.key === 'Escape') renaming = null;
-    if (e.key !== 'Enter') return;
-    const title = renameText.trim();
-    renaming = null;
-    if (!title || title === c.title) return;
+
+  async function handleRename(id, title) {
     try {
-      await api.renameChat(c.id, title);
-      chats = chats.map((x) => (x.id === c.id ? { ...x, title } : x));
+      await api.renameChat(id, title);
+      chats = chats.map((x) => (x.id === id ? { ...x, title } : x));
+      if (searchResults) {
+        searchResults = searchResults.map((x) => (x.id === id ? { ...x, title } : x));
+      }
     } catch (err) {
       gerr = String(err);
     }
   }
-  async function del(c) {
-    if (confirmDel !== c.id) {
-      confirmDel = c.id;
-      return;
-    }
-    confirmDel = null;
-    const s = byChat(c.id);
+
+  async function handlePin(chat) {
+    const nextPinned = !chat.pinned;
     try {
-      if (s?.busy) await api.cancelChat(s.chatId, s.runId).catch(() => {});
-      await api.deleteChat(c.id);
-      chats = chats.filter((x) => x.id !== c.id);
-      dropMemo(c.id);
-      if (s) dropSession(s);
-    } catch (e) {
-      gerr = String(e);
+      await api.pinChat(chat.id, nextPinned);
+      chats = chats.map((x) => (x.id === chat.id ? { ...x, pinned: nextPinned } : x));
+      if (searchResults) {
+        searchResults = searchResults.map((x) => (x.id === chat.id ? { ...x, pinned: nextPinned } : x));
+      }
+    } catch (err) {
+      gerr = String(err);
     }
   }
-  const focus = (n) => {
-    n.focus();
-    n.select();
-  };
+
+  async function handleArchive(chat) {
+    const s = byChat(chat.id);
+    try {
+      if (s?.busy) await api.cancelChat(s.chatId, s.runId).catch(() => {});
+      await api.archiveChat(chat.id);
+      chats = chats.filter((x) => x.id !== chat.id);
+      if (searchResults) searchResults = searchResults.filter((x) => x.id !== chat.id);
+      if (!archivedChats.some((x) => x.id === chat.id)) {
+        archivedChats = [chat, ...archivedChats];
+      }
+      dropMemo(chat.id);
+      if (s) dropSession(s);
+      loadArchivedChats();
+      showToast('Discussion archivée', chat.title || 'Sans titre');
+    } catch (err) {
+      gerr = String(err);
+    }
+  }
+
+  async function handleDelete(id) {
+    const s = byChat(id);
+    try {
+      if (s?.busy) await api.cancelChat(s.chatId, s.runId).catch(() => {});
+      await api.deleteChat(id);
+      chats = chats.filter((x) => x.id !== id);
+      archivedChats = archivedChats.filter((x) => x.id !== id);
+      savedMessages = savedMessages.filter((m) => String(m.chatId) !== String(id));
+      writeLocalSaved(savedMessages);
+      if (searchResults) searchResults = searchResults.filter((x) => x.id !== id);
+      dropMemo(id);
+      if (s) dropSession(s);
+    } catch (err) {
+      gerr = String(err);
+    }
+  }
+
+  // ---- pièces jointes ----
+  async function handleAttachFiles(fileList) {
+    for (const file of fileList) {
+      const isImage = (file.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name);
+      const localId = `att-${++attSeq}`;
+      const previewUrl = isImage ? URL.createObjectURL(file) : null;
+      attachments.push({
+        localId,
+        kind: isImage ? 'image' : 'file',
+        name: file.name || (isImage ? 'image.png' : 'fichier'),
+        size: file.size ?? 0,
+        previewUrl,
+        status: 'uploading',
+        error: '',
+        uploadedId: null,
+      });
+      const entry = attachments[attachments.length - 1];
+      try {
+        const res = await api.uploadAttachment(file, entry.kind);
+        const uploadedId = res?.id ?? res?.uuid;
+        if (!uploadedId) throw new Error('Identifiant de fichier manquant.');
+        entry.uploadedId = String(uploadedId);
+        entry.payloadKey = res?.id ? 'files' : entry.kind === 'image' ? 'images' : 'files';
+        entry.status = 'ready';
+      } catch (e) {
+        entry.status = 'error';
+        entry.error = String(e);
+      }
+    }
+  }
+
+  function removeAttachment(localId) {
+    const idx = attachments.findIndex((a) => a.localId === localId);
+    if (idx < 0) return;
+    const item = attachments[idx];
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    attachments.splice(idx, 1);
+  }
+
+  // ---- fork / édition d'un message ----
+  function openForkModal(item) {
+    if (!cur?.chatId || !item?.id || busy) return;
+    forkModal = { chatId: cur.chatId, messageId: item.id, content: item.text || '' };
+    tick().then(() => {
+      if (!forkTa) return;
+      forkTa.focus();
+      const len = forkTa.value.length;
+      forkTa.setSelectionRange(len, len);
+    });
+  }
+
+  async function submitFork() {
+    if (!forkModal || forkBusy) return;
+    const nextContent = forkModal.content.trim();
+    if (!nextContent) return;
+    forkBusy = true;
+    try {
+      const forked = await api.forkEditMessage(forkModal.chatId, forkModal.messageId, nextContent);
+      forkModal = null;
+      const newId = forked?.id ?? forked?.chatId;
+      await loadChats();
+      if (newId) await openChat(String(newId));
+    } catch (e) {
+      gerr = String(e);
+    } finally {
+      forkBusy = false;
+    }
+  }
 
   // ---- réglages de la vue ----
   const putAgent = (id) => {
@@ -589,8 +959,8 @@
       draftMode = m;
     }
   }
-  function onAgent(e) {
-    const a = agents.find((x) => String(x.id) === e.currentTarget.value);
+  function onAgentChange(rawId) {
+    const a = agents.find((x) => String(x.id) === String(rawId));
     if (!a) return;
     pickedAgent = true;
     putAgent(a.id);
@@ -644,6 +1014,12 @@
     settingsTab = tab;
     showSettings = true;
   }
+  function insertSkill(name) {
+    const sep = input && !/\s$/.test(input) ? ' ' : '';
+    input = input + sep + '$' + name + ' ';
+    showSettings = false;
+    tick().then(() => composer?.focus());
+  }
   async function onsaved() {
     try {
       await loadSettings();
@@ -662,11 +1038,7 @@
   }
   function useCard(p) {
     input = p;
-    tick().then(() => {
-      if (!ta) return;
-      ta.focus();
-      ta.setSelectionRange(p.length, p.length);
-    });
+    tick().then(() => composer?.focus());
   }
 
   // ---- envoi ----
@@ -681,16 +1053,33 @@
   }
 
   async function send() {
-    const content = input.trim();
-    if (!content || busy || cur?.loading) return;
+    const readyAtts = attachments.filter((a) => a.status === 'ready');
+    const uploading = attachments.some((a) => a.status === 'uploading');
+    if (uploading) return;
+
+    const rawText = input.trim();
+    if ((!rawText && readyAtts.length === 0) || busy || cur?.loading) return;
+    const content = rawText || 'Analyse ces pièces jointes.';
+
     if (mode === 'code' && !curWorkdir) {
-      gerr = 'Choisis d’abord un dossier de travail (puce 📁 sous la zone de texte).';
+      gerr = 'Choisis d’abord un dossier de travail (bouton Dossier sous la zone de texte).';
       return;
     }
     if (curAgent == null) {
       gerr = 'Aucun agent disponible.';
       return;
     }
+
+    const imageIds = readyAtts
+      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'images')
+      .map((a) => a.uploadedId);
+    const fileIds = readyAtts
+      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'files')
+      .map((a) => a.uploadedId);
+    const userImages = readyAtts.filter((a) => a.kind === 'image' && a.previewUrl).map((a) => a.previewUrl);
+    const attNames = readyAtts.filter((a) => a.kind === 'file').map((a) => a.name);
+    attachments = [];
+
     let s = cur;
     if (!s) {
       s = mkSession({ mode: draftMode, workdir, agentId });
@@ -706,15 +1095,18 @@
     s.atBottom = true;
     const runId = `r${Date.now().toString(36)}${++runSeq}`;
     s.runId = runId;
-    s.items.push({ kind: 'user', text: content });
+    const displayLabel = attNames.length ? `${content}\nPièce(s) jointe(s) : ${attNames.join(', ')}` : content;
+    s.items.push({ kind: 'user', id: null, text: displayLabel, images: userImages });
     showJump = false;
     toBottom();
 
-    let curA = null; // message de l'IA en cours d'écriture
+    let curA = null;
+    let lastA = null;
     const assistant = () => {
       if (!curA) {
-        s.items.push({ kind: 'assistant', text: '', reasoning: '' });
+        s.items.push({ kind: 'assistant', id: null, text: '', reasoning: '' });
         curA = s.items[s.items.length - 1];
+        lastA = curA;
       }
       return curA;
     };
@@ -730,15 +1122,17 @@
           autoAccept,
           eco,
           runId,
+          images: imageIds,
+          files: fileIds,
+          enableWebSearch,
         },
         (ev) => {
-          // on ne suit le bas de page que si cette session est affichée ET que l'utilisateur y est déjà
           const follow = visible() && nearBottom();
           switch (ev.type) {
             case 'opened':
               s.chatId = ev.chat_id;
               if (!chats.some((c) => c.id === ev.chat_id)) {
-                chats = [{ id: ev.chat_id, title: 'Nouveau chat' }, ...chats];
+                chats = [{ id: ev.chat_id, title: 'Nouveau chat', pinned: false }, ...chats];
               }
               saveMemo(s);
               break;
@@ -762,6 +1156,9 @@
                 status: ev.needs_confirm ? 'pending' : 'running',
                 output: '',
               });
+              if (ev.needs_confirm && notifSettings.enabled && notifSettings.toolConfirm && (!visible() || document.hidden)) {
+                notifyUser('Confirmation requise', `Outil : ${ev.name}`);
+              }
               break;
             case 'tool_result': {
               const t = s.items.find((i) => i.kind === 'tool' && i.callId === ev.call_id);
@@ -777,6 +1174,8 @@
               break;
             case 'done': {
               s.chatId = ev.chat_id;
+              const targetA = curA ?? lastA;
+              if (targetA && ev.message_id) targetA.id = ev.message_id;
               const p = ev.total_prompt_tokens ?? 0;
               const o = ev.total_output_tokens ?? 0;
               const n = ev.api_calls ?? 1;
@@ -807,7 +1206,10 @@
     } finally {
       s.busy = false;
       s.runId = null;
-      if (!visible()) s.unread = true; // terminé pendant que tu étais ailleurs
+      if (!visible()) s.unread = true;
+      if (!s.error && notifSettings.enabled && notifSettings.desktopComplete && (!visible() || document.hidden)) {
+        notifyUser('Réponse terminée', chats.find((c) => c.id === s.chatId)?.title || 'France Student Desktop');
+      }
       loadChats();
       loadUsage();
       loadCtx(s);
@@ -819,39 +1221,22 @@
     if (s?.busy) api.cancelChat(s.chatId, s.runId).catch((e) => (s.error = String(e)));
   }
 
-  function onKey(e) {
-    if (e.isComposing) return;
-    if (menu.length) {
-      const n = menu.length;
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        sel = (Math.min(sel, n - 1) + 1) % n;
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        sel = (Math.min(sel, n - 1) - 1 + n) % n;
-        return;
-      }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-        e.preventDefault();
-        pickMenu(menu[Math.min(sel, n - 1)]);
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        menuOff = input;
-        return;
-      }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
+  function handleOpenUrl(href) {
+    api.openExternal(href).catch((e) => (gerr = String(e)));
   }
+
+  onDestroy(() => {
+    clearTimeout(searchTimer);
+    clearTimeout(toastTimer);
+  });
+
   function onWindowKey(e) {
-    if (e.key === 'Escape' && showSettings) showSettings = false;
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    if (e.key === 'Escape') {
+      if (forkModal && !forkBusy) forkModal = null;
+      else if (showSettings) showSettings = false;
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !showSettings && !forkModal) {
       const k = e.key.toLowerCase();
       if (k === 'n') {
         e.preventDefault();
@@ -866,98 +1251,90 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
-{#snippet mark()}
-  <svg viewBox="32 32 448 448" aria-hidden="true">
-    <rect x="32" y="32" width="448" height="448" rx="112" fill="#3d7bff" style="fill: var(--accent)" />
-    <rect x="32" y="32" width="448" height="224" rx="112" fill="#fff" opacity="0.14" />
-    <path d="M156 178 L276 256 L156 334" fill="none" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" />
-    <rect x="304" y="316" width="96" height="40" rx="20" fill="#fff" opacity="0.92" />
-  </svg>
-{/snippet}
-
 <div class="app" class:code={mode === 'code'}>
-  <!-- ============ barre latérale ============ -->
-  <aside class="side">
-    <div class="brand">
-      <span class="logo">{@render mark()}</span>
-      <span class="bname">FS Code</span>
-    </div>
+  <Sidebar
+    chats={displayedChats}
+    {chatsLoaded}
+    activeChatId={cur?.chatId ?? null}
+    getState={chatState}
+    {theme}
+    {eco}
+    {searchQuery}
+    {searching}
+    {savedMessages}
+    {archivedChats}
+    bind:filterTab={sidebarTab}
+    ontheme={(t) => (theme = normalizeTheme(t))}
+    onsearch={handleSearch}
+    onnew={newChat}
+    onopen={openChat}
+    onrename={handleRename}
+    onpin={handlePin}
+    onarchive={handleArchive}
+    ondelete={handleDelete}
+    onsettings={openSettings}
+    onopensaved={handleOpenSavedMessage}
+    onunsavemsg={handleUnsaveMessage}
+    oncopysaved={handleCopySavedMessage}
+    onrestore={handleRestoreChat}
+  />
 
-    <button class="newbtn" onclick={newChat}>＋ Nouveau chat</button>
-
-    <div class="find">
-      <input bind:value={q} placeholder="Rechercher un chat…" spellcheck="false" aria-label="Rechercher un chat" />
-    </div>
-
-    <div class="list">
-      {#each shown as c, i (c.id)}
-        {@const st = chatState(c)}
-        <div
-          class="chatrow"
-          class:active={c.id === cur?.chatId}
-          style="animation-delay: {Math.min(i, 12) * 22}ms"
-          role="presentation"
-          onmouseleave={() => confirmDel === c.id && (confirmDel = null)}
-        >
-          {#if renaming === c.id}
-            <input
-              class="renamein"
-              use:focus
-              bind:value={renameText}
-              onkeydown={(e) => renameKey(e, c)}
-              onblur={() => (renaming = null)}
-            />
-          {:else}
-            <button class="chat" onclick={() => openChat(c.id)} title={c.title}>
-              <span class="ct">{c.title}</span>
-              {#if st}<i class="ind {st}" title={STATE_LABEL[st]}></i>{/if}
-            </button>
-            <div class="acts" class:show={confirmDel === c.id}>
-              <button class="mini" title="Renommer" onclick={() => startRename(c)}>✎</button>
-              <button class="mini danger" title="Supprimer" onclick={() => del(c)}>
-                {confirmDel === c.id ? 'Supprimer ?' : '✕'}
-              </button>
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <div class="none">
-          {chatsLoaded ? (q ? 'Aucun résultat.' : 'Aucun chat pour l’instant.') : 'Chargement…'}
-        </div>
-      {/each}
-    </div>
-
-    <div class="foot">
-      <button class="gear" onclick={() => openSettings('compte')}>⚙ Réglages</button>
-      {#if eco}<span class="pill eco anim-fade">ÉCO</span>{/if}
-    </div>
-  </aside>
-
-  <!-- ============ zone principale ============ -->
   <section class="main">
-    <header class="top">
+    <header class="top" class:scrolled>
       {#key topTitle}
         <h1 class="ttl anim-fade" title={topTitle}>{topTitle}</h1>
       {/key}
-      {#if busy}
-        <span class="pill live" out:fade={{ duration: ms(120) }}><i></i> Génération en cours</span>
-      {/if}
-      {#key mode}<span class="pill modep anim-fade">{#if mode === 'code'}&lt;/&gt; Code{:else}Chat{/if}</span>{/key}
+      {#key mode}
+        <span class="pill modep anim-fade">{#if mode === 'code'}&lt;/&gt; Code{:else}Chat{/if}</span>
+      {/key}
       <span class="spacer"></span>
-      {#if eco}
-        <button class="pill eco anim-fade" onclick={() => openSettings('eco')} title="Mode économie actif">⚡ ÉCO</button>
+      {#if busy}
+        <span class="pill live" out:fade={{ duration: ms(120) }}>Génération en cours</span>
       {/if}
-      {#if ctxInfo}
-        <button class="pill anim-fade" onclick={() => openSettings('eco')} title="Contexte du chat">
-          Contexte {ctxText}
+
+      <Bridge docked={true} />
+
+      <button
+        class="pill anim-fade top-act"
+        class:active={sidebarTab === 'messages'}
+        onclick={() => (sidebarTab = sidebarTab === 'messages' ? 'all' : 'messages')}
+        title="Messages enregistrés (signets)"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+        <span>Signets</span>
+        {#if savedMessages.length > 0}<span class="cnt">{savedMessages.length}</span>{/if}
+      </button>
+
+      {#if eco}
+        <button class="pill eco anim-fade" onclick={() => openSettings('usage')} title="Mode économie actif">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span>ÉCO</span>
         </button>
       {/if}
+      <button
+        type="button"
+        class="pill anim-fade ctx-pill"
+        class:dimmed={!ctxInfo}
+        onclick={() => openSettings('usage')}
+        title="Contexte du chat"
+      >
+        Contexte {ctxText}
+      </button>
       {#if budget}
-        <button class="pill anim-fade" onclick={() => openSettings('compte')} title="Budget utilisé">
-          Budget {budget.uncertain ? '~' : ''}{Math.round(budget.pct)} %
+        <button class="pill anim-fade" onclick={() => openSettings('usage')} title="Budget utilisé">
+          Budget {budget.uncertain ? '~' : ''}{Math.round(budget.pct)}&#8239;%
           <span class="mg" class:warn={budget.pct >= 80}><i style="width:{budget.pct}%"></i></span>
         </button>
       {/if}
+      <button
+        class="pill anim-fade top-act"
+        onclick={() => openSettings('apparence')}
+        title="Paramètres"
+        aria-label="Ouvrir les paramètres"
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+        <span>Paramètres</span>
+      </button>
       {#if busy}
         <div class="prog" transition:fade={{ duration: ms(160) }}></div>
       {/if}
@@ -972,12 +1349,14 @@
                 <div class="loading"><span class="spin"></span> Chargement du chat…</div>
               {:else if items.length === 0}
                 <div class="hero stagger">
-                  <div class="herologo">{@render mark()}</div>
-                  <h2>{mode === 'code' ? 'Que veux-tu construire ?' : 'Comment puis-je t’aider ?'}</h2>
+                  <div class="herologo" aria-hidden="true">
+                    <BrandLogo size={64} radius={18} />
+                  </div>
+                  <h2>{mode === 'code' ? 'Que veux-tu construire ?' : 'France Student Desktop'}</h2>
                   <p class="dim">
                     {mode === 'code'
                       ? 'L’IA lit et modifie les fichiers du dossier choisi.'
-                      : 'Pose ta question ou pars d’une idée.'}
+                      : 'Pose ta question ou joins un fichier.'}
                   </p>
                   <div class="cards">
                     {#each cards as k, i (k.t)}
@@ -992,16 +1371,61 @@
 
               {#each items as it, i (i)}
                 {#if it.kind === 'user'}
-                  <div class="u"><div class="ubub">{it.text}</div></div>
+                  <div class="u">
+                    <div class="ubub">
+                      {it.text}
+                      {#if it.images?.length}
+                        <div class="u-imgs">
+                          {#each it.images as src, idx (idx)}
+                            <img {src} alt="Image jointe {idx + 1}" />
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                    {#if it.id && cur?.chatId && !busy}
+                      <div class="u-acts">
+                        <button type="button" class="u-act" onclick={() => openForkModal(it)}>
+                          Créer une branche
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
                 {:else if it.kind === 'assistant'}
                   <div class="ai">
-                    {#if i === 0 || !['assistant', 'tool'].includes(items[i - 1].kind)}<div class="av">{@render mark()}</div>{:else}<div></div>{/if}
+                    {#if i === 0 || !['assistant', 'tool'].includes(items[i - 1].kind)}
+                      <div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>
+                    {:else}
+                      <div></div>
+                    {/if}
                     <div class="aib">
-                      <Message text={it.text} reasoning={it.reasoning} streaming={busy && i === items.length - 1} />
+                      <Message
+                        text={it.text}
+                        reasoning={it.reasoning}
+                        streaming={busy && i === items.length - 1}
+                        showActions={canShowTurnActions(items, i, busy)}
+                        pinned={isMessagePinned(cur?.chatId, it.id)}
+                        onopenurl={handleOpenUrl}
+                        onpin={it.id && cur?.chatId && !busy ? () => togglePinMessage(it, cur.chatId) : undefined}
+                      />
                     </div>
                   </div>
                 {:else if it.kind === 'tool'}
+                  {@const turnAi = canShowTurnActions(items, i, busy) ? lastAssistantInTurn(items, i) : null}
                   <div class="toolrow"><Tool t={it} onresolve={resolve} /></div>
+                  {#if turnAi}
+                    <div class="ai turn-tail">
+                      <div></div>
+                      <div class="aib">
+                        <Message
+                          text=""
+                          copyText={turnAi.text}
+                          showActions={true}
+                          pinned={isMessagePinned(cur?.chatId, turnAi.id)}
+                          onpin={turnAi.id && cur?.chatId ? () => togglePinMessage(turnAi, cur.chatId) : undefined}
+                        />
+                      </div>
+                    </div>
+                  {/if}
                 {:else}
                   {@const n = parseNote(it.text)}
                   {#if n.kind === 'list'}
@@ -1024,7 +1448,7 @@
 
               {#if typing}
                 <div class="ai">
-                  {#if typingAvatar}<div class="av">{@render mark()}</div>{:else}<div></div>{/if}
+                  {#if typingAvatar}<div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>{:else}<div></div>{/if}
                   <div class="aib"><Message text="" streaming /></div>
                 </div>
               {/if}
@@ -1039,98 +1463,64 @@
           transition:fly={{ y: 10, duration: ms(160) }}
           onclick={() => toBottom(true)}
           title="Aller en bas"
-          aria-label="Aller en bas">↓</button
-        >
+          aria-label="Aller en bas">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+        </button>
       {/if}
     </div>
 
-    <!-- ============ zone de saisie ============ -->
     <div class="dock">
       <div class="dockin">
         {#if error}
           <div class="error errbar" out:fade={{ duration: ms(120) }}>
             <span>{error}</span>
-            <button class="x" onclick={clearError} title="Fermer" aria-label="Fermer">✕</button>
+            <button class="x" onclick={clearError} title="Fermer" aria-label="Fermer">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
           </div>
         {/if}
 
-        <div class="composer">
-          {#if menu.length}
-            <div class="sugg" role="listbox" out:fade={{ duration: ms(90) }}>
-              {#each menu as m, i}
-                <button
-                  class:on={i === Math.min(sel, menu.length - 1)}
-                  class:cmd={m.kind === 'cmd'}
-                  onmousedown={(e) => e.preventDefault()}
-                  onclick={() => pickMenu(m)}
-                >
-                  <b>{m.label}</b><small>{m.desc}</small>
-                  {#if m.tag}<em class="stag">{m.tag}</em>{/if}
-                </button>
-              {/each}
-            </div>
-          {/if}
+        <Composer
+          bind:this={composer}
+          bind:input
+          bind:enableWebSearch
+          {busy}
+          loading={!!cur?.loading}
+          {mode}
+          workdir={curWorkdir}
+          {autoAccept}
+          {agents}
+          {curAgent}
+          {skills}
+          commands={COMMANDS}
+          {attachments}
+          onerror={(m) => (gerr = m)}
+          onattachfiles={handleAttachFiles}
+          onremoveattachment={removeAttachment}
+          onagentchange={onAgentChange}
+          onmodechange={setMode}
+          onchoosefolder={chooseFolder}
+          onautochange={setAuto}
+          onsend={send}
+          onstop={stop}
+        />
 
-          <textarea
-            bind:this={ta}
-            bind:value={input}
-            onkeydown={onKey}
-            rows="1"
-            aria-label="Message"
-            placeholder={busy
-              ? 'Génération en cours… tu peux changer de chat, elle continue.'
-              : mode === 'code'
-                ? 'Demande quelque chose sur le projet…  (/ commandes · $ skills)'
-                : 'Écris ton message…  (/ commandes · $ skills)'}
-          ></textarea>
-
-          <div class="bar">
-            <select class="agent" onchange={onAgent} disabled={busy} title="Agent" aria-label="Agent">
-              {#each agents as a (a.id)}
-                <option value={a.id} selected={a.id === curAgent}>{a.name ?? a.id}</option>
-              {/each}
-            </select>
-
-            <div class="seg">
-              <button class:on={mode === 'chat'} onclick={() => setMode('chat')} disabled={busy}>Chat</button>
-              <button class:on={mode === 'code'} onclick={() => setMode('code')} disabled={busy}>Code</button>
-            </div>
-
-            {#if mode === 'code'}
-              <button class="pill chip" onclick={chooseFolder} disabled={busy} title={curWorkdir ?? 'Choisir un dossier'}>
-                {curWorkdir ? '📁 ' + baseName(curWorkdir) : '📁 Choisir un dossier…'}
-              </button>
-            {/if}
-
-            <span class="spacer"></span>
-
-            {#if mode === 'code'}
-              <label class="chk small" title="Valable pour les modifications de fichiers, jamais pour les commandes">
-                <input type="checkbox" checked={autoAccept} onchange={(e) => setAuto(e.currentTarget.checked)} />
-                Accepter auto les modifs
-              </label>
-            {/if}
-
-            {#if busy}
-              <button class="round stop" onclick={stop} title="Arrêter" aria-label="Arrêter">■</button>
-            {:else}
-              <button
-                class="round go"
-                onclick={send}
-                disabled={!input.trim() || !!cur?.loading}
-                title="Envoyer"
-                aria-label="Envoyer">↑</button
-              >
-            {/if}
-          </div>
+        <div class="help">
+          <span><kbd>Entrée</kbd> envoyer</span>
+          <span>·</span>
+          <span><kbd>Maj+Entrée</kbd> saut de ligne</span>
+          <span>·</span>
+          <span><kbd>/</kbd> commandes</span>
+          <span>·</span>
+          <span><kbd>$</kbd> skills</span>
+          <span>·</span>
+          <span><kbd>Ctrl+V</kbd> coller une image</span>
+          <span>·</span>
+          <span><kbd>Ctrl+N</kbd> nouveau chat</span>
         </div>
-
-        <div class="help">Entrée : envoyer · Maj+Entrée : saut de ligne · / : commandes · $ : skills · Ctrl+N : nouveau chat</div>
       </div>
     </div>
   </section>
-
-  {#key mode}<div class="sweep" aria-hidden="true"></div>{/key}
 </div>
 
 {#if showSettings && settings}
@@ -1146,6 +1536,8 @@
     ctx={ctxInfo}
     chatId={cur?.chatId ?? null}
     {busy}
+    {theme}
+    {notifSettings}
     tab={settingsTab}
     onclose={() => (showSettings = false)}
     {onsaved}
@@ -1156,1026 +1548,796 @@
     onreset={resetTally}
     oninsert={insertSkill}
     onextchange={() => loadSkills(mode, curWorkdir)}
+    ontheme={(t) => (theme = normalizeTheme(t))}
+    onrefreshusage={loadUsage}
+    onnotifchange={handleNotifChange}
+    ontestnotif={testNotification}
   />
+{/if}
+
+{#if toastData}
+  <div class="toast-pill" transition:fly={{ y: 12, duration: ms(160) }} role="status" aria-live="polite">
+    <svg class="toast-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    <div class="toast-txt">
+      <div class="toast-title">{toastData.title}</div>
+      {#if toastData.body}<div class="toast-body">{toastData.body}</div>{/if}
+    </div>
+    <button class="toast-x" onclick={() => (toastData = null)} aria-label="Fermer la notification">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+{/if}
+
+{#if forkModal}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="overlay" onclick={() => !forkBusy && (forkModal = null)}>
+    <div class="dialog fork-dlg" role="dialog" aria-modal="true" aria-labelledby="fork-title" tabindex="-1" onclick={(e) => e.stopPropagation()}>
+      <div class="dlg-head">
+        <h3 id="fork-title">Modifier et créer une branche</h3>
+        <button
+          type="button"
+          class="head-x"
+          disabled={forkBusy}
+          onclick={() => (forkModal = null)}
+          aria-label="Fermer"
+          title="Fermer"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <p class="dim dlg-sub">
+        Crée une nouvelle conversation à partir de ce message modifié. L’originale est conservée.
+      </p>
+      <textarea
+        class="fork-ta"
+        bind:this={forkTa}
+        bind:value={forkModal.content}
+        rows="4"
+        onkeydown={(e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            submitFork();
+          }
+        }}
+      ></textarea>
+      <div class="fork-acts">
+        <button type="button" disabled={forkBusy} onclick={() => (forkModal = null)}>Annuler</button>
+        <button type="button" class="primary" disabled={forkBusy || !forkModal.content.trim()} onclick={submitFork}>
+          {forkBusy ? 'Création…' : 'Créer une branche'}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
   .app {
     display: grid;
-    grid-template-columns: 272px minmax(0, 1fr);
+    grid-template-columns: 276px minmax(0, 1fr);
     height: 100vh;
     background: var(--bg);
+    color: var(--text);
+    position: relative;
+    overflow: hidden;
+    font-family: var(--font-sans);
   }
 
-  /* ---------- barre latérale ---------- */
-  .side {
+  .main {
     display: flex;
     flex-direction: column;
-    gap: 10px;
     min-height: 0;
-    padding: 14px 10px 10px;
-    background: var(--panel);
-    border-right: 1px solid var(--line);
-    animation: fs-left var(--t-slow) var(--ease) both;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 2px 6px 4px;
-  }
-  /* logo, grand logo, avatar : carré plein, bord clair, ombre dure */
-  .logo,
-  .herologo,
-  .av {
-    display: grid;
-    place-items: center;
-    flex: none;
-    color: #fff;
-    font-family: var(--mono);
-    font-weight: 800;
-    background: var(--accent);
-    border: 1px solid #6b97ff;
-  }
-  .logo {
-    width: 30px;
-    height: 30px;
-    font-size: 12px;
-    letter-spacing: 0.5px;
-    box-shadow: 3px 3px 0 rgba(61, 123, 255, 0.3);
-  }
-  .bname {
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-  }
-  .newbtn {
-    width: 100%;
-    padding: 9px 12px;
-    background: var(--accent-soft);
-    border-color: var(--accent-line);
-    color: #cfe0ff;
-    font-weight: 600;
-  }
-  .newbtn:hover:not(:disabled) {
-    background: rgba(61, 123, 255, 0.24);
-    border-color: var(--accent);
-    box-shadow: 2px 2px 0 rgba(61, 123, 255, 0.35);
-  }
-  .find input {
-    width: 100%;
-    padding: 6px 10px;
-    font-size: 13px;
-    background: var(--bg);
-    border-color: var(--line);
-  }
-  .list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    margin: 0 -4px;
-    padding: 0 4px;
-  }
-  .none {
-    padding: 14px 10px;
-    color: var(--faint);
-    font-size: 13px;
-    text-align: center;
-  }
-  .chatrow {
-    position: relative;
-    animation: fs-left var(--t-slow) var(--ease) both;
-  }
-  /* ligne de chat : filet gauche (accent si actif), léger décalage au survol */
-  .chat {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 7px 10px;
-    text-align: left;
-    background: transparent;
-    border: 0;
-    border-left: 2px solid transparent;
-    color: var(--dim);
-  }
-  .chat:hover:not(:disabled) {
-    background: var(--panel2);
-    border: 0;
-    border-left: 2px solid var(--line2);
-    box-shadow: none;
-    transform: translateX(2px);
-    color: var(--text);
-  }
-  .chatrow.active .chat,
-  .chatrow.active .chat:hover:not(:disabled) {
-    background: var(--raised);
-    border: 0;
-    border-left: 2px solid var(--accent);
-    color: var(--text);
-  }
-  .ct {
-    flex: 1;
     min-width: 0;
+    position: relative;
+    background:
+      radial-gradient(640px 320px at 50% -60px, var(--accent-soft), transparent 72%),
+      var(--bg);
+  }
+
+  .top {
+    position: relative;
+    height: var(--topbar-h, 52px);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 84%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    transition: box-shadow 0.16s ease;
+    z-index: 20;
+  }
+
+  .top.scrolled {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  }
+
+  .ttl {
+    margin: 0;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .ind {
-    flex: none;
-    width: 8px;
-    height: 8px;
-  }
-  .ind.busy {
-    background: var(--accent);
-    animation: fs-pulse 1.2s ease-in-out infinite;
-  }
-  .ind.wait {
-    background: var(--warn);
-    box-shadow: 0 0 0 3px rgba(229, 165, 10, 0.22);
-  }
-  .ind.unread {
-    background: var(--ok);
-  }
-  .acts {
-    position: absolute;
-    top: 50%;
-    right: 4px;
-    transform: translateY(-50%);
-    display: none;
-    gap: 3px;
-    padding: 2px;
-    background: var(--panel2);
-  }
-  .chatrow.active .acts {
-    background: var(--raised);
-  }
-  .chatrow:hover .acts,
-  .acts.show {
-    display: flex;
-    animation: fs-fade var(--t-fast) both;
-  }
-  .chatrow:hover .ind {
-    opacity: 0;
-  }
-  .renamein {
-    width: 100%;
-    padding: 6px 10px;
-    font-size: 13px;
-  }
-  .foot {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--line);
-  }
-  .gear {
-    flex: 1;
-    text-align: left;
-    background: transparent;
-    border-color: transparent;
-    color: var(--dim);
-  }
-  .gear:hover:not(:disabled) {
-    background: var(--panel2);
-    border-color: transparent;
-    box-shadow: none;
-    transform: none;
-    color: var(--text);
+    min-width: 0;
   }
 
-  /* ---------- puces ---------- */
+  .spacer {
+    flex: 1;
+    min-width: 8px;
+  }
+
   .pill {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 10px;
-    background: var(--panel2);
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
     border: 1px solid var(--line);
+    background: var(--panel2);
     color: var(--dim);
-    font-size: 12px;
-    line-height: 1;
+    font-size: 11.5px;
+    font-weight: 500;
     white-space: nowrap;
+    transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
   }
-  button.pill:hover:not(:disabled) {
-    background: var(--raised);
-    border-color: var(--line2);
-    color: var(--text);
-  }
-  .pill.eco {
-    color: #ffd479;
-    background: rgba(229, 165, 10, 0.1);
-    border-color: rgba(229, 165, 10, 0.4);
-  }
-  button.pill.eco:hover:not(:disabled) {
-    color: #ffd479;
-    background: rgba(229, 165, 10, 0.18);
-    border-color: rgba(229, 165, 10, 0.6);
-  }
+
   .pill.live {
-    color: #cfe0ff;
-    background: var(--accent-soft);
+    color: var(--text);
+    border-color: var(--line2);
+    background: var(--panel2);
+  }
+
+  .pill.live::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--state-running, var(--warn));
+    box-shadow: 0 0 0 0 var(--accent-glow);
+    animation: fs-pulse 1.6s ease-in-out infinite;
+  }
+
+  .pill.modep {
+    color: var(--accent-text);
     border-color: var(--accent-line);
-    animation: fs-left var(--t) var(--ease) both;
+    background: var(--accent-soft);
   }
-  .pill.live i {
-    width: 7px;
-    height: 7px;
-    background: var(--accent);
-    animation: fs-pulse 1.1s ease-in-out infinite;
+
+  .pill.eco {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
   }
-  .pill.chip {
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+
   .mg {
-    width: 36px;
+    display: inline-flex;
+    align-items: center;
+    width: 38px;
     height: 4px;
-    background: var(--raised);
+    border-radius: 999px;
+    background: var(--line2);
     overflow: hidden;
   }
-  .mg i {
+
+  .mg > i {
     display: block;
     height: 100%;
+    border-radius: 999px;
     background: var(--accent);
-    transition: width var(--t-slow) var(--ease);
+    transition: width 0.25s ease;
   }
-  .mg.warn i {
+
+  .mg.warn > i {
     background: var(--warn);
   }
 
-  /* ---------- zone principale ---------- */
-  .main {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    min-height: 0;
-    height: 100vh;
-  }
-  .top {
-    position: relative;
-    display: flex;
-    align-items: center;
-    flex: none;
-    gap: 8px;
-    height: 48px;
-    padding: 0 18px;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel);
-  }
-  /* liseré qui défile pendant la génération */
   .prog {
     position: absolute;
-    right: 0;
-    bottom: -1px;
     left: 0;
-    z-index: 1;
+    right: 0;
+    bottom: 0;
     height: 2px;
     overflow: hidden;
+    background: transparent;
     pointer-events: none;
   }
+
   .prog::after {
-    content: '';
+    content: "";
     position: absolute;
-    inset: 0;
-    width: 30%;
-    background: var(--accent);
-    animation: sweep 1.2s var(--ease) infinite;
+    top: 0;
+    bottom: 0;
+    width: 38%;
+    background: linear-gradient(90deg, transparent, var(--accent-brand), var(--accent-cyan), transparent);
+    animation: fs-sweep 1.25s ease-in-out infinite;
   }
-  @keyframes sweep {
-    from {
-      transform: translateX(-100%);
-    }
-    to {
-      transform: translateX(340%);
-    }
-  }
-  .ttl {
-    min-width: 0;
-    margin: 0;
-    overflow: hidden;
-    font-size: 14px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+
   .stage {
     position: relative;
-    display: flex;
-    flex: 1;
+    flex: 1 1 auto;
     min-height: 0;
-  }
-  .scroll {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-    padding: 22px 0 10px;
-  }
-  .col {
     display: flex;
     flex-direction: column;
-    width: min(820px, calc(100% - 36px));
-    min-height: 100%;
-    margin: 0 auto;
   }
-  /* contenu de la vue : se re-crée (fondu) à chaque changement de chat */
+
+  .scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+  }
+
+  .col {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 24px 20px 36px;
+  }
+
   .view {
     display: flex;
     flex-direction: column;
-    flex: 1;
-    gap: 14px;
-    min-width: 0;
-    animation: fs-fade var(--t) both;
+    gap: 18px;
   }
+
   .loading {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 10px;
-    margin: auto;
+    padding: 48px 16px;
     color: var(--dim);
+    font-size: 13px;
   }
+
   .spin {
     width: 16px;
     height: 16px;
+    border-radius: 50%;
     border: 2px solid var(--line2);
     border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: fs-spin 0.7s linear infinite;
+    animation: fs-spin 0.75s linear infinite;
   }
 
-  /* écran d'accueil (les enfants arrivent en cascade : classe .stagger) */
   .hero {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 6px;
-    margin: auto 0;
-    padding: 24px 0;
     text-align: center;
+    padding: 40px 0 20px;
+    gap: 14px;
   }
+
   .herologo {
-    width: 54px;
-    height: 54px;
-    font-size: 20px;
-    box-shadow: 5px 5px 0 rgba(61, 123, 255, 0.3);
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    box-shadow: 0 12px 32px var(--accent-glow);
   }
+
   .hero h2 {
-    margin: 10px 0 0;
-    font-size: 24px;
-    font-weight: 650;
+    margin: 4px 0 0;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
   }
-  .hero p {
-    margin: 0 0 14px;
+
+  .hero .dim {
+    margin: 0;
+    max-width: 58ch;
+    text-wrap: balance;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--dim);
   }
+
   .cards {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px;
+    gap: 12px;
     width: 100%;
-    animation: none; /* les cartes ont leur propre délai */
+    margin-top: 14px;
   }
+
   .card {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    padding: 12px 14px;
+    justify-content: flex-start;
     text-align: left;
+    padding: 14px 15px;
+    border-radius: var(--radius);
+    border: 1px solid var(--line);
     background: var(--panel);
-    border-color: var(--line);
-    box-shadow:
-      inset 0 2px 0 transparent,
-      0 0 0 rgba(0, 0, 0, 0);
-    animation: fs-rise var(--t-slow) var(--ease) backwards;
-  }
-  .card:hover:not(:disabled) {
-    background: var(--panel2);
-    border-color: var(--line2);
-    box-shadow:
-      inset 0 2px 0 var(--accent),
-      3px 3px 0 rgba(0, 0, 0, 0.5);
-  }
-  .card b {
-    font-weight: 600;
-  }
-  .card span {
-    color: var(--dim);
-    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+    transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
   }
 
-  /* messages */
+  .card b {
+    display: block;
+    font-size: 13.5px;
+    margin-bottom: 4px;
+    color: var(--text);
+  }
+
+  .card span {
+    display: block;
+    font-size: 12px;
+    color: var(--dim);
+    line-height: 1.4;
+  }
+
+  .card:hover {
+    transform: translateY(-2px);
+    background: var(--raised);
+    border-color: var(--accent-line);
+    box-shadow: var(--shadow);
+  }
+
   .u {
     display: flex;
-    justify-content: flex-end;
-  }
-  .ubub {
-    max-width: min(640px, 82%);
-    padding: 9px 14px;
-    border: 1px solid var(--accent-line);
-    border-right: 3px solid var(--accent);
-    background: var(--accent-soft);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    animation: u-in var(--t) var(--ease) both;
-  }
-  @keyframes u-in {
-    from {
-      opacity: 0;
-      transform: translateX(14px);
-    }
-    to {
-      opacity: 1;
-      transform: none;
-    }
-  }
-  .ai {
-    display: grid;
-    grid-template-columns: 30px minmax(0, 1fr);
-    gap: 12px;
-    animation: fs-rise var(--t) var(--ease) both;
-  }
-  .av {
-    width: 30px;
-    height: 30px;
-    font-size: 11px;
-    box-shadow: 2px 2px 0 rgba(61, 123, 255, 0.3);
-  }
-  .aib {
-    min-width: 0;
-    padding-top: 3px;
-  }
-  .toolrow {
-    margin-left: 42px;
-  }
-  .note {
-    align-self: center;
-    padding: 3px 12px;
-    border: 1px solid var(--line);
-    background: var(--panel2);
-    color: var(--dim);
-    font: 11px/1.5 var(--mono);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    animation: fs-fade var(--t) both;
-  }
-  .jump {
-    position: absolute;
-    bottom: 12px;
-    left: 50%;
-    width: 34px;
-    height: 34px;
-    margin-left: -17px;
-    padding: 0;
-    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.45);
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
   }
 
-  /* ---------- saisie ---------- */
-  .dock {
-    flex: none;
-    padding: 6px 0 14px;
+  .ubub {
+    max-width: min(82%, 620px);
+    padding: 11px 15px;
+    border-radius: 16px 16px 4px 16px;
+    background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--panel2) 86%, transparent));
+    border: 1px solid var(--accent-line);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
-  .dockin {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    width: min(820px, calc(100% - 36px));
-    margin: 0 auto;
-  }
-  .errbar {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-  }
-  .errbar span {
-    flex: 1;
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-  .x {
-    padding: 0 6px;
-    border: 0;
-    background: transparent;
-    color: inherit;
-  }
-  .x:hover:not(:disabled) {
-    border: 0;
-    background: rgba(255, 255, 255, 0.08);
-    box-shadow: none;
-    transform: none;
-  }
-  .composer {
-    position: relative;
-    padding: 10px 12px 8px;
-    border: 1px solid var(--line2);
-    border-top: 2px solid var(--line2);
-    background: var(--panel);
-    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.4);
-    transition:
-      border-color var(--t-fast),
-      box-shadow var(--t-fast) var(--ease),
-      transform var(--t-fast) var(--ease);
-  }
-  .composer:focus-within {
-    border-color: var(--accent-line);
-    border-top-color: var(--accent);
-    box-shadow: 5px 5px 0 rgba(61, 123, 255, 0.28);
-    transform: translate(-1px, -1px);
-  }
-  .composer textarea {
-    display: block;
-    width: 100%;
-    min-height: 24px;
-    max-height: 220px;
-    padding: 4px 2px;
-    border: 0;
-    background: transparent;
-    line-height: 1.5;
-    resize: none;
-  }
-  .composer textarea:focus {
-    border: 0;
-    box-shadow: none;
-  }
-  .bar {
+
+  .u-imgs {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
     gap: 8px;
-    margin-top: 6px;
+    margin-top: 8px;
   }
-  .agent {
-    max-width: 200px;
-    padding: 5px 10px;
-    border-color: var(--line);
-    background: var(--panel2);
-    font-size: 12px;
+
+  .u-imgs img {
+    max-width: 180px;
+    max-height: 140px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    object-fit: cover;
   }
-  /* sélecteur Chat / Code : filet accent sous l'option active */
-  .seg {
-    display: inline-flex;
+
+  .u-acts {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+  }
+
+  .u:hover .u-acts,
+  .u:focus-within .u-acts {
+    opacity: 1;
+  }
+
+  .u-act {
     border: 1px solid var(--line);
     background: var(--panel2);
-  }
-  .seg button {
-    padding: 4px 12px;
-    border: 0;
-    background: transparent;
-    box-shadow: inset 0 -2px 0 transparent;
     color: var(--dim);
-    font-size: 12px;
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
   }
-  .seg button:hover:not(:disabled) {
-    border: 0;
-    background: transparent;
-    box-shadow: inset 0 -2px 0 var(--line2);
-    transform: none;
+
+  .u-act:hover {
     color: var(--text);
+    border-color: var(--accent-line);
   }
-  .seg button.on,
-  .seg button.on:hover:not(:disabled) {
-    background: var(--raised);
-    box-shadow: inset 0 -2px 0 var(--accent);
-    color: var(--text);
+
+  .ai {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
   }
-  .small {
-    color: var(--dim);
-    font-size: 12px;
-  }
-  .round {
+
+  .av {
+    width: 32px;
+    height: 32px;
+    margin-top: 1px;
+    border-radius: 10px;
     display: grid;
     place-items: center;
-    width: 34px;
-    height: 34px;
-    padding: 0;
-    font-size: 16px;
-    line-height: 1;
-  }
-  .round.go {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    font-weight: 700;
-    animation: fs-pop var(--t) var(--ease);
-  }
-  .round.go:hover:not(:disabled) {
-    background: #5a8fff;
-    border-color: #5a8fff;
-    box-shadow: 2px 2px 0 rgba(61, 123, 255, 0.35);
-  }
-  .round.go:disabled {
-    background: var(--raised);
-    border-color: var(--line2);
-    color: var(--faint);
-    opacity: 0.7;
-  }
-  .round.stop {
-    background: var(--danger);
-    border-color: var(--danger);
-    color: #fff;
-    animation: fs-pulse 1.4s ease-in-out infinite;
-  }
-  .round.stop:hover:not(:disabled) {
-    background: #ff8585;
-    border-color: #ff8585;
-    box-shadow: 2px 2px 0 rgba(255, 107, 107, 0.35);
-  }
-  .help {
-    color: var(--faint);
-    font-size: 11px;
-    text-align: center;
+    overflow: hidden;
+    box-shadow: 0 4px 14px var(--accent-glow);
+    user-select: none;
   }
 
-  /* suggestions de skills */
-  .sugg {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 8px);
-    left: 0;
-    z-index: 5;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 6px;
-    border: 1px solid var(--line2);
-    border-top: 2px solid var(--accent);
-    background: var(--panel2);
-    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
-    animation: fs-rise var(--t-fast) var(--ease) both;
+  .toolrow {
+    padding-left: 46px;
   }
-  .sugg button {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 7px 10px;
-    text-align: left;
-    border: 0;
-    border-left: 2px solid transparent;
-    background: transparent;
-  }
-  .sugg button.on,
-  .sugg button:hover:not(:disabled) {
-    border: 0;
-    border-left: 2px solid var(--accent);
-    background: var(--accent-soft);
-    box-shadow: none;
-    transform: none;
-  }
-  .sugg b {
-    color: #cfe0ff;
-    font-family: var(--mono);
-    font-weight: 600;
-  }
-  .sugg small {
+
+  .aib {
     min-width: 0;
-    overflow: hidden;
-    color: var(--dim);
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.62;
   }
 
-  /* ================= REFONTE : formes douces ================= */
-  /* --r = 8px (petits éléments), --r-lg = 14px (conteneurs), 999px = pastilles, 50% = ronds */
-  .logo {
-    border-radius: 10px;
-    box-shadow: none;
-  }
-  .herologo {
-    border-radius: 18px;
-    box-shadow: 0 10px 30px rgba(61, 123, 255, 0.3);
-  }
-  .av {
-    border-radius: 10px;
-    box-shadow: none;
-  }
-  .logo,
-  .herologo,
-  .av {
-    background: none;
-    border: none;
-    overflow: visible;
-  }
-  .logo svg,
-  .herologo svg,
-  .av svg {
-    display: block;
-    width: 100%;
-    height: 100%;
-  }
-  .newbtn {
-    border-radius: var(--r-lg);
-  }
-  .newbtn:hover:not(:disabled) {
-    box-shadow: none;
-  }
-  .find input {
-    padding: 7px 14px;
-    border-radius: 999px;
-  }
-  .chat,
-  .chat:hover:not(:disabled),
-  .chatrow.active .chat,
-  .chatrow.active .chat:hover:not(:disabled) {
-    border: 1px solid transparent;
-    border-radius: 10px;
-  }
-  .chatrow.active .chat,
-  .chatrow.active .chat:hover:not(:disabled) {
-    border-color: var(--line2);
-  }
-  .ind {
-    border-radius: 50%;
-  }
-  .acts,
-  .gear {
-    border-radius: 10px;
-  }
-  .pill {
-    border-radius: 999px;
-    padding: 6px 12px;
-  }
-  .pill.live i,
-  .mg,
-  .mg i {
-    border-radius: 999px;
-  }
-  .ubub {
-    padding: 10px 16px;
-    border: 1px solid var(--accent-line);
-    border-radius: 18px 18px 6px 18px;
-  }
-  .card {
-    border-radius: var(--r-lg);
-    box-shadow: none;
-  }
-  .card:hover:not(:disabled) {
-    border-color: var(--accent-line);
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
-  }
   .note {
-    max-width: 100%;
-    text-align: center;
-    border-radius: 14px;
-    font: 12px/1.5 var(--sans);
-    letter-spacing: 0;
-    text-transform: none;
-  }
-  .jump {
-    border-radius: 50%;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-  }
-  .composer,
-  .composer:focus-within {
-    border: 1px solid var(--line2);
-    border-radius: 20px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
-    transform: none;
-  }
-  .composer:focus-within {
-    border-color: var(--accent-line);
-    box-shadow:
-      0 10px 30px rgba(0, 0, 0, 0.28),
-      0 0 0 3px var(--accent-soft);
-  }
-  .agent {
-    padding: 5px 12px;
-    border-radius: 999px;
-  }
-  .seg {
-    padding: 2px;
-    border-radius: 999px;
-  }
-  .seg button,
-  .seg button:hover:not(:disabled),
-  .seg button.on,
-  .seg button.on:hover:not(:disabled) {
-    border-radius: 999px;
-  }
-  .seg button,
-  .seg button:hover:not(:disabled) {
-    box-shadow: none;
-  }
-  .seg button.on,
-  .seg button.on:hover:not(:disabled) {
-    box-shadow: 0 0 0 1px var(--line2) inset;
-  }
-  .round {
-    border-radius: 50%;
-  }
-  .round.go:hover:not(:disabled),
-  .round.stop:hover:not(:disabled) {
-    box-shadow: none;
-  }
-  .sugg {
-    border: 1px solid var(--line2);
-    border-radius: var(--r-lg);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
-  }
-  .sugg button,
-  .sugg button.on,
-  .sugg button:hover:not(:disabled) {
-    border: 0;
-    border-radius: 9px;
-  }
-  /* appels MCP : une ligne repliable par appel */
-  .mcpnote {
-    display: inline-flex;
-    align-self: center;
-    align-items: center;
-    gap: 7px;
-    padding: 3px 12px;
+    padding: 10px 13px;
+    border-radius: var(--radius-sm);
     border: 1px solid var(--line);
-    border-radius: 999px;
-    background: var(--panel);
-    color: var(--faint);
-    font-size: 12px;
-    animation: fs-fade var(--t) both;
-  }
-  .mcpnote b {
+    background: var(--panel2);
     color: var(--dim);
-    font-weight: 600;
-  }
-  .dot {
-    flex: none;
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--ok);
-  }
-  .mcpcall {
-    margin-left: 42px;
-    overflow: hidden;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--panel);
     font-size: 12.5px;
-    animation: fs-rise var(--t) var(--ease) both;
   }
-  .mcpcall.failed {
-    border-color: rgba(255, 107, 107, 0.4);
+
+  .mcpnote {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--dim);
+    font-size: 12px;
   }
+
+  .mcpcall {
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    background: var(--panel);
+    overflow: hidden;
+    font-size: 12.5px;
+  }
+
+  .mcpcall.bad {
+    border-color: var(--danger);
+  }
+
   .mcpcall summary {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 12px;
-    list-style: none;
-    cursor: pointer;
-  }
-  .mcpcall summary::-webkit-details-marker {
-    display: none;
-  }
-  .mcpcall.nobody summary {
-    cursor: default;
-  }
-  .mcpcall.in_progress .dot {
-    background: var(--accent);
-    animation: fs-pulse 1.1s ease-in-out infinite;
-  }
-  .mcpcall.failed .dot {
-    background: var(--danger);
-  }
-  .mname {
-    min-width: 0;
-    overflow: hidden;
-    font-family: var(--mono);
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .msrv {
-    padding: 1px 8px;
-    border: 1px solid var(--accent-line);
-    border-radius: 999px;
-    background: var(--accent-soft);
-    color: #cfe0ff;
-    font-size: 11px;
-  }
-  .mst {
-    margin-left: auto;
-    color: var(--dim);
-    font-size: 11px;
-  }
-  .mcpcall pre {
-    max-height: 240px;
-    margin: 0;
     padding: 8px 12px;
-    overflow: auto;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .mcpcall .dot,
+  .mcpnote .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .mcpcall .mname {
+    font-weight: 600;
+    color: var(--text);
+    font-family: var(--font-mono);
+  }
+
+  .mcpcall .msrv {
+    color: var(--faint);
+    font-size: 11.5px;
+  }
+
+  .mcpcall .mst {
+    margin-left: auto;
+    font-size: 11.5px;
+    color: var(--dim);
+  }
+
+  .mcpcall pre {
+    margin: 0;
+    padding: 10px 12px;
     border-top: 1px solid var(--line);
-    background: var(--bg);
-    color: #c9d4e5;
-    font: 12px/1.45 var(--mono);
-    white-space: pre-wrap;
-    word-break: break-word;
+    background: var(--panel2);
+    color: var(--dim);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    overflow-x: auto;
   }
-  .mcpcall.bad pre {
-    color: #ffb4b4;
+
+  .jump {
+    position: absolute;
+    right: 22px;
+    bottom: 16px;
+    z-index: 8;
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+    border: 1px solid var(--line2);
+    background: var(--raised);
+    color: var(--text);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
   }
-  .mcpcall + .mcpcall {
-    margin-top: -6px;
+
+  .jump:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent-line);
+    background: var(--hover);
   }
-  .mcpnote + .mcpnote {
-    margin-top: -8px;
+
+  .dock {
+    flex-shrink: 0;
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
   }
-  /* mode Code : accent vert d'eau, changement en douceur (voir @property dans theme.css) */
-  .app {
-    transition:
-      --accent 0.6s var(--ease),
-      --accent-soft 0.6s var(--ease),
-      --accent-line 0.6s var(--ease),
-      --accent-text 0.6s var(--ease),
-      --accent-glow 0.6s var(--ease);
+
+  .dockin {
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 8px 20px 14px;
   }
-  .app.code {
-    --accent: #1fbf9f;
-    --accent-soft: rgba(31, 191, 159, 0.12);
-    --accent-line: rgba(31, 191, 159, 0.5);
-    --accent-text: #c4fff0;
-    --accent-glow: rgba(31, 191, 159, 0.3);
+
+  .errbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+    background: var(--danger-soft);
+    color: var(--danger);
+    font-size: 12.5px;
   }
-  .app.code .top {
-    box-shadow: inset 0 -1px 0 var(--accent-line);
+
+  .errbar .x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 4px;
+    box-shadow: none;
   }
-  .app.code .side {
-    box-shadow: inset -1px 0 0 var(--accent-line);
+
+  .pill.top-act {
+    cursor: pointer;
+    transition: border-color 0.14s, background 0.14s, color 0.14s;
   }
-  /* lueur qui balaie l'écran à chaque changement de mode */
-  .sweep {
-    position: fixed;
-    inset: 0;
-    z-index: 30;
-    pointer-events: none;
-    background: radial-gradient(circle at 50% 100%, var(--accent-glow), transparent 55%);
-    opacity: 0;
-    transform-origin: 50% 100%;
-    animation: fs-sweep 0.8s var(--ease) both;
-  }
-  @keyframes fs-sweep {
-    0% {
-      opacity: 0;
-      transform: scale(0.7);
-    }
-    35% {
-      opacity: 1;
-    }
-    100% {
-      opacity: 0;
-      transform: scale(1.5);
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .sweep {
-      display: none;
-    }
-  }
-  .modep {
+
+  .pill.top-act:hover,
+  .pill.top-act.active {
     border-color: var(--accent-line);
     background: var(--accent-soft);
     color: var(--accent-text);
-    font-family: var(--mono);
-    font-size: 11.5px;
   }
-  /* menu d'autocomplétion : commandes (/) et skills ($) */
-  .sugg {
-    max-height: 320px;
-    overflow-y: auto;
-  }
-  .sugg b {
-    flex: none;
-    color: var(--accent-text);
-    white-space: nowrap;
-  }
-  .sugg button:not(.cmd) b {
-    color: #d8c2ff;
-  }
-  .stag {
-    flex: none;
-    margin-left: auto;
-    padding: 0 8px;
-    border: 1px solid var(--line2);
+
+  .top-act .cnt {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 5px;
     border-radius: 999px;
-    color: var(--faint);
-    font-size: 11px;
-    font-style: normal;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-line);
+    color: var(--accent-text);
+    font-size: 10.5px;
+    font-weight: 600;
   }
-  .msrv {
+
+  .pill.ctx-pill {
+    min-width: 152px;
+    justify-content: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .pill.dimmed {
+    opacity: 0.72;
+  }
+
+  .toast-pill {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 60;
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 10px;
+    max-width: 380px;
+    padding: 11px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--accent-line);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 12.5px;
+    box-shadow: var(--shadow);
+  }
+
+  .toast-ico {
+    margin-top: 2px;
+    flex-shrink: 0;
     color: var(--accent-text);
   }
 
-  @media (max-width: 860px) {
+  .toast-txt {
+    min-width: 0;
+    line-height: 1.4;
+  }
+
+  .toast-title {
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .toast-body {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--dim);
+  }
+
+  .toast-x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: var(--dim);
+    cursor: pointer;
+    padding: 0;
+    margin: -2px -4px 0 4px;
+    flex-shrink: 0;
+  }
+
+  .toast-x:hover {
+    color: var(--text);
+    background: var(--hover);
+    border-color: transparent;
+  }
+
+  .help {
+    margin-top: 7px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 4px 6px;
+    text-align: center;
+    font-size: 11.5px;
+    color: var(--dim);
+  }
+
+  .help kbd {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    line-height: 1.2;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    color: var(--text);
+  }
+
+  .dialog.fork-dlg {
+    padding: 24px;
+  }
+
+  .dlg-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .head-x {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    margin-right: -8px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text);
+    opacity: 0.72;
+    display: inline-grid;
+    place-items: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .head-x:hover:not(:disabled) {
+    opacity: 1;
+    background: var(--hover);
+    border-color: var(--line);
+  }
+
+  .dlg-sub {
+    margin: 6px 0 12px;
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+
+  .dialog h3 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  .dialog .fork-ta {
+    width: 100%;
+    min-height: 100px;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line2);
+    background: var(--panel2);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    resize: none;
+    outline: none;
+  }
+
+  .dialog .fork-ta:focus {
+    border-color: var(--accent-line);
+  }
+
+  .fork-acts {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  @keyframes fs-pulse {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 var(--accent-glow);
+    }
+    50% {
+      opacity: 0.65;
+      box-shadow: 0 0 0 5px transparent;
+    }
+  }
+
+  @keyframes fs-sweep {
+    0% {
+      left: -38%;
+    }
+    100% {
+      left: 100%;
+    }
+  }
+
+  @media (max-width: 760px) {
     .app {
       grid-template-columns: 224px minmax(0, 1fr);
     }
+
     .cards {
       grid-template-columns: 1fr;
-    }
-    .help {
-      display: none;
     }
   }
 </style>

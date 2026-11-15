@@ -909,40 +909,6 @@ impl Hub {
             true,
         )
     }
-
-    /// Génère un texte d'instructions pour le modèle listant les serveurs et outils MCP actifs.
-    pub async fn prompt_instructions(&self, config_dir: &Path, workdir: Option<&Path>) -> String {
-        let servers = Self::load_all_servers(config_dir, workdir);
-        if servers.is_empty() {
-            return String::new();
-        }
-        let mut lines = Vec::new();
-        lines.push("\n[Serveurs MCP locaux disponibles]".to_string());
-        lines.push(
-            "Tu as accès aux serveurs MCP locaux. Pour les utiliser, exécute `run_command` avec `fs-mcp` :"
-                .to_string(),
-        );
-        lines.push("  - `fs-mcp list` : liste les serveurs".to_string());
-        lines.push("  - `fs-mcp tools <serveur>` : liste les outils d'un serveur".to_string());
-        lines.push(
-            "  - `fs-mcp call <serveur> <outil> '{\"param\": \"valeur\"}'` : appelle un outil"
-                .to_string(),
-        );
-        lines.push("Ou insère un bloc markdown ```mcp-call :".to_string());
-        lines.push("```mcp-call".to_string());
-        lines.push(r#"{"server": "<serveur>", "tool": "<outil>", "arguments": {}}"#.to_string());
-        lines.push("```".to_string());
-        lines.push("Serveurs configurés :".to_string());
-        for (name, s) in &servers {
-            let desc = if let Some(u) = &s.url {
-                format!("HTTP ({u})")
-            } else {
-                format!("stdio ({})", s.command)
-            };
-            lines.push(format!("- {name} ({desc})"));
-        }
-        lines.join("\n")
-    }
 }
 
 /// Extrait les arguments JSON passés à `fs-mcp call`, en nettoyant les quotes du shell
@@ -968,67 +934,4 @@ pub fn parse_mcp_args(raw: &str) -> Result<Value, String> {
             serde_json::from_str::<Value>(&unescaped).map_err(|_| e.to_string())
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct McpBlockCall {
-    pub server: String,
-    pub tool: String,
-    pub arguments: Value,
-}
-
-/// Extrait les blocs ```mcp-call ... ``` générés par le modèle (bypass universel).
-pub fn extract_mcp_call_blocks(text: &str) -> Vec<McpBlockCall> {
-    let mut calls = Vec::new();
-    let pattern = "```mcp-call";
-    let mut start = 0;
-    while let Some(idx) = text[start..].find(pattern) {
-        let block_start = start + idx + pattern.len();
-        if let Some(end_idx) = text[block_start..].find("```") {
-            let json_str = text[block_start..block_start + end_idx].trim();
-            if let Ok(val) = serde_json::from_str::<Value>(json_str) {
-                if let (Some(server), Some(tool)) = (
-                    val.get("server").and_then(Value::as_str),
-                    val.get("tool").and_then(Value::as_str),
-                ) {
-                    let arguments = val
-                        .get("arguments")
-                        .cloned()
-                        .unwrap_or_else(|| json!({}));
-                    calls.push(McpBlockCall {
-                        server: server.trim().to_string(),
-                        tool: tool.trim().to_string(),
-                        arguments,
-                    });
-                }
-            }
-            start = block_start + end_idx + 3;
-        } else {
-            break;
-        }
-    }
-    calls
-}
-
-/// Supprime les blocs ```mcp-call ... ``` du texte affiché à l'utilisateur.
-#[allow(dead_code)]
-pub fn strip_mcp_call_blocks(text: &str) -> String {
-    let pattern = "```mcp-call";
-    let mut out = String::new();
-    let mut cursor = 0;
-    while let Some(idx) = text[cursor..].find(pattern) {
-        let match_start = cursor + idx;
-        out.push_str(&text[cursor..match_start]);
-        let block_start = match_start + pattern.len();
-        if let Some(end_idx) = text[block_start..].find("```") {
-            cursor = block_start + end_idx + 3;
-        } else {
-            cursor = text.len();
-            break;
-        }
-    }
-    if cursor < text.len() {
-        out.push_str(&text[cursor..]);
-    }
-    out.trim().to_string()
 }

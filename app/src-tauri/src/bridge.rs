@@ -914,7 +914,7 @@ async fn run_start(
     live: &mut Live,
 ) -> Result<(), String> {
     let b = &state.bridge;
-    let c = crate::client(app, state)?; // clé API requise
+    let c = crate::client(app, state).await?; // clé API requise
 
     let mut warnings = connect_all(app, state).await?;
     let exposed = state.mcp.exposed().await;
@@ -984,7 +984,7 @@ async fn teardown(
 ) -> Option<String> {
     let mut warn = None;
     if let Some(id) = live.server_id.take() {
-        match crate::client(app, state) {
+        match crate::client(app, state).await {
             Ok(c) => {
                 if let Err(e) = unregister(&c, &id).await {
                     warn = Some(format!("entrée FS non retirée : {e}"));
@@ -1004,7 +1004,7 @@ async fn teardown(
 
 /// Supprime l'entrée `label` restée chez FS après un arrêt brutal (rien n'est lancé).
 async fn purge_entry(app: &AppHandle, state: &State<'_, AppState>) -> Option<String> {
-    let c = match crate::client(app, state) {
+    let c = match crate::client(app, state).await {
         Ok(c) => c,
         Err(e) => return Some(e),
     };

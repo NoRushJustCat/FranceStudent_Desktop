@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "FS Code",
+  "productName": "France Student Desktop",
   "version": "0.1.0",
   "identifier": "dev.fscode.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "FS Code",
+        "title": "France Student Desktop",
         "width": 1100,
         "height": 760,
         "minWidth": 720,
