@@ -27,7 +27,7 @@ FS Code fournit une interface de chat capable d’interagir avec un projet local
 - Gestion des agents, conversations, utilisation de l’API et contexte courant.
 - Support des extensions et des serveurs **MCP**.
 - Tunnel local intégré avec `cloudflared` pour le pont MCP.
-- Stockage sécurisé de la clé API dans le coffre-fort du système.
+- Stockage sécurisé du token API dans le coffre-fort du système.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ fscode/
 ├── crates/
 │   ├── fs-agent/            # Boucle agent : événements, outils et résultats
 │   ├── fs-api/              # Client HTTP et streaming de l’API
-│   ├── fs-store/            # Réglages locaux et stockage de la clé API
+│   ├── fs-store/            # Réglages locaux et stockage du token API
 │   └── fs-tools/            # Outils d’interaction avec le projet local
 ├── Cargo.toml
 └── README.md
@@ -79,7 +79,7 @@ Pour développer le projet, il faut installer :
 - Node.js et npm ;
 - les dépendances système nécessaires à Tauri 2 selon le système d’exploitation ;
 - un accès à l’API France Student ;
-- une clé API France Student.
+- un token de connexion France Student service IA.
 
 La commande `npm install` télécharge également le binaire `cloudflared` utilisé par le pont MCP.
 
@@ -136,7 +136,7 @@ Les fichiers générés sont placés dans les répertoires de sortie de Vite et 
 Au premier démarrage, ouvrez les réglages de l’application et renseignez :
 
 - l’URL de base de l’API ;
-- la clé API France Student ;
+- le token de connexion France Student ;
 - éventuellement l’agent à utiliser ;
 - le dernier dossier de travail ;
 - le mode économie ;
@@ -148,7 +148,7 @@ L’URL par défaut de l’API est :
 https://api.francestudent.org
 ```
 
-Les réglages non sensibles sont enregistrés dans un fichier `config.json` dans le dossier de configuration de l’application. La clé API est stockée dans le coffre-fort système. En développement, elle peut également être fournie avec la variable d’environnement :
+Les réglages non sensibles sont enregistrés dans un fichier `config.json` dans le dossier de configuration de l’application. Le jeton API est stockée dans le coffre-fort système. En développement, elle peut également être fournie avec la variable d’environnement :
 
 ```bash
 FS_KEY="votre-cle-api"
