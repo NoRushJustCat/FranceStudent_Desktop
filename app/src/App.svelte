@@ -12,7 +12,8 @@
   import Tool from './lib/Tool.svelte';
   import DiffPanel from './lib/DiffPanel.svelte';
   import { term as termState } from './lib/termstore.svelte.js';
-  import PermMode from './lib/PermMode.svelte';
+  import AgentPanel from './lib/AgentPanel.svelte';
+  import { live as agentLive, view as agentView, init as initAgents } from './lib/agentlive.svelte.js';
   import Settings from './lib/Settings.svelte';
   import { THEMES, normalizeTheme } from './lib/themes.js';
 
@@ -72,10 +73,10 @@
     try {
       const raw = JSON.parse(localStorage.getItem(NOTIF_KEY) || 'null');
       if (raw && typeof raw === 'object') {
-        return {
-          enabled: !!raw.enabled,
-          desktopComplete: raw.desktopComplete !== false,
-          toolConfirm: raw.toolConfirm !== false,
+ return {
+   enabled: !!raw.enabled,
+   desktopComplete: raw.desktopComplete !== false,
+   toolConfirm: raw.toolConfirm !== false,
           appUpdates: raw.appUpdates !== false,
           offersAndSubscriptions: !!raw.offersAndSubscriptions,
         };
@@ -136,6 +137,10 @@
   let draftMode = $state('chat');
   let workdir = $state(null);
   let gerr = $state('');
+  let loginEmail = $state('');
+  let loginPass = $state('');
+  let loginBusy = $state(false);
+  let loginErr = $state('');
   let eco = $state(false);
   let autoAccept = $state(false);
   let usage = $state(null);
@@ -239,41 +244,41 @@
     const out = [];
     for (const m of Array.isArray(arr) ? arr : []) {
       try {
-        const role = String(m?.role ?? m?.author ?? m?.sender ?? '').toLowerCase();
+ const role = String(m?.role ?? m?.author ?? m?.sender ?? '').toLowerCase();
         if (role === 'tool' || role === 'system') continue;
-        const isUser = role.startsWith('user') || role === 'human';
+ const isUser = role.startsWith('user') || role === 'human';
         let text = m?.content ?? m?.text ?? '';
         if (Array.isArray(text)) text = text.map((p) => (typeof p === 'string' ? p : (p?.text ?? ''))).join('');
-        text = String(text ?? '');
+ text = String(text ?? '');
         const msgId = m?.id ? String(m.id) : null;
         if (isUser) {
-          if (text.trim()) out.push({ kind: 'user', id: msgId, text });
+   if (text.trim()) out.push({ kind: 'user', id: msgId, text });
           continue;
         }
-        if (text.trim()) out.push({ kind: 'assistant', id: msgId, text, reasoning: '' });
-        const results = new Map();
-        for (const r of m?.toolResults ?? m?.tool_results ?? []) {
-          results.set(String(r?.callId ?? r?.call_id ?? r?.id), r);
+ if (text.trim()) out.push({ kind: 'assistant', id: msgId, text, reasoning: '' });
+ const results = new Map();
+ for (const r of m?.toolResults ?? m?.tool_results ?? []) {
+   results.set(String(r?.callId ?? r?.call_id ?? r?.id), r);
         }
         for (const tc of m?.toolCalls ?? m?.tool_calls ?? []) {
           const name = tc?.name ?? tc?.function?.name;
           if (!name) continue;
-          const id = String(tc?.callId ?? tc?.call_id ?? tc?.id ?? out.length);
-          const r = results.get(id);
-          const isMcp = tc?.origin === 'mcp' || String(name).startsWith('mcp__') || /^(fs_|git_)/.test(String(name));
-          const isSkill = tc?.origin === 'skill';
+   const id = String(tc?.callId ?? tc?.call_id ?? tc?.id ?? out.length);
+   const r = results.get(id);
+   const isMcp = tc?.origin === 'mcp' || String(name).startsWith('mcp__') || /^(fs_|git_)/.test(String(name));
+   const isSkill = tc?.origin === 'skill';
           out.push({
-            kind: 'tool',
-            callId: id,
-            name,
-            origin: isSkill ? 'skill' : isMcp ? 'mcp' : 'local',
-            args: parseArgs(tc?.arguments ?? tc?.args ?? tc?.function?.arguments),
-            status: r?.isError || r?.is_error ? 'error' : 'ok',
-            output: String(r?.output ?? ''),
-          });
-        }
+     kind: 'tool',
+     callId: id,
+     name,
+     origin: isSkill ? 'skill' : isMcp ? 'mcp' : 'local',
+     args: parseArgs(tc?.arguments ?? tc?.args ?? tc?.function?.arguments),
+     status: r?.isError || r?.is_error ? 'error' : 'ok',
+     output: String(r?.output ?? ''),
+   });
+ }
       } catch {
-        /* ignore malformed message */
+ /* ignore malformed message */
       }
     }
     return out;
@@ -486,7 +491,7 @@
       s.items = toItems(chat);
       const aid = chat?.agent?.id;
       if (aid != null && agents.some((a) => a.id === aid)) {
-        s.agentId = aid;
+ s.agentId = aid;
         if (!memo?.mode && aid === CODE_AGENT) s.mode = 'code';
       }
       s.loading = false;
@@ -516,7 +521,7 @@
       const r = await api.listChats(40, null);
       const fresh = asArray(r, ['chats', 'items', 'data']).map(mapChatSummary);
       const keep = chats.filter(
-        (c) => !fresh.some((f) => f.id === c.id) && sessions.some((s) => s.chatId === c.id && s.busy),
+ (c) => !fresh.some((f) => f.id === c.id) && sessions.some((s) => s.chatId === c.id && s.busy),
       );
       chats = [...keep, ...fresh];
     } catch (e) {
@@ -603,20 +608,20 @@
       const r = await api.getNotificationPrefs();
       if (r && typeof r === 'object') {
         const next = {
-          ...notifSettings,
-          ...(typeof r.enabled === 'boolean' ? { enabled: r.enabled } : {}),
+   ...notifSettings,
+   ...(typeof r.enabled === 'boolean' ? { enabled: r.enabled } : {}),
           ...(typeof r.desktopComplete === 'boolean' ? { desktopComplete: r.desktopComplete } : {}),
-          ...(typeof r.toolConfirm === 'boolean' ? { toolConfirm: r.toolConfirm } : {}),
-          ...(typeof r.appUpdates === 'boolean' ? { appUpdates: r.appUpdates } : {}),
-          ...(typeof r.offersAndSubscriptions === 'boolean'
-            ? { offersAndSubscriptions: r.offersAndSubscriptions }
-            : {}),
+   ...(typeof r.toolConfirm === 'boolean' ? { toolConfirm: r.toolConfirm } : {}),
+   ...(typeof r.appUpdates === 'boolean' ? { appUpdates: r.appUpdates } : {}),
+   ...(typeof r.offersAndSubscriptions === 'boolean'
+     ? { offersAndSubscriptions: r.offersAndSubscriptions }
+     : {}),
         };
-        notifSettings = next;
+ notifSettings = next;
         try {
-          localStorage.setItem(NOTIF_KEY, JSON.stringify(next));
-        } catch {
-          /* ignore */
+   localStorage.setItem(NOTIF_KEY, JSON.stringify(next));
+ } catch {
+   /* ignore */
         }
       }
     } catch {
@@ -636,10 +641,10 @@
     try {
       if (typeof Notification !== 'undefined') {
         if (Notification.permission === 'default') {
-          await Notification.requestPermission().catch(() => {});
+   await Notification.requestPermission().catch(() => {});
         }
-        if (Notification.permission === 'granted') {
-          new Notification(title, { body });
+ if (Notification.permission === 'granted') {
+   new Notification(title, { body });
         }
       }
     } catch {
@@ -686,14 +691,14 @@
         await api.unsaveMessage(chatId, item.id);
         showToast('Message retiré des signets');
       } catch (e) {
-        gerr = String(e);
+ gerr = String(e);
         savedMessages = prev;
         writeLocalSaved(prev);
       }
     } else {
       const optimistic = normalizeSavedItem({
         id: `${chatId}:${item.id}`,
-        chatId,
+ chatId,
         messageId: item.id,
         content: item.text,
         chatTitle: chats.find((c) => c.id === chatId)?.title || 'Discussion',
@@ -701,9 +706,9 @@
       savedMessages = [optimistic, ...savedMessages];
       writeLocalSaved(savedMessages);
       try {
-        await api.saveMessage(chatId, item.id);
-        showToast('Message ajouté aux signets');
-        await loadSavedMessages();
+ await api.saveMessage(chatId, item.id);
+ showToast('Message ajouté aux signets');
+ await loadSavedMessages();
       } catch {
         showToast('Message ajouté aux signets (local)');
       }
@@ -756,18 +761,40 @@
       const saved = settings?.lastAgentId;
       pickedAgent = saved != null && agents.some((a) => a.id === saved);
       agentId = pickedAgent
-        ? saved
+ ? saved
         : (agents.find((a) => a.id === -2001)?.id ??
-          agents.find((a) => a.isDefault)?.id ??
+   agents.find((a) => a.isDefault)?.id ??
           agents[0]?.id ??
           saved ??
-          -2001);
+   -2001);
     } catch (e) {
       gerr = String(e);
       if (agentId == null) agentId = settings?.lastAgentId ?? -2001;
     }
     await Promise.all([loadChats(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs()]);
   }
+  async function submitLogin(e) {
+    e?.preventDefault();
+    if (loginBusy) return;
+    loginErr = '';
+    loginBusy = true;
+    try {
+      await api.loginPassword(loginEmail.trim(), loginPass);
+      loginPass = '';
+      await loadSettings();
+      if (settings?.hasKey) {
+ showSettings = false;
+        gerr = '';
+        await loadAll();
+ tick().then(() => composer?.focus());
+      }
+    } catch (err) {
+      loginErr = typeof err === 'string' ? err : err?.message || 'Connexion impossible.';
+    } finally {
+      loginBusy = false;
+    }
+  }
+
   async function loadSettings() {
     settings = await api.getSettings();
     eco = settings.eco;
@@ -776,17 +803,14 @@
   }
 
   onMount(async () => {
+    initAgents();
     try {
       await loadSettings();
     } catch (e) {
       gerr = String(e);
       return;
     }
-    if (!settings.hasKey) {
-      settingsTab = 'compte';
-      showSettings = true;
-      return;
-    }
+    if (!settings.hasKey) return;
     await loadAll();
     tick().then(() => composer?.focus());
   });
@@ -810,9 +834,9 @@
     searching = true;
     searchTimer = setTimeout(async () => {
       try {
-        const res = await api.searchChats(trimmed, 30);
+ const res = await api.searchChats(trimmed, 30);
         if (seq !== searchSeq) return;
-        searchResults = asArray(res, ['chats', 'items', 'data']).map(mapChatSummary);
+ searchResults = asArray(res, ['chats', 'items', 'data']).map(mapChatSummary);
       } catch {
         if (seq === searchSeq) searchResults = null;
       } finally {
@@ -854,7 +878,7 @@
       chats = chats.filter((x) => x.id !== chat.id);
       if (searchResults) searchResults = searchResults.filter((x) => x.id !== chat.id);
       if (!archivedChats.some((x) => x.id === chat.id)) {
-        archivedChats = [chat, ...archivedChats];
+ archivedChats = [chat, ...archivedChats];
       }
       dropMemo(chat.id);
       if (s) dropSession(s);
@@ -890,25 +914,25 @@
       const previewUrl = isImage ? URL.createObjectURL(file) : null;
       attachments.push({
         localId,
-        kind: isImage ? 'image' : 'file',
-        name: file.name || (isImage ? 'image.png' : 'fichier'),
+ kind: isImage ? 'image' : 'file',
+ name: file.name || (isImage ? 'image.png' : 'fichier'),
         size: file.size ?? 0,
         previewUrl,
         status: 'uploading',
-        error: '',
-        uploadedId: null,
+ error: '',
+ uploadedId: null,
       });
       const entry = attachments[attachments.length - 1];
       try {
         const res = await api.uploadAttachment(file, entry.kind);
-        const uploadedId = res?.id ?? res?.uuid;
+ const uploadedId = res?.id ?? res?.uuid;
         if (!uploadedId) throw new Error('Identifiant de fichier manquant.');
         entry.uploadedId = String(uploadedId);
         entry.payloadKey = res?.id ? 'files' : entry.kind === 'image' ? 'images' : 'files';
         entry.status = 'ready';
       } catch (e) {
         entry.status = 'error';
-        entry.error = String(e);
+ entry.error = String(e);
       }
     }
   }
@@ -984,7 +1008,7 @@
       if (!p) return;
       workdir = p;
       if (cur) {
-        cur.workdir = p;
+ cur.workdir = p;
         saveMemo(cur);
       }
       await api.saveSettings({ lastWorkdir: p });
@@ -1116,9 +1140,9 @@
     let lastA = null;
     const assistant = () => {
       if (!curA) {
-        s.items.push({ kind: 'assistant', id: null, text: '', reasoning: '' });
+ s.items.push({ kind: 'assistant', id: null, text: '', reasoning: '' });
         curA = s.items[s.items.length - 1];
-        lastA = curA;
+ lastA = curA;
       }
       return curA;
     };
@@ -1127,88 +1151,88 @@
     try {
       await api.sendMessage(
         {
-          chatId: s.chatId,
-          agentId: s.agentId,
+   chatId: s.chatId,
+   agentId: s.agentId,
           content,
           workdir: s.mode === 'code' ? s.workdir : null,
-          autoAccept,
-          eco,
+   autoAccept,
+   eco,
           runId,
-          images: imageIds,
-          files: fileIds,
-          enableWebSearch,
+   images: imageIds,
+   files: fileIds,
+   enableWebSearch,
         },
         (ev) => {
           const follow = visible() && nearBottom();
-          switch (ev.type) {
-            case 'opened':
-              s.chatId = ev.chat_id;
-              if (!chats.some((c) => c.id === ev.chat_id)) {
-                chats = [{ id: ev.chat_id, title: 'Nouveau chat', pinned: false }, ...chats];
-              }
-              saveMemo(s);
-              break;
-            case 'title':
-              chats = chats.map((c) => (c.id === ev.chat_id ? { ...c, title: ev.title } : c));
-              break;
+   switch (ev.type) {
+     case 'opened':
+s.chatId = ev.chat_id;
+       if (!chats.some((c) => c.id === ev.chat_id)) {
+         chats = [{ id: ev.chat_id, title: 'Nouveau chat', pinned: false }, ...chats];
+       }
+       saveMemo(s);
+       break;
+     case 'title':
+       chats = chats.map((c) => (c.id === ev.chat_id ? { ...c, title: ev.title } : c));
+break;
             case 'delta':
-              assistant().text += ev.text;
-              break;
-            case 'reasoning':
-              assistant().reasoning += ev.text;
-              break;
-            case 'tool_call':
-              curA = null;
-              s.items.push({
-                kind: 'tool',
-                callId: ev.call_id,
-                name: ev.name,
-                origin: ev.origin,
-                args: ev.args,
-                status: ev.needs_confirm ? 'pending' : 'running',
-                output: '',
-              });
-              if (ev.needs_confirm && notifSettings.enabled && notifSettings.toolConfirm && (!visible() || document.hidden)) {
-                notifyUser('Confirmation requise', `Outil : ${ev.name}`);
-              }
-              break;
-            case 'tool_result': {
-              const t = s.items.find((i) => i.kind === 'tool' && i.callId === ev.call_id);
-              if (t) {
-                t.output = ev.output;
-                t.status = ev.denied ? 'denied' : ev.is_error ? 'error' : 'ok';
-              }
-              break;
-            }
+assistant().text += ev.text;
+       break;
+     case 'reasoning':
+       assistant().reasoning += ev.text;
+       break;
+     case 'tool_call':
+       curA = null;
+       s.items.push({
+  kind: 'tool',
+         callId: ev.call_id,
+         name: ev.name,
+  origin: ev.origin,
+         args: ev.args,
+  status: ev.needs_confirm ? 'pending' : 'running',
+         output: '',
+       });
+       if (ev.needs_confirm && notifSettings.enabled && notifSettings.toolConfirm && (!visible() || document.hidden)) {
+         notifyUser('Confirmation requise', `Outil : ${ev.name}`);
+       }
+       break;
+     case 'tool_result': {
+       const t = s.items.find((i) => i.kind === 'tool' && i.callId === ev.call_id);
+       if (t) {
+         t.output = ev.output;
+  t.status = ev.denied ? 'denied' : ev.is_error ? 'error' : 'ok';
+       }
+       break;
+     }
             case 'notice':
-              curA = null;
-              s.items.push({ kind: 'notice', text: ev.text });
-              break;
-            case 'done': {
-              s.chatId = ev.chat_id;
-              const targetA = curA ?? lastA;
-              if (targetA && ev.message_id) targetA.id = ev.message_id;
-              const p = ev.total_prompt_tokens ?? 0;
-              const o = ev.total_output_tokens ?? 0;
-              const n = ev.api_calls ?? 1;
-              last = { prompt: p, output: o, calls: n, eco: ev.eco };
-              tally = {
-                calls: tally.calls + n,
-                prompt: tally.prompt + p,
-                output: tally.output + o,
-                messages: tally.messages + 1,
-              };
-              if (ev.prompt_tokens != null) s.ctx = { used: ev.prompt_tokens, max: s.ctx?.max ?? null, raw: s.ctx?.raw ?? null };
-              saveMemo(s);
-              break;
-            }
-            case 'failed':
-              s.error = `${ev.code} : ${ev.message}${ev.retryable ? ' (réessayable)' : ''}`;
-              break;
-            case 'cancelled':
-              curA = null;
-              s.items.push({ kind: 'notice', text: 'Annulé.' });
-              break;
+       curA = null;
+       s.items.push({ kind: 'notice', text: ev.text });
+       break;
+     case 'done': {
+       s.chatId = ev.chat_id;
+       const targetA = curA ?? lastA;
+       if (targetA && ev.message_id) targetA.id = ev.message_id;
+       const p = ev.total_prompt_tokens ?? 0;
+       const o = ev.total_output_tokens ?? 0;
+       const n = ev.api_calls ?? 1;
+       last = { prompt: p, output: o, calls: n, eco: ev.eco };
+       tally = {
+         calls: tally.calls + n,
+         prompt: tally.prompt + p,
+         output: tally.output + o,
+         messages: tally.messages + 1,
+       };
+       if (ev.prompt_tokens != null) s.ctx = { used: ev.prompt_tokens, max: s.ctx?.max ?? null, raw: s.ctx?.raw ?? null };
+       saveMemo(s);
+       break;
+     }
+     case 'failed':
+       s.error = `${ev.code} : ${ev.message}${ev.retryable ? ' (réessayable)' : ''}`;
+       break;
+     case 'cancelled':
+       curA = null;
+       s.items.push({ kind: 'notice', text: 'Annulé.' });
+       break;
           }
           if (follow) toBottom();
         },
@@ -1263,6 +1287,31 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
+{#if settings && !settings.hasKey}
+  <main class="login-screen">
+    <div class="login-card">
+      <img src="/logo-wordmark.png" alt="France Student" class="login-logo" />
+      <h1>Connexion à France Student</h1>
+      <p>Connecte-toi avec ton e-mail et ton mot de passe France Student. Le mot de passe n'est jamais enregistré : seule la session est conservée sur ton appareil.</p>
+      <form class="login-form" onsubmit={submitLogin}>
+        <label class="login-field">
+          <span>E-mail</span>
+   <input type="email" name="email" autocomplete="username" required bind:value={loginEmail} disabled={loginBusy} />
+        </label>
+ <label class="login-field">
+   <span>Mot de passe</span>
+   <input type="password" name="password" autocomplete="current-password" required bind:value={loginPass} disabled={loginBusy} />
+        </label>
+ {#if loginErr}<p class="msg-err" role="alert">{loginErr}</p>{/if}
+        <button type="submit" class="btn-primary" disabled={loginBusy || !loginEmail.trim() || !loginPass}>
+          {loginBusy ? 'Connexion…' : 'Se connecter'}
+        </button>
+      </form>
+      <button type="button" class="login-link" onclick={() => openSettings('compte')}>Utiliser un jeton de connexion</button>
+      {#if gerr}<p class="msg-err" role="alert">{gerr}</p>{/if}
+    </div>
+  </main>
+{:else}
 <div class="app" class:code={mode === 'code'} class:withdiff={showDiff}>
   <Sidebar
     chats={displayedChats}
@@ -1294,7 +1343,7 @@
   <section class="main">
     <header class="top" class:scrolled>
       {#key topTitle}
-        <h1 class="ttl anim-fade" title={topTitle}>{topTitle}</h1>
+ <h1 class="ttl anim-fade" title={topTitle}>{topTitle}</h1>
       {/key}
       {#key mode}
         <span class="pill modep anim-fade">{#if mode === 'code'}&lt;/&gt; Code{:else}Chat{/if}</span>
@@ -1307,13 +1356,13 @@
       {#if eco}
         <button class="pill eco anim-fade" onclick={() => openSettings('usage')} title="Mode économie actif">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          <span>ÉCO</span>
+   <span>ÉCO</span>
         </button>
       {/if}
       {#if budget}
         <button class="pill anim-fade" onclick={() => openSettings('usage')} title="Budget utilisé">
           Budget {budget.uncertain ? '~' : ''}{Math.round(budget.pct)}&#8239;%
-          <span class="mg" class:warn={budget.pct >= 80}><i style="width:{budget.pct}%"></i></span>
+   <span class="mg" class:warn={budget.pct >= 80}><i style="width:{budget.pct}%"></i></span>
         </button>
       {/if}
       <button type="button" class="pill anim-fade dfbtn" class:on={showDiff && panelTab === 'files'} onclick={() => toggleDp('files')} title="Fichiers modifiés ({diffCount})" aria-label="Fichiers modifiés">
@@ -1324,7 +1373,12 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
         {#if termState.unread}<span class="dfn">{termState.unread}</span>{/if}
       </button>
-    <PermMode />
+      {#if agentView.active || (showDiff && panelTab === 'agents')}
+        <button type="button" class="pill anim-fade dfbtn" class:on={showDiff && panelTab === 'agents'} class:wait={agentLive.waiting.length > 0} onclick={() => toggleDp('agents')} title="Agents" aria-label="Agents">
+   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          {#if agentView.count}<span class="dfn">{agentView.count}</span>{/if}
+        </button>
+      {/if}
       {#if busy}
         <div class="prog" transition:fade={{ duration: ms(160) }}></div>
       {/if}
@@ -1333,129 +1387,129 @@
     <div class="stage">
       <div class="scroll" bind:this={box} onscroll={onScroll}>
         <div class="col">
-          {#key viewUid}
-            <div class="view">
-              {#if cur?.loading}
-                <div class="loading"><span class="spin"></span> Chargement du chat…</div>
-              {:else if items.length === 0}
-                <div class="hero stagger">
-                  <div class="herologo" aria-hidden="true">
-                    <BrandLogo size={64} radius={18} />
-                  </div>
-                  <h2>{mode === 'code' ? 'Que veux-tu construire ?' : 'France Student Desktop'}</h2>
-                  <p class="dim">
-                    {mode === 'code'
-                      ? 'L’IA lit et modifie les fichiers du dossier choisi.'
-                      : 'Pose ta question ou joins un fichier.'}
-                  </p>
-                  <div class="cards">
-                    {#each cards as k, i (k.t)}
-                      <button class="card" style="animation-delay: {170 + i * 50}ms" onclick={() => useCard(k.p)}>
-                        <b>{k.t}</b>
-                        <span>{k.d}</span>
-                      </button>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
+   {#key viewUid}
+     <div class="view">
+       {#if cur?.loading}
+         <div class="loading"><span class="spin"></span> Chargement du chat…</div>
+       {:else if items.length === 0}
+         <div class="hero stagger">
+    <div class="herologo" aria-hidden="true">
+      <BrandLogo size={64} radius={18} />
+           </div>
+    <h2>{mode === 'code' ? 'Que veux-tu construire ?' : 'France Student Desktop'}</h2>
+    <p class="dim">
+      {mode === 'code'
+        ? 'L’IA lit et modifie les fichiers du dossier choisi.'
+        : 'Pose ta question ou joins un fichier.'}
+    </p>
+           <div class="cards">
+      {#each cards as k, i (k.t)}
+        <button class="card" style="animation-delay: {170 + i * 50}ms" onclick={() => useCard(k.p)}>
+          <b>{k.t}</b>
+   <span>{k.d}</span>
+ </button>
+      {/each}
+    </div>
+         </div>
+{/if}
 
-              {#each items as it, i (i)}
-                {#if it.kind === 'user'}
-                  <div class="u">
-                    <div class="ubub">
-                      {it.text}
-                      {#if it.images?.length}
-                        <div class="u-imgs">
-                          {#each it.images as src, idx (idx)}
-                            <img {src} alt="Image jointe {idx + 1}" />
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
-                    {#if it.id && cur?.chatId && !busy}
-                      <div class="u-acts">
-                        <button type="button" class="u-act" onclick={() => openForkModal(it)}>
-                          Créer une branche
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
-                {:else if it.kind === 'assistant'}
-                  <div class="ai">
-                    {#if i === 0 || !['assistant', 'tool'].includes(items[i - 1].kind)}
-                      <div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>
-                    {:else}
-                      <div></div>
-                    {/if}
-                    <div class="aib">
-                      <Message
-                        text={it.text}
-                        reasoning={it.reasoning}
-                        streaming={busy && i === items.length - 1}
-                        showActions={canShowTurnActions(items, i, busy)}
-                        pinned={isMessagePinned(cur?.chatId, it.id)}
-                        onopenurl={handleOpenUrl}
-                        onpin={it.id && cur?.chatId && !busy ? () => togglePinMessage(it, cur.chatId) : undefined}
-                      />
-                    </div>
-                  </div>
-                {:else if it.kind === 'tool'}
-                  {@const turnAi = canShowTurnActions(items, i, busy) ? lastAssistantInTurn(items, i) : null}
-                  <div class="toolrow"><Tool t={it} onresolve={resolve} /></div>
-                  {#if turnAi}
-                    <div class="ai turn-tail">
-                      <div></div>
-                      <div class="aib">
-                        <Message
-                          text=""
-                          copyText={turnAi.text}
-                          showActions={true}
-                          pinned={isMessagePinned(cur?.chatId, turnAi.id)}
-                          onpin={turnAi.id && cur?.chatId ? () => togglePinMessage(turnAi, cur.chatId) : undefined}
-                        />
-                      </div>
-                    </div>
-                  {/if}
-                {:else}
-                  {@const n = parseNote(it.text)}
-                  {#if n.kind === 'list'}
-                    <div class="mcpnote"><i class="dot"></i>MCP <b>{n.server}</b> · {n.count} outils</div>
-                  {:else if n.kind === 'call'}
-                    <details class="mcpcall {n.status}" class:nobody={!n.body} class:bad={n.label === 'erreur'}>
-                      <summary>
-                        <i class="dot"></i>
-                        <span class="mname">{n.tool}</span>
-                        {#if n.server}<span class="msrv">{n.server}</span>{/if}
-                        <span class="mst">{CALL_LABEL[n.status] ?? n.status}</span>
-                      </summary>
-                      {#if n.body}<pre>{n.body}</pre>{/if}
-                    </details>
-                  {:else if n.kind !== 'hide'}
-                    <div class="note">{it.text}</div>
-                  {/if}
-                {/if}
-              {/each}
-
-              {#if typing}
-                <div class="ai">
-                  {#if typingAvatar}<div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>{:else}<div></div>{/if}
-                  <div class="aib"><Message text="" streaming /></div>
-                </div>
-              {/if}
-            </div>
-          {/key}
+       {#each items as it, i (i)}
+         {#if it.kind === 'user'}
+           <div class="u">
+      <div class="ubub">
+        {it.text}
+        {#if it.images?.length}
+   <div class="u-imgs">
+     {#each it.images as src, idx (idx)}
+       <img {src} alt="Image jointe {idx + 1}" />
+     {/each}
+          </div>
+ {/if}
+      </div>
+      {#if it.id && cur?.chatId && !busy}
+        <div class="u-acts">
+   <button type="button" class="u-act" onclick={() => openForkModal(it)}>
+            Créer une branche
+   </button>
         </div>
+      {/if}
+    </div>
+         {:else if it.kind === 'assistant'}
+    <div class="ai">
+      {#if i === 0 || !['assistant', 'tool'].includes(items[i - 1].kind)}
+ <div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>
+      {:else}
+ <div></div>
+      {/if}
+      <div class="aib">
+        <Message
+          text={it.text}
+   reasoning={it.reasoning}
+          streaming={busy && i === items.length - 1}
+   showActions={canShowTurnActions(items, i, busy)}
+          pinned={isMessagePinned(cur?.chatId, it.id)}
+          onopenurl={handleOpenUrl}
+   onpin={it.id && cur?.chatId && !busy ? () => togglePinMessage(it, cur.chatId) : undefined}
+        />
+      </div>
+    </div>
+  {:else if it.kind === 'tool'}
+    {@const turnAi = canShowTurnActions(items, i, busy) ? lastAssistantInTurn(items, i) : null}
+           <div class="toolrow"><Tool t={it} onresolve={resolve} /></div>
+           {#if turnAi}
+      <div class="ai turn-tail">
+ <div></div>
+ <div class="aib">
+          <Message
+     text=""
+     copyText={turnAi.text}
+     showActions={true}
+     pinned={isMessagePinned(cur?.chatId, turnAi.id)}
+     onpin={turnAi.id && cur?.chatId ? () => togglePinMessage(turnAi, cur.chatId) : undefined}
+   />
+        </div>
+      </div>
+    {/if}
+         {:else}
+    {@const n = parseNote(it.text)}
+           {#if n.kind === 'list'}
+      <div class="mcpnote"><i class="dot"></i>MCP <b>{n.server}</b> · {n.count} outils</div>
+    {:else if n.kind === 'call'}
+      <details class="mcpcall {n.status}" class:nobody={!n.body} class:bad={n.label === 'erreur'}>
+ <summary>
+   <i class="dot"></i>
+          <span class="mname">{n.tool}</span>
+          {#if n.server}<span class="msrv">{n.server}</span>{/if}
+          <span class="mst">{CALL_LABEL[n.status] ?? n.status}</span>
+        </summary>
+        {#if n.body}<pre>{n.body}</pre>{/if}
+      </details>
+    {:else if n.kind !== 'hide'}
+      <div class="note">{it.text}</div>
+    {/if}
+         {/if}
+       {/each}
+
+{#if typing}
+  <div class="ai">
+           {#if typingAvatar}<div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>{:else}<div></div>{/if}
+           <div class="aib"><Message text="" streaming /></div>
+         </div>
+       {/if}
+     </div>
+          {/key}
+ </div>
       </div>
 
       {#if showJump}
         <button
           class="jump"
-          transition:fly={{ y: 10, duration: ms(160) }}
-          onclick={() => toBottom(true)}
-          title="Aller en bas"
-          aria-label="Aller en bas">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
-        </button>
+   transition:fly={{ y: 10, duration: ms(160) }}
+   onclick={() => toBottom(true)}
+   title="Aller en bas"
+   aria-label="Aller en bas">
+   <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="4" x2="9" y2="14"/><polyline points="4.5 9.5 9 14 13.5 9.5"/></svg>
+ </button>
       {/if}
     </div>
 
@@ -1463,60 +1517,64 @@
       <div class="dockin">
         {#if error}
           <div class="error errbar" out:fade={{ duration: ms(120) }}>
-            <span>{error}</span>
-            <button class="x" onclick={clearError} title="Fermer" aria-label="Fermer">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
-          </div>
+     <span>{error}</span>
+     <button class="x" onclick={clearError} title="Fermer" aria-label="Fermer">
+       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+     </button>
+   </div>
         {/if}
 
-        <Composer
-          bind:this={composer}
+ <Composer
+   bind:this={composer}
           bind:input
           bind:enableWebSearch
-          {busy}
+   {busy}
           loading={!!cur?.loading}
-          {mode}
+   {mode}
           workdir={curWorkdir}
-          {autoAccept}
           {agents}
           {curAgent}
           {skills}
           commands={COMMANDS}
-          ctx={ctxInfo}
+   ctx={ctxInfo}
           {eco}
-          {attachments}
+   {attachments}
           onerror={(m) => (gerr = m)}
-          onattachfiles={handleAttachFiles}
+   onattachfiles={handleAttachFiles}
           onremoveattachment={removeAttachment}
           onagentchange={onAgentChange}
-          onmodechange={setMode}
-          onchoosefolder={chooseFolder}
-          onautochange={setAuto}
-          onsend={send}
+   onmodechange={setMode}
+   onchoosefolder={chooseFolder}
+   onsend={send}
           onstop={stop}
         />
 
         <div class="help">
-          <span><kbd>Entrée</kbd> envoyer</span>
+   <span><kbd>Entrée</kbd> envoyer</span>
           <span>·</span>
-          <span><kbd>Maj+Entrée</kbd> saut de ligne</span>
+   <span><kbd>Maj+Entrée</kbd> saut de ligne</span>
           <span>·</span>
           <span><kbd>/</kbd> commandes</span>
-          <span>·</span>
-          <span><kbd>$</kbd> skills</span>
-          <span>·</span>
-          <span><kbd>Ctrl+V</kbd> coller une image</span>
-          <span>·</span>
-          <span><kbd>Ctrl+N</kbd> nouveau chat</span>
+   <span>·</span>
+   <span><kbd>$</kbd> skills</span>
+   <span>·</span>
+   <span><kbd>Ctrl+V</kbd> coller une image</span>
+   <span>·</span>
+   <span><kbd>Ctrl+N</kbd> nouveau chat</span>
         </div>
       </div>
     </div>
   </section>
   {#if showDiff}
-    <DiffPanel {items} cwd={curWorkdir} bind:tab={panelTab} onclose={() => (showDiff = false)} />
+    {#if panelTab === 'agents'}
+      <AgentPanel onclose={() => (showDiff = false)} />
+    {:else}
+      <DiffPanel {items} cwd={curWorkdir} bind:tab={panelTab} onclose={() => (showDiff = false)} />
+    {/if}
   {/if}
 </div>
+
+{/if}
 
 {#if showSettings && settings}
   <Settings
@@ -1536,6 +1594,12 @@
     tab={settingsTab}
     onclose={() => (showSettings = false)}
     {onsaved}
+    onlogout={async () => {
+      await loadSettings();
+      showSettings = false;
+      chats = [];
+      chatsLoaded = false;
+    }}
     oneco={setEco}
     onauto={setAuto}
     onpick={chooseFolder}
@@ -1569,37 +1633,37 @@
   <div class="overlay" onclick={() => !forkBusy && (forkModal = null)}>
     <div class="dialog fork-dlg" role="dialog" aria-modal="true" aria-labelledby="fork-title" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       <div class="dlg-head">
-        <h3 id="fork-title">Modifier et créer une branche</h3>
+ <h3 id="fork-title">Modifier et créer une branche</h3>
         <button
-          type="button"
-          class="head-x"
-          disabled={forkBusy}
-          onclick={() => (forkModal = null)}
-          aria-label="Fermer"
+   type="button"
+   class="head-x"
+   disabled={forkBusy}
+   onclick={() => (forkModal = null)}
+   aria-label="Fermer"
           title="Fermer"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       </div>
       <p class="dim dlg-sub">
-        Crée une nouvelle conversation à partir de ce message modifié. L’originale est conservée.
+ Crée une nouvelle conversation à partir de ce message modifié. L’originale est conservée.
       </p>
       <textarea
         class="fork-ta"
-        bind:this={forkTa}
-        bind:value={forkModal.content}
+ bind:this={forkTa}
+ bind:value={forkModal.content}
         rows="4"
         onkeydown={(e) => {
-          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            submitFork();
+   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+     e.preventDefault();
+     submitFork();
           }
         }}
       ></textarea>
       <div class="fork-acts">
         <button type="button" disabled={forkBusy} onclick={() => (forkModal = null)}>Annuler</button>
         <button type="button" class="primary" disabled={forkBusy || !forkModal.content.trim()} onclick={submitFork}>
-          {forkBusy ? 'Création…' : 'Créer une branche'}
+   {forkBusy ? 'Création…' : 'Créer une branche'}
         </button>
       </div>
     </div>
@@ -2431,5 +2495,23 @@
 
   .pill.dfbtn .dfn {
     border-radius: 6px;
+  }
+
+  /* boutons de la barre du haut sans contour */
+  .pill.dfbtn {
+    border-color: transparent;
+    background: transparent;
+  }
+  .pill.dfbtn:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .pill.dfbtn.on {
+    border-color: transparent;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+  .pill.dfbtn.wait {
+    color: var(--warn);
   }
 </style>

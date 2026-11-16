@@ -1,5 +1,6 @@
 ﻿<script>
   import ContextRing from './ContextRing.svelte';
+  import PermMode from './PermMode.svelte';
   let {
     input = $bindable(''),
     enableWebSearch = $bindable(false),
@@ -7,7 +8,6 @@
     loading = false,
     mode = 'chat',
     workdir = null,
-    autoAccept = false,
     agents = [],
     curAgent = null,
     ctx = null,
@@ -21,7 +21,6 @@
     onagentchange = () => {},
     onmodechange = () => {},
     onchoosefolder = () => {},
-    onautochange = () => {},
     onsend = () => {},
     onstop = () => {}
   } = $props();
@@ -465,29 +464,24 @@
         </button>
       </div>
 
-      {#if mode === 'code'}
-        <button
-          type="button"
-          class="tool-btn folder-btn"
-          disabled={busy}
-          onclick={onchoosefolder}
-          title={workdir || 'Choisir un dossier de travail'}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-          </svg>
-          <span>{workdir ? baseName : 'Choisir un dossier…'}</span>
-        </button>
+      <div class="folder-slot" class:show={mode === 'code'} inert={mode !== 'code'}>
+        <div class="folder-clip">
+          <button
+            type="button"
+            class="tool-btn folder-btn"
+            disabled={busy}
+            onclick={onchoosefolder}
+            title={workdir || 'Choisir un dossier de travail'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            <span>{workdir ? baseName : 'Choisir un dossier…'}</span>
+          </button>
+        </div>
+      </div>
 
-        <label class="auto-check" class:active={autoAccept} title="Accepter automatiquement les actions de code">
-          <input
-            type="checkbox"
-            checked={autoAccept}
-            onchange={(e) => onautochange(e.currentTarget.checked)}
-          />
-          <span>Auto</span>
-        </label>
-      {/if}
+      <PermMode up />
     </div>
 
     <div class="bar-right">
@@ -968,33 +962,6 @@
     white-space: nowrap;
   }
 
-  .auto-check {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    height: 30px;
-    padding: 0 10px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--line);
-    background: var(--panel2);
-    font-size: 0.78rem;
-    color: var(--dim);
-    cursor: pointer;
-    user-select: none;
-    transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
-  }
-
-  .auto-check.active {
-    border-color: var(--accent-line);
-    background: var(--accent-soft);
-    color: var(--accent-text);
-  }
-
-  .auto-check input {
-    accent-color: var(--accent);
-    cursor: pointer;
-  }
-
   .hidden-file {
     display: none;
   }
@@ -1002,7 +969,7 @@
   .more-wrap {
     position: relative;
     display: inline-flex;
-    order: -1;
+    order: 9;
   }
 
   .more-btn {
@@ -1169,6 +1136,35 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .auto-check {
-    flex: 0 0 auto;
-  }</style>
+
+  /* Bouton dossier : toujours monté, replié en douceur hors mode Code (largeur, espacement et opacité animés) */
+  .folder-slot {
+    display: grid;
+    grid-template-columns: 0fr;
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-right: -8px;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      grid-template-columns 0.26s cubic-bezier(0.22, 1, 0.36, 1),
+      margin-right 0.26s cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 0.2s ease;
+  }
+  .folder-slot.show {
+    grid-template-columns: 1fr;
+    margin-right: 0;
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .folder-clip {
+    display: flex;
+    min-width: 0;
+    overflow: hidden;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .folder-slot {
+      transition: none;
+    }
+  }
+</style>

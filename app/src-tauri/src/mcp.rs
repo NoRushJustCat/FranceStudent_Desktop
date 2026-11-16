@@ -809,6 +809,7 @@ impl Hub {
     ///   fs-mcp list
     ///   fs-mcp tools <serveur>
     ///   fs-mcp call <serveur> <outil> [json_args]
+    #[allow(dead_code)]
     pub async fn execute_fs_mcp_command(
         &self,
         config_dir: &Path,

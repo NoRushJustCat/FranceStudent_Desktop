@@ -2,8 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agents;
+mod agents_live;
 mod changelog;
 mod ext;
+mod login;
 mod mcp;
 mod mcp_ctx;
 mod perm;
@@ -63,8 +65,6 @@ struct AppState {
     terms: term::Terms,
     /// Mode d'autorisation courant (non persisté : jamais « système » au redémarrage).
     perm: Mutex<perm::Mode>,
-    /// Chats ayant déjà reçu le mode d'emploi des sous-agents.
-    agents_sent: Mutex<HashSet<String>>,
 }
 
 fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -170,7 +170,7 @@ async fn refresh_eco_token() -> Option<(String, u64)> {
     Some((tok, now_secs() + expires_in))
 }
 
-async fn resolve_api_key() -> Option<String> {
+async fn resolve_api_key(dir: &std::path::Path) -> Option<String> {
     let stored = fs_store::get_key();
     if let Some(ref k) = stored {
         if !k.starts_with("eyJ") {
@@ -179,6 +179,11 @@ async fn resolve_api_key() -> Option<String> {
         if jwt_exp(k).is_some_and(|exp| now_secs() + 30 < exp) {
             return Some(k.clone());
         }
+    }
+
+    // Session ouverte avec e-mail + mot de passe : le jeton d'accès est renouvelé tout seul.
+    if let Some(tok) = login::access_token(dir).await {
+ return Some(tok);
     }
 
     let cache = ECO_TOKEN_CACHE.get_or_init(|| Mutex::new(None));
@@ -201,9 +206,16 @@ async fn resolve_api_key() -> Option<String> {
 }
 
 async fn client(app: &AppHandle, state: &State<'_, AppState>) -> Result<Client, String> {
-    let key = resolve_api_key()
+    let dir = config_dir(app)?;
+    let key = resolve_api_key(&dir)
         .await
-        .ok_or("Clé API manquante : ouvre les réglages.")?;
+        .ok_or_else(|| {
+     if login::has_session(&dir) {
+  "Session France Student expirée ou injoignable : reconnecte-toi avec ton e-mail et ton mot de passe."
+     } else {
+         "Non connecté : connecte-toi avec ton e-mail et ton mot de passe."
+     }
+ })?;
     let active = ACTIVE_CLIENT_KEY.get_or_init(|| Mutex::new(None));
     let same_key = active
         .lock()
@@ -219,7 +231,7 @@ async fn client(app: &AppHandle, state: &State<'_, AppState>) -> Result<Client, 
             return Ok(c.clone());
         }
     }
-    let settings = fs_store::load(&config_dir(app)?);
+    let settings = fs_store::load(&dir);
     let c = Client::new(&settings.base_url, &key).map_err(|e| e.to_string())?;
     *slot = Some(c.clone());
     if let Ok(mut g) = active.lock() {
@@ -252,15 +264,77 @@ struct SettingsView {
 
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<SettingsView, String> {
-    let s = fs_store::load(&config_dir(&app)?);
+    let dir = config_dir(&app)?;
+    let s = fs_store::load(&dir);
     Ok(SettingsView {
         base_url: s.base_url,
-        has_key: fs_store::get_key().is_some() || has_eco_credentials(),
+        has_key: fs_store::get_key().is_some()
+     || login::has_session(&dir)
+     || has_eco_credentials(),
         last_agent_id: s.last_agent_id,
         last_workdir: s.last_workdir,
         auto_accept: s.auto_accept,
         eco: s.eco,
     })
+}
+
+/// Enregistre une clé API personnelle, générée sur le site, dans le coffre-fort système.
+#[tauri::command]
+fn store_api_token(state: State<'_, AppState>, token: String) -> Result<(), String> {
+    let key = token.trim();
+    if key.is_empty() {
+        return Err("Le jeton de connexion est requis.".to_string());
+    }
+    fs_store::set_key(key)?;
+    *state.client.lock().map_err(|_| "état interne verrouillé".to_string())? = None;
+    if let Ok(mut active) = ACTIVE_CLIENT_KEY.get_or_init(|| Mutex::new(None)).lock() {
+        *active = None;
+    }
+    Ok(())
+}
+
+/// Connexion avec l'e-mail et le mot de passe France Student. Seule la session est conservée
+/// (le mot de passe n'est jamais enregistré) ; le jeton d'accès se renouvelle ensuite seul.
+#[tauri::command]
+async fn login_password(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    email: String,
+    password: String,
+) -> Result<(), String> {
+    let dir = config_dir(&app)?;
+    login::login_with_password(&dir, &email, &password).await?;
+
+    // Vérifie que le jeton obtenu est bien accepté par l'API avant de valider la connexion.
+    let token = login::access_token(&dir)
+        .await
+        .ok_or("Connexion échouée : France Student n'a pas délivré de jeton d'accès.")?;
+    let base_url = fs_store::load(&dir).base_url;
+    let probe = Client::new(&base_url, &token).map_err(|e| e.to_string())?;
+    if let Err(e) = probe.agents().await {
+        let _ = login::clear_session(&dir);
+        return Err(format!("Connexion refusée par France Student : {e}"));
+    }
+
+    // La session prime sur un éventuel ancien jeton collé à la main.
+    fs_store::clear_key();
+    *state.client.lock().map_err(|_| "état interne verrouillé".to_string())? = None;
+    if let Ok(mut active) = ACTIVE_CLIENT_KEY.get_or_init(|| Mutex::new(None)).lock() {
+ *active = None;
+    }
+    Ok(())
+}
+
+/// Déconnexion : efface le jeton enregistré dans le coffre-fort système et la session locale.
+#[tauri::command]
+fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    fs_store::clear_key();
+    login::clear_session(&config_dir(&app)?)?;
+    *state.client.lock().map_err(|_| "état interne verrouillé".to_string())? = None;
+    if let Ok(mut active) = ACTIVE_CLIENT_KEY.get_or_init(|| Mutex::new(None)).lock() {
+        *active = None;
+    }
+    Ok(())
 }
 
 /// Chaque champ est optionnel : seuls ceux fournis sont modifiés.
@@ -358,6 +432,7 @@ async fn list_chats(
         .await
         .map_err(|e| e.to_string())?;
     mcp_ctx::strip_context(&mut v);
+    agents_live::hide_chats(&app, &mut v);
     Ok(v)
 }
 
@@ -427,9 +502,12 @@ async fn search_chats(
     limit: Option<u32>,
 ) -> Result<Value, String> {
     let c = client(&app, &state).await?;
-    c.search_chats(query.trim(), limit.unwrap_or(20))
+    let mut v = c
+        .search_chats(query.trim(), limit.unwrap_or(20))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    agents_live::hide_chats(&app, &mut v);
+    Ok(v)
 }
 
 #[tauri::command]
@@ -986,6 +1064,7 @@ async fn send_message(
     images: Option<Vec<String>>,
     files: Option<Vec<String>>,
     enable_web_search: Option<bool>,
+    local_prompt: Option<String>,
     on_event: Channel<UiEvent>,
 ) -> Result<(), String> {
     let run = run_id
@@ -1012,9 +1091,10 @@ async fn send_message(
         auto_accept,
         eco,
         opts,
+        local_prompt,
         &run,
         &flag,
-        &on_event,
+ &on_event,
     )
     .await;
 
@@ -1052,6 +1132,7 @@ async fn run_message(
     auto_accept: bool,
     eco: Option<bool>,
     mut opts: StreamOptions,
+    local_prompt: Option<String>,
     run: &str,
     flag: &AtomicBool,
     on_event: &Channel<UiEvent>,
@@ -1117,7 +1198,7 @@ async fn run_message(
         if !already_sent {
             if let Some(ctx) = state
                 .mcp
-                .context_text(&dir, root.as_deref(), root.is_some(), eco)
+                .context_text(&dir, root.as_deref(), eco)
                 .await
             {
                 content = format!("{ctx}\n\n---\n{content}");
@@ -1132,30 +1213,14 @@ async fn run_message(
         }
     }
 
-    // Mode d'emploi des sous-agents (premier message de chaque chat, mode Code) et rappel
-    // du mode d'autorisation : joints au message dans un bloc « [Contexte client] ».
-    let mut agents_pending = false;
+    // Instructions locales de l'utilisateur, jointes au message ([Contexte client]).
     {
-        let mode = perm::current(state);
         let mut pre = String::new();
-        if let Some(h) = perm::mode_hint(mode) {
-            pre.push_str(h);
-            pre.push('\n');
-        }
-        if root.is_some() {
-            let known = match chat_id.as_deref() {
-                Some(id) => state
-                    .agents_sent
-                    .lock()
-                    .map(|s| s.contains(id))
-                    .unwrap_or(false),
-                None => false,
-            };
-            if !known {
-                pre.push_str(agents::DOC);
-                pre.push('\n');
-                agents_pending = true;
-            }
+        // Prompt système local (mode développeur) : joint à chaque message, jamais synchronisé.
+        if let Some(p) = local_prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+     pre.push_str("Instructions locales de l'utilisateur :\n");
+     pre.push_str(p);
+     pre.push('\n');
         }
         if !pre.is_empty() {
             let pre = pre.trim_end().to_string();
@@ -1276,16 +1341,6 @@ async fn run_message(
             mcp_ctx_pending = false;
             if let Some(id) = chat.as_ref() {
                 if let Ok(mut sent) = state.ctx_sent.lock() {
-                    sent.insert(id.clone());
-                }
-            }
-        }
-
-        // Le mode d'emploi des sous-agents est parti avec ce message.
-        if agents_pending {
-            agents_pending = false;
-            if let Some(id) = chat.as_ref() {
-                if let Ok(mut sent) = state.agents_sent.lock() {
                     sent.insert(id.clone());
                 }
             }
@@ -1566,6 +1621,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings,
+            store_api_token,
+ login_password,
+            logout,
             pick_folder,
             list_agents,
             get_usage,
@@ -1589,6 +1647,9 @@ fn main() {
             upload_attachment,
             open_external,
             get_change_log,
+            agents_live::agents_live_snapshot,
+            agents_live::agents_live_cancel,
+            agents_live::agents_live_clear,
             term::term_start,
             term::term_write,
             term::term_kill,

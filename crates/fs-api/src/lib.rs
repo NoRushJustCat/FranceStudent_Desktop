@@ -28,7 +28,7 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("JSON invalide : {0}")]
     Json(#[from] serde_json::Error),
-    #[error("clé API invalide (caractères interdits dans un header)")]
+    #[error("jeton de connexion invalide (caractères interdits dans un header)")]
     BadKey,
     #[error("HTTP {status} : {body}")]
     Status { status: u16, body: String },

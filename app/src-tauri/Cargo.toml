@@ -16,6 +16,7 @@ tokio.workspace = true
 reqwest.workspace = true
 axum = "0.8"
 getrandom = "0.2"
+regex = "1"
 fs-api = { path = "../../crates/fs-api" }
 fs-store = { path = "../../crates/fs-store" }
 fs-tools = { path = "../../crates/fs-tools" }

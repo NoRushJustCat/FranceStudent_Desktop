@@ -1,6 +1,9 @@
 <script>
+  import DevConsole from './DevConsole.svelte';
+  import { dev, setEnabled } from './devlog.svelte.js';
+  import AgentLive from './AgentLive.svelte';
   import { untrack } from 'svelte';
-  import { saveSettings, openExternal } from './api.js';
+  import { saveSettings, storeApiToken, logout, openExternal } from './api.js';
   import { getUserInstructions, updateUserInstructions } from './instructions.js';
   import Extensions from './Extensions.svelte';
   import { THEMES, normalizeTheme } from './themes.js';
@@ -28,6 +31,7 @@
     tab: initialTab = 'apparence',
     onclose,
     onsaved,
+    onlogout,
     oneco,
     onauto,
     onpick,
@@ -160,10 +164,13 @@
     saveMsg = '';
     saveErr = '';
     try {
-      const payload = { baseUrl: baseUrl.trim() };
-      if (apiKey.trim()) payload.apiKey = apiKey.trim();
-      await saveSettings(payload);
-      apiKey = '';
+      if (baseUrl.trim() !== (settings?.baseUrl || '').trim()) {
+        await saveSettings({ baseUrl: baseUrl.trim() });
+      }
+      if (apiKey.trim()) {
+        await storeApiToken(apiKey.trim());
+        apiKey = '';
+      }
       saveMsg = 'Paramètres enregistrés.';
       onsaved?.();
     } catch (err) {
@@ -256,7 +263,7 @@
     }
   });
 
-  const navItems = [
+  const baseNav = [
     { id: 'apparence', label: 'Apparence' },
     { id: 'notifications', label: 'Notifications' },
     { id: 'usage', label: 'Usage' },
@@ -267,6 +274,8 @@
     { id: 'mcp', label: 'MCP' },
     { id: 'diag', label: 'Diagnostic' }
   ];
+  const navItems = $derived(dev.enabled ? [...baseNav, { id: 'console', label: 'Console' }] : baseNav);
+
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -277,6 +286,7 @@
     <aside class="sidebar">
       <div class="sidebar-head">
         <span class="sidebar-title">Paramètres</span>
+        <AgentLive />
       </div>
 
       <nav class="nav" aria-label="Navigation paramètres">
@@ -757,7 +767,7 @@
 
           <div class="field">
             <div class="field-head">
-              <label for="api-key">Clé d’API (jeton)</label>
+              <label for="api-key">Jeton de connexion</label>
               {#if settings?.hasKey}
                 <span class="status-active compact">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
@@ -770,14 +780,14 @@
                 id="api-key"
                 type={showKey ? 'text' : 'password'}
                 class="input"
-                placeholder={settings?.hasKey ? 'Laisse vide pour conserver la clé actuelle' : 'Colle ta clé API'}
+                placeholder={settings?.hasKey ? 'Laisse vide pour conserver le jeton actuel' : 'Colle ton jeton de connexion'}
                 bind:value={apiKey}
               />
               {#if apiKey.length > 0}
                 <button
                   type="button"
                   class="eye-btn"
-                  aria-label={showKey ? 'Masquer la clé' : 'Afficher la clé'}
+                  aria-label={showKey ? 'Masquer le jeton' : 'Afficher le jeton'}
                   onclick={() => (showKey = !showKey)}
                 >
                   {#if showKey}
@@ -801,15 +811,21 @@
             <button type="submit" class="btn-primary" disabled={saving || !accountDirty}>
               {saving ? 'Enregistrement…' : 'Enregistrer'}
             </button>
-            <button
-              type="button"
-              class="btn-ghost"
-              onclick={() => openExternal('https://ia.francestudent.org/settings')}
-            >
-              <span>Gérer sur ia.francestudent.org</span>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            </button>
           </div>
+          {#if settings?.hasKey}
+            <button type="button" class="btn-ghost" disabled={saving} onclick={async () => {
+              saving = true;
+              saveErr = '';
+              try {
+                await logout();
+                await onlogout?.();
+              } catch (err) {
+                saveErr = err?.message || 'Impossible de se déconnecter.';
+              } finally {
+                saving = false;
+              }
+            }}>Se déconnecter</button>
+          {/if}
         </form>
 
       {:else if tab === 'code'}
@@ -863,6 +879,8 @@
 
       {:else if tab === 'skills' || tab === 'mcp'}
         <Extensions embedded section={tab} {workdir} {oninsert} onchange={onextchange} {onclose} />
+      {:else if tab === 'console'}
+        <DevConsole />
 
       {:else if tab === 'diag'}
         <header class="sec-head diag-head">
@@ -878,6 +896,7 @@
             <button type="button" class="head-x" aria-label="Fermer" onclick={() => onclose?.()}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
+            <label><input type="checkbox" checked={dev.enabled} onchange={(e) => setEnabled(e.currentTarget.checked)} /> Mode développeur</label>
           </div>
         </header>
 
@@ -934,7 +953,12 @@
 
   .sidebar-head {
     padding: 4px 10px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
   }
+
 
   .sidebar-title {
     font-size: 13px;

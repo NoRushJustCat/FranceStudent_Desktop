@@ -1,10 +1,13 @@
 <script>
   // Pastille + menu du mode d'autorisation. L'état vit dans permstore.svelte.js.
+  // up : le menu s'ouvre vers le haut (pastille placée en bas, dans la barre du composer).
   import { perm, MODES, setMode } from './permstore.svelte.js';
+
+  let { up = false } = $props();
 
   let open = $state(false);
   let btn = $state(null);
-  let pos = $state({ top: 0, left: 0 });
+  let pos = $state({ top: null, bottom: null, left: 0 });
 
   const cur = $derived(MODES.find((m) => m.id === perm.mode) ?? MODES[0]);
 
@@ -12,10 +15,10 @@
     if (!open && btn) {
       const r = btn.getBoundingClientRect();
       const w = 300;
-      pos = {
-        top: r.bottom + 6,
-        left: Math.max(8, Math.min(r.left, window.innerWidth - w - 8)),
-      };
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+      pos = up
+        ? { top: null, bottom: window.innerHeight - r.top + 6, left }
+        : { top: r.bottom + 6, bottom: null, left };
     }
     open = !open;
   }
@@ -35,6 +38,12 @@
   function onKey(e) {
     if (e.key === 'Escape') open = false;
   }
+
+  // Rattache le menu à <body> : échappe aux parents du composer (transform, overflow, z-index).
+  function portal(node) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
 </script>
 
 <svelte:window onclick={onDoc} onkeydown={onKey} />
@@ -43,6 +52,7 @@
   class="pm-btn"
   class:danger={perm.mode === 'full'}
   class:plan={perm.mode === 'plan'}
+  class:up
   bind:this={btn}
   onclick={toggle}
   title={'Autorisations : ' + cur.label}
@@ -58,10 +68,18 @@
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 6v6c0 5 3.8 9.3 9 10 5.2-.7 9-5 9-10V6z"/></svg>
   {/if}
   <span>{cur.label}</span>
+  <svg class="pm-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
 </button>
 
 {#if open}
-  <div class="pm-menu" role="menu" style:top={pos.top + 'px'} style:left={pos.left + 'px'}>
+  <div
+    class="pm-menu"
+    use:portal
+    role="menu"
+    style:top={pos.top != null ? pos.top + 'px' : null}
+    style:bottom={pos.bottom != null ? pos.bottom + 'px' : null}
+    style:left={pos.left + 'px'}
+  >
     {#each MODES as m (m.id)}
       <button
         class="pm-item"
@@ -82,21 +100,38 @@
   .pm-btn {
     display: inline-flex;
     align-items: center;
+    flex: 0 0 auto;
     gap: 6px;
     height: 30px;
     padding: 0 10px;
     border: 1px solid var(--line);
-    border-radius: 8px;
-    background: transparent;
+    border-radius: var(--radius-sm, 8px);
+    background: var(--panel2);
     color: var(--dim);
     font: inherit;
-    font-size: 12px;
+    font-size: 0.78rem;
     cursor: pointer;
     white-space: nowrap;
+    transition: border-color 0.15s ease, color 0.15s ease;
+  }
+  .pm-chev {
+    display: block;
+    flex-shrink: 0;
+    margin-left: 2px;
+    transition: transform 0.15s;
+  }
+  .pm-btn.up .pm-chev {
+    transform: rotate(180deg);
+  }
+  .pm-btn.up[aria-expanded='true'] .pm-chev {
+    transform: none;
+  }
+  .pm-btn:not(.up)[aria-expanded='true'] .pm-chev {
+    transform: rotate(180deg);
   }
   .pm-btn:hover {
-    background: var(--hover);
     color: var(--text);
+    border-color: var(--line2);
   }
   .pm-btn.plan {
     background: var(--accent-soft);

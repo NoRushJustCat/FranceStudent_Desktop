@@ -1,7 +1,11 @@
 // Fine couche au-dessus des commandes Tauri (voir src-tauri/src/main.rs et ext.rs).
 import { invoke, Channel } from '@tauri-apps/api/core';
+import { activeLocalPrompt } from './devlog.svelte.js';
 
 export const getSettings = () => invoke('get_settings');
+export const storeApiToken = (token) => invoke('store_api_token', { token });
+export const loginPassword = (email, password) => invoke('login_password', { email, password });
+export const logout = () => invoke('logout');
 
 // Seuls les champs fournis (non null) sont modifiés côté Rust.
 export const saveSettings = ({
@@ -141,6 +145,7 @@ export function sendMessage(
     images: images?.length ? images : null,
     files: files?.length ? files : null,
     enableWebSearch: !!enableWebSearch,
+    localPrompt: activeLocalPrompt() || null,
     onEvent: channel,
   });
 }

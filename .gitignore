@@ -6,3 +6,12 @@ node_modules/
 **/node_modules/
 .env
 *.env
+project-frstcli-1.0.0/
+**/project-frstcli-1.0.0/
+.fsproject.json
+tmp_edit_lines.ps1
+app/rename-svelte.ps1
+API_FranceStudent.md
+Capture d'écran 2026-11-16 110930.png
+.scratch/
+tmp_*

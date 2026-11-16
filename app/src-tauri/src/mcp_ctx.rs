@@ -134,15 +134,14 @@ fn compact_output(s: &str) -> String {
 
 impl Hub {
     /// Bloc « [Contexte client] » à joindre au premier message d'un chat : liste les
-    /// serveurs MCP locaux et leurs outils, et explique comment les appeler via
-    /// `run_command`. `None` si aucun serveur n'a pu être joint.
+    /// serveurs MCP locaux et leurs outils (données brutes, sans consigne).
+    /// `None` si aucun serveur n'a pu être joint.
     /// En mode économie (`eco`) : en-tête minimal, pas de descriptions, les paramètres
     /// requis par tous les outils d'un serveur sont indiqués une seule fois.
     pub async fn context_text(
         &self,
         config_dir: &Path,
         workdir: Option<&Path>,
-        code_mode: bool,
         eco: bool,
     ) -> Option<String> {
         let max_chars = if eco {
@@ -213,34 +212,7 @@ impl Hub {
             body = body.chars().take(max_chars).collect();
             body.push_str("\n… (liste tronquée : `mcp tools <serveur>`)\n");
         }
-        let head = if eco {
-            let scope = if code_mode {
-                "Autres commandes shell : accord de l'utilisateur."
-            } else {
-                "Hors mode Code : uniquement `mcp …`."
-            };
-            [
-                "[Contexte client] Outils MCP locaux, via run_command :",
-                "mcp call <serveur> <outil> <json> | mcp tools <serveur> [outil] (schéma complet)",
-                scope,
-                "Serveurs, outil(paramètres requis) :",
-            ]
-            .join("\n")
-        } else {
-            let scope = if code_mode {
-                "Les autres commandes shell restent soumises à l'accord de l'utilisateur."
-            } else {
-                "Hors mode Code, run_command n'accepte que les commandes `mcp …`."
-            };
-            [
-                "[Contexte client] Cette application exécute pour toi des outils MCP locaux, via l'outil client run_command, avec ces commandes :",
-                "- mcp call <serveur> <outil> <json des arguments>, par exemple : mcp call monserveur monoutil {\"param\":\"valeur\"}",
-                "- mcp tools <serveur> [outil] : liste les outils, ou donne le schéma complet d'un outil",
-                scope,
-                "Serveurs disponibles (entre parenthèses : paramètres requis) :",
-            ]
-            .join("\n")
-        };
+        let head = "[Contexte client] Serveurs MCP locaux, outil(arguments requis) :";
         Some(format!("{head}\n{body}"))
     }
 

@@ -990,6 +990,7 @@ dependencies = [
  "fs-store",
  "fs-tools",
  "getrandom 0.2.17",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

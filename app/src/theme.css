@@ -579,21 +579,21 @@
 }
 
 .app.code {
-  --accent: #14b8a6;
-  --accent-soft: rgba(20, 184, 166, 0.15);
-  --accent-line: rgba(20, 184, 166, 0.36);
-  --accent-text: #2dd4bf;
-  --accent-glow: rgba(20, 184, 166, 0.24);
-  --on-accent: #03201e;
+  --accent: #6366f1;
+  --accent-soft: rgba(99, 102, 241, 0.15);
+  --accent-line: rgba(99, 102, 241, 0.36);
+  --accent-text: #a5b4fc;
+  --accent-glow: rgba(99, 102, 241, 0.24);
+  --on-accent: #ffffff;
 }
 
 :root[data-theme='clair'] .app.code,
 :root[data-theme='fs-light'] .app.code {
-  --accent: #0f766e;
-  --accent-soft: rgba(15, 118, 110, 0.11);
-  --accent-line: rgba(15, 118, 110, 0.3);
-  --accent-text: #0f766e;
-  --accent-glow: rgba(15, 118, 110, 0.18);
+  --accent: #4f46e5;
+  --accent-soft: rgba(79, 70, 229, 0.11);
+  --accent-line: rgba(79, 70, 229, 0.3);
+  --accent-text: #4f46e5;
+  --accent-glow: rgba(79, 70, 229, 0.18);
   --on-accent: #ffffff;
 }
 
@@ -617,6 +617,64 @@ body,
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+.login-screen {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 58%), var(--bg);
+}
+
+.login-card {
+  width: min(100%, 440px);
+  padding: 36px;
+  text-align: center;
+  background: var(--panel, var(--raised));
+  border: 1px solid var(--line2);
+  border-radius: 20px;
+  box-shadow: 0 24px 80px #0003;
+}
+
+.login-logo {
+  width: min(240px, 80%);
+  max-height: 56px;
+  object-fit: contain;
+  margin-bottom: 20px;
+}
+
+.login-card h1 { margin: 0 0 10px; font-size: 23px; }
+.login-card p { color: var(--muted); margin: 0 0 24px; }
+.login-card .btn-primary { width: 100%; justify-content: center; }
+.login-form { display: grid; gap: 14px; text-align: left; }
+.login-card .msg-err {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--danger, #f87171);
+}
+.login-card > .msg-err { margin-top: 16px; }
+.login-field { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+.login-field input {
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--text, inherit);
+  background: var(--bg);
+  border: 1px solid var(--line2);
+  border-radius: 10px;
+}
+.login-field input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 1px; }
+.login-link {
+  margin-top: 16px;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.login-link:hover { color: var(--accent); }
 
 button,
 input,

@@ -97,3 +97,4 @@ pub fn clear_key() {
         let _ = e.delete_credential();
     }
 }
+
