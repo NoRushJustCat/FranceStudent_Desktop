@@ -171,7 +171,8 @@ pub async fn access_token(dir: &Path) -> Option<String> {
             session_token: cookie.clone(),
             device_id: session.device_id.clone(),
         };
-        let _ = save_session(dir, &renewed);
+        // Ne pas masquer une erreur d'écriture : le cookie renouvelé serait perdu.
+        save_session(dir, &renewed).ok()?;
     }
     set_cached_token(Some((tok.access.clone(), tok.exp)));
     Some(tok.access)

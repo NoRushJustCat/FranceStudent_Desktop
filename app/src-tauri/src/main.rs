@@ -202,7 +202,8 @@ async fn resolve_api_key(dir: &std::path::Path) -> Option<String> {
         return Some(tok);
     }
 
-    stored
+    // Ne jamais renvoyer un JWT expiré si son renouvellement a échoué.
+    stored.filter(|k| !k.starts_with("eyJ"))
 }
 
 async fn client(app: &AppHandle, state: &State<'_, AppState>) -> Result<Client, String> {
@@ -1137,8 +1138,6 @@ async fn run_message(
     flag: &AtomicBool,
     on_event: &Channel<UiEvent>,
 ) -> Result<(), String> {
-    let c = client(app, state).await?;
-
     let dir = config_dir(app)?;
     let eco = eco.unwrap_or_else(|| fs_store::load(&dir).eco);
     let max_steps = if eco { MAX_STEPS_ECO } else { MAX_STEPS };
@@ -1247,6 +1246,8 @@ async fn run_message(
     let mut seen_ev: HashSet<String> = HashSet::new();
 
     for _ in 0..max_steps {
+        // Un tour avec outils peut durer plus longtemps que le jeton initial.
+        let c = client(app, state).await?;
         let target = chat.clone();
         let mut calls: Vec<ToolCall> = Vec::new();
         let mut done: Option<(String, String, Option<u64>, Option<u64>)> = None;
