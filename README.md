@@ -4,7 +4,22 @@ Application de bureau permettant de connecter les IA de **France Student** à l�
 
 FS Code fournit une interface de chat capable d’interagir avec un projet local : lecture et recherche de fichiers, modifications contrôlées, exécution de commandes et connexion à des serveurs MCP.
 
-> **Statut :** projet en développement — version `0.1.0`.
+> **Statut :** version `0.1.0`.
+
+---
+
+## 🚀 Téléchargement et Installation rapide (Windows)
+
+**Aucun outil de développement (Node.js, Rust...) n'est requis pour installer et utiliser France Student Desktop.**
+
+1. Rendez-vous sur la page des **[Releases GitHub](https://github.com/NoRushJustCat/FranceStudent_Desktop/releases/latest)**.
+2. Dans la section **Assets**, téléchargez l'installateur :
+   - **`France.Student.Desktop_..._x64-setup.exe`** (installateur standard recommandé)
+   - ou **`France.Student.Desktop_..._x64_en-US.msi`** (package Windows Installer)
+3. Exécutez le fichier téléchargé et suivez les indications à l'écran.
+4. Au premier lancement, saisissez votre token France Student dans les réglages et sélectionnez votre dossier de travail.
+
+---
 
 ## Fonctionnalités
 
@@ -71,9 +86,13 @@ fscode/
 - Marked pour le rendu Markdown
 - DOMPurify pour la sécurisation du contenu HTML
 
-## Prérequis
+## 🛠️ Développement et Compilation depuis les sources
 
-Pour développer le projet, il faut installer :
+Cette section s'adresse uniquement aux personnes souhaitant contribuer ou compiler l'application manuellement.
+
+### Prérequis de compilation
+
+Pour développer ou compiler le projet, il faut installer :
 
 - Rust et Cargo ;
 - Node.js et npm ;

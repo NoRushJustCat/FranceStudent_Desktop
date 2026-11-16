@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tagName:
+        description: 'Nom du tag de version (ex: v0.1.0)'
+        required: false
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Setup Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './app/src-tauri -> target'
+
+      - name: Install Frontend Dependencies
+        run: |
+          cd app
+          npm ci
+
+      - name: Build Tauri App & Create GitHub Release
+        uses: tauri-apps/tauri-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: './app'
+          tagName: ${{ github.event.inputs.tagName || github.ref_name }}
+          releaseName: 'France Student Desktop ${{ github.event.inputs.tagName || github.ref_name }}'
+          releaseBody: |
+            ## France Student Desktop - Release ${{ github.event.inputs.tagName || github.ref_name }}
+
+            Téléchargez l'installateur Windows ci-dessous pour installer et utiliser l'application sans prérequis technique.
+
+            ### Fichiers d'installation disponibles :
+            - **`France.Student.Desktop_..._x64-setup.exe`** : Installateur Windows standard (recommandé).
+            - **`France.Student.Desktop_..._x64_en-US.msi`** : Package MSI pour Windows.
+          releaseDraft: false
+          prerelease: false
