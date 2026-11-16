@@ -1,199 +1,230 @@
-# France Student Desktop
+# France Student Desktop — FS Code
 
-Application de bureau permettant de connecter les IA de **France Student** à l’ordinateur de l’utilisateur.
+Client de bureau non officiel pour France Student, construit avec **Tauri 2**, **Rust** et **Svelte 5**.
 
-FS Code fournit une interface de chat capable d’interagir avec un projet local : lecture et recherche de fichiers, modifications contrôlées, exécution de commandes et connexion à des serveurs MCP.
+L’application réunit une interface de conversation et un mode Code permettant de travailler sur un projet local : explorer des fichiers, proposer des modifications, exécuter des commandes et utiliser des serveurs MCP, selon les autorisations choisies.
 
-> **Statut :** projet en développement — version `0.1.0`.
+> **Version du dépôt : `0.1.0` — en développement.** Une connexion Internet et un compte France Student disposant des accès nécessaires sont requis pour les fonctionnalités d’IA. Ce dépôt ne contient pas les serveurs de France Student.
 
 ## Fonctionnalités
 
-- Interface de bureau basée sur **Tauri** et **Svelte**.
-- Connexion à l’API France Student.
-- Sélection d’un dossier de travail local.
-- Outils disponibles pour le mode Code :
-  - `list_directory` — parcourir l’arborescence ;
-  - `read_file` — lire un fichier ou une partie d’un fichier ;
-  - `search_files` — rechercher du texte ou une expression régulière ;
-  - `edit_file` — modifier une portion de fichier ;
-  - `write_file` — créer ou réécrire un fichier ;
-  - `run_command` — exécuter une commande dans le dossier de travail.
-- Confirmation des actions sensibles :
-  - les opérations de lecture sont autorisées automatiquement ;
-  - les modifications de fichiers peuvent demander une confirmation ;
-  - l’exécution de commandes demande toujours une confirmation.
-- Protection du dossier de travail : les chemins sortant de la racine sélectionnée sont refusés.
-- Mode économie avec sorties d’outils limitées, moins d’étapes et compression automatique du contexte.
-- Gestion des agents, conversations, utilisation de l’API et contexte courant.
-- Support des extensions et des serveurs **MCP**.
-- Serveurs MCP locaux appelés via `run_command` (`mcp list`, `mcp tools`, `mcp call …`), sans tunnel, sur le principe de `fs-mcp-cli`.
-- Stockage sécurisé du token API dans le coffre-fort du système.
+- **Chat** : choix du modèle, réponses en streaming, rendu Markdown et coloration syntaxique.
+- **Conversations** : historique, recherche, renommage, épinglage, archivage et messages sauvegardés.
+- **Compte** : connexion par e-mail et mot de passe, ou saisie manuelle d’un jeton de connexion.
+- **Suivi d’utilisation** : budget, consommation et informations de contexte renvoyés par l’API.
+- **Mode Code** : sélection d’un dossier, lecture et recherche de fichiers, modifications et exécution de commandes.
+- **Suivi des modifications** : panneau de différences et terminal intégré.
+- **Autorisations** : sélection du mode depuis la barre de saisie.
+- **MCP** : configuration et utilisation de serveurs locaux, avec gestion des autorisations.
+- **Skills** : instructions réutilisables et insertion dans les conversations.
+- **Tâches parallèles** : exécution par vagues, contrat commun et suivi dédié.
+- **Personnalisation** : thèmes, notifications et mode économie.
 
-## Architecture
+La disponibilité des modèles et de certaines fonctions dépend du compte, de l’API et du support des outils par le modèle sélectionné.
 
-Le projet est organisé comme un workspace Rust avec une interface frontend JavaScript/Svelte :
+## Démarrage rapide
+
+### Prérequis
+
+Pour compiler et développer l’application :
+
+- Node.js compatible avec les dépendances du projet, et npm ;
+- Rust stable et Cargo ;
+- les prérequis de compilation de Tauri 2 pour votre système.
+
+Sous Windows, prévoyez notamment les outils de compilation C++ de Visual Studio et WebView2. Le projet contient du code spécifique à Windows : ne présumez pas qu’un build Linux ou macOS fonctionne sans adaptation ni test.
+
+### Installer les dépendances
+
+Depuis la racine du dépôt :
+
+```powershell
+cd app
+npm ci
+```
+
+Cargo récupère les dépendances Rust lors de la compilation.
+
+### Lancer l’application en développement
+
+Depuis `app/` :
+
+```powershell
+npm run tauri -- dev
+```
+
+Tauri démarre Vite, compile le backend Rust et ouvre l’application native.
+
+Pour lancer uniquement l’interface :
+
+```powershell
+npm run dev
+```
+
+Ce dernier mode sert au développement visuel : les fonctionnalités utilisant les commandes natives Tauri ne fonctionnent pas dans un navigateur ordinaire.
+
+## Connexion
+
+1. Ouvrir l’application.
+2. Renseigner l’e-mail et le mot de passe France Student.
+3. Cliquer sur **Se connecter**.
+
+L’application utilise le flux de connexion web pour obtenir une session, puis un jeton d’accès à l’API. Le mot de passe n’est pas enregistré. Le jeton d’accès est renouvelé à partir de la session enregistrée.
+
+Une session expirée ou révoquée nécessite une nouvelle connexion. Un captcha, une double authentification ou une vérification anti-robot peut empêcher la connexion automatique ; la saisie manuelle d’un jeton reste disponible.
+
+### Stockage local
+
+| Donnée | Emplacement / traitement |
+|---|---|
+| Réglages | `config.json`, dans le dossier de configuration de l’application |
+| Session issue de la connexion | `session.json`, dans le même dossier |
+| Jeton saisi manuellement | Coffre-fort du système via `keyring` |
+| Mot de passe | Utilisé pour la connexion, non enregistré |
+
+**Attention : `session.json` contient un secret de connexion en clair.** Ne le partagez pas et ne l’ajoutez pas au dépôt. Ne publiez pas non plus vos cookies, jetons, fichiers `.env` ou configurations MCP contenant des secrets.
+
+L’adresse de l’API est configurable dans les réglages. La valeur par défaut du stockage est `https://api.francestudent.org` ; le flux de connexion web utilise `https://ia.francestudent.org`.
+
+## Utiliser le mode Code
+
+1. Passer de **Chat** à **Code** dans la barre de saisie.
+2. Sélectionner un dossier de travail.
+3. Choisir le mode d’autorisation approprié.
+4. Décrire la tâche et examiner les actions proposées ainsi que les différences produites.
+
+### Outils locaux
+
+| Outil | Fonction |
+|---|---|
+| `list_directory` | Parcourir un dossier |
+| `read_file` | Lire un fichier, éventuellement par plage de lignes |
+| `search_files` | Rechercher du texte ou une expression régulière |
+| `edit_file` | Remplacer une portion précise d’un fichier |
+| `write_file` | Créer ou réécrire un fichier |
+| `run_command` | Exécuter une commande locale |
+
+### Modes d’autorisation
+
+| Mode | Comportement annoncé par l’interface |
+|---|---|
+| **Demander** | Confirmation avant une édition ou une commande |
+| **Planification** | Exploration en lecture seule ; éditions et commandes refusées |
+| **Auto** | Lectures et commandes reconnues comme sûres autorisées ; confirmation pour le reste |
+| **Projet** | Actions dans le projet sans confirmation ; confirmation pour les commandes dangereuses ou hors projet |
+| **Système** | Accès étendu, y compris hors projet, sans confirmation |
+
+Le mode **Système** demande une confirmation à l’activation et n’est pas restauré au redémarrage.
+
+> Les commandes et outils MCP s’exécutent avec les droits du processus local : le dossier de travail n’est pas un bac à sable système. Vérifiez les commandes, les modifications et les serveurs configurés. Utilisez Git et conservez des sauvegardes.
+
+### Tâches parallèles
+
+Exemple de forme acceptée :
+
+```text
+tasks parallel {"contract":"Conventions communes et fichiers attribués","tasks":[{"task":"Analyser la structure sans modifier les fichiers","role":"explore","name":"analyse","wave":1},{"task":"Réaliser une modification précisément décrite","role":"worker","name":"implementation","wave":2}]}
+```
+
+Limites définies dans `agents.rs` : **8 tâches par vague**, **12 par lancement**, **4 vagues au maximum**. Chaque tâche doit être autonome ; attribuez des fichiers distincts aux tâches qui écrivent.
+
+## MCP et skills
+
+Les serveurs MCP se configurent dans les extensions de l’application. Les dépendances propres à chaque serveur doivent être installées séparément : un serveur peut nécessiter Node.js, Python ou un autre exécutable.
+
+Les commandes locales MCP reconnues comprennent :
+
+```text
+mcp list
+mcp tools <serveur>
+mcp call <serveur> <outil> <json>
+```
+
+Les skills sont des instructions réutilisables, notamment via des fichiers `SKILL.md`. Ils peuvent être consultés et insérés depuis l’interface, et référencés avec `$nom-du-skill`.
+
+## Construire un exécutable Windows
+
+Depuis `app/` :
+
+```powershell
+npm run tauri -- build --bundles nsis
+```
+
+Le build Tauri lance automatiquement `npm run build`, compile le backend Rust et embarque l’interface. Il n’y a pas de serveur Rust séparé à démarrer pour l’usage normal de l’application.
+
+Avec la configuration actuelle du workspace, les sorties attendues sont :
+
+```text
+target/release/fs-code.exe
+target/release/bundle/nsis/*-setup.exe
+```
+
+Le dossier `target/` est à la racine du dépôt. Ces chemins peuvent changer si une cible ou un répertoire Cargo personnalisé est utilisé. Privilégiez l’installateur pour distribuer l’application.
+
+**Ne remplacez pas `tauri.conf.json` par un simple fragment de configuration.** Il doit conserver notamment `identifier`, les paramètres de fenêtre et la section de bundle.
+
+## Vérifications de développement
+
+Depuis la racine :
+
+```powershell
+cargo check
+cargo test --workspace
+```
+
+Tests ciblés de l’application :
+
+```powershell
+cargo test -p fs-code login
+cargo test -p fs-code agents
+```
+
+Compilation de l’interface, depuis `app/` :
+
+```powershell
+npm run build
+```
+
+Ces commandes ne remplacent pas les essais dans l’application : connexion, chargement des données, envoi de messages, renouvellement de session, autorisations et outils locaux. Un build réussi ne valide pas à lui seul les échanges avec l’API réelle.
+
+## Organisation du dépôt
 
 ```text
 fscode/
 ├── app/
-│   ├── src/                 # Interface Svelte
-│   ├── src-tauri/           # Application native Tauri et commandes Rust
-│   ├── scripts/             # Scripts de préparation
-│   ├── package.json
-│   └── vite.config.js
+│   ├── src/                 Interface Svelte et styles
+│   ├── src-tauri/           Backend natif, connexion, autorisations et MCP
+│   ├── public/              Ressources statiques
+│   ├── scripts/             Scripts de préparation
+│   └── package.json         Commandes npm
 ├── crates/
-│   ├── fs-agent/            # Boucle agent : événements, outils et résultats
-│   ├── fs-api/              # Client HTTP et streaming de l’API
-│   ├── fs-store/            # Réglages locaux et stockage du token API
-│   └── fs-tools/            # Outils d’interaction avec le projet local
-├── Cargo.toml
+│   ├── fs-agent/            Composants de boucle de traitement
+│   ├── fs-api/              Client API HTTP et streaming
+│   ├── fs-store/            Réglages et stockage des jetons
+│   └── fs-tools/            Outils locaux
+├── v4/                      Logos et icônes sources
+├── Cargo.toml               Workspace Rust
+├── LICENSE
 └── README.md
 ```
 
-## Technologies utilisées
+Le dossier `v4/` contient des ressources graphiques, pas une autre version exécutable de l’application. Les éventuels dossiers de référence locaux ne sont pas requis pour suivre les commandes de build ci-dessus.
 
-### Backend et application native
+## Dépannage
 
-- Rust 2021
-- Tauri 2
-- Tokio
-- Reqwest
-- Serde / Serde JSON
-- Axum
-- Keyring
-- EventSource streaming
-
-### Frontend
-
-- Svelte 5
-- Vite 7
-- JavaScript moderne
-- Marked pour le rendu Markdown
-- DOMPurify pour la sécurisation du contenu HTML
-
-## Prérequis
-
-Pour développer le projet, il faut installer :
-
-- Rust et Cargo ;
-- Node.js et npm ;
-- les dépendances système nécessaires à Tauri 2 selon le système d’exploitation ;
-- un accès à l’API France Student ;
-- un token de connexion France Student service IA.
-
-Les serveurs MCP sont lancés en local par l’application, selon la configuration de l’onglet MCP. Aucun tunnel ni binaire externe n’est nécessaire.
-
-## Installation
-
-Depuis la racine du dépôt :
-
-```bash
-cd app
-npm install
-```
-
-Les dépendances Rust sont gérées automatiquement par Cargo.
-
-## Lancer en mode développement
-
-Depuis le dossier `app` :
-
-```bash
-npm run tauri dev
-```
-
-Cette commande :
-
-1. démarre le serveur de développement Vite ;
-2. compile et lance l’application Tauri ;
-3. ouvre la fenêtre **FS Code**.
-
-Pour lancer uniquement le frontend web :
-
-```bash
-npm run dev
-```
-
-## Construire l’application
-
-Pour générer le frontend :
-
-```bash
-cd app
-npm run build
-```
-
-Pour construire l’application de bureau et ses bundles :
-
-```bash
-npm run tauri build
-```
-
-Les fichiers générés sont placés dans les répertoires de sortie de Vite et Tauri.
-
-## Configuration
-
-Au premier démarrage, ouvrez les réglages de l’application et renseignez :
-
-- l’URL de base de l’API ;
-- le token de connexion France Student ;
-- éventuellement l’agent à utiliser ;
-- le dernier dossier de travail ;
-- le mode économie ;
-- l’acceptation automatique des modifications de fichiers.
-
-L’URL par défaut de l’API est :
-
-```text
-https://api.francestudent.org
-```
-
-Les réglages non sensibles sont enregistrés dans un fichier `config.json` dans le dossier de configuration de l’application. Le jeton API est stockée dans le coffre-fort système. En développement, elle peut également être fournie avec la variable d’environnement :
-
-```bash
-FS_KEY="votre-cle-api"
-```
-
-## Sécurité
-
-Les outils locaux sont exécutés uniquement à l’intérieur du dossier de travail sélectionné. Le projet refuse notamment :
-
-- les chemins absolus situés en dehors du dossier de travail ;
-- les chemins contenant une remontée non autorisée avec `..` ;
-- les liens symboliques qui sortent de la racine ;
-- les commandes dépassant le délai maximal autorisé.
-
-Les opérations sont classées par niveau de risque :
-
-| Outil | Niveau | Confirmation |
-|---|---:|---|
-| `list_directory` | Faible | Non |
-| `read_file` | Faible | Non |
-| `search_files` | Faible | Non |
-| `edit_file` | Modification | Oui, sauf mode automatique |
-| `write_file` | Modification | Oui, sauf mode automatique |
-| `run_command` | Commande | Toujours |
-
-Même lorsque l’acceptation automatique des modifications est activée, l’exécution de commandes reste soumise à confirmation.
-
-Hors mode Code, `run_command` n’accepte que les commandes `mcp …`. `mcp list` et `mcp tools` sont libres ; `mcp call` demande confirmation.
-
-## Limites actuelles
-
-- Le crate `fs-agent` contient encore une implémentation minimale de la boucle agent.
-- Le stockage local des conversations et du compteur de requêtes est prévu mais pas encore implémenté dans `fs-store`.
-- Le projet est actuellement en version `0.1.0` et peut évoluer rapidement.
-
-## Licence
-
-Le projet est distribué sous licence **MIT**. Voir le fichier [`LICENSE`](LICENSE).
+- **Erreur de configuration JSON** : vérifier que `app/src-tauri/tauri.conf.json` est un objet JSON complet, sans virgule finale ni texte supplémentaire.
+- **Champ `identifier` manquant** : restaurer la configuration complète, plutôt qu’ajouter uniquement le bloc `build`.
+- **HTTP 401** : vérifier la session et se reconnecter si nécessaire. Une session révoquée ne peut pas être rétablie par le seul renouvellement d’un jeton.
+- **Interface vide après connexion** : relever le message d’erreur et vérifier l’accès réseau à l’API. Ne transmettre aucun secret avec les journaux.
+- **Outil MCP indisponible** : vérifier la commande du serveur, ses dépendances et sa configuration locale.
+- **Commande refusée** : vérifier le mode d’autorisation et le dossier de travail sélectionné.
 
 ## Contribution
 
-Les contributions sont les bienvenues. Avant de proposer une modification :
+Gardez les changements ciblés, ajoutez des tests pour les comportements modifiés et décrivez les vérifications réellement effectuées. Pour les changements liés aux outils, à l’authentification ou aux autorisations, documentez également les risques et les limites.
 
-1. créez une branche dédiée ;
-2. décrivez clairement le changement ;
-3. testez l’application en développement ;
-4. vérifiez que les changements respectent les règles de sécurité du dossier de travail ;
-5. ouvrez une pull request avec un résumé et les éventuelles étapes de test.
+## Licence et affiliation
+
+Le dépôt contient une licence **Apache License 2.0** : voir [LICENSE](LICENSE).
+
+Ce client se présente comme **non officiel**. Les noms, logos et services France Student restent soumis aux droits et conditions de leurs titulaires ; la licence du code n’accorde pas à elle seule des droits sur ces éléments.
