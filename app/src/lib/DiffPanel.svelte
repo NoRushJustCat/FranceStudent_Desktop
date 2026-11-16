@@ -289,7 +289,7 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    height: 100vh;
+    height: 100%;
     width: var(--dpcol, 100%);
     flex-shrink: 0;
     border-left: 1px solid var(--line);

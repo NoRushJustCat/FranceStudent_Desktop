@@ -1,18 +1,20 @@
-﻿<script>
+<script>
   // France Student Desktop : fenêtre principale.
   // Chaque chat ouvert = une « session » en mémoire. Changer de chat ne fait que changer
   // la session affichée : les générations en cours continuent en arrière-plan.
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import * as api from './lib/api.js';
-  import Sidebar from './lib/Sidebar.svelte';
+  import FloatingHeader from './lib/FloatingHeader.svelte';
+  import HistoryDrawer from './lib/HistoryDrawer.svelte';
   import BrandLogo from './lib/BrandLogo.svelte';
-  import Composer from './lib/Composer.svelte';
+  import PillComposer from './lib/PillComposer.svelte';
+  import CommandPalette from './lib/CommandPalette.svelte';
+  import TaskInspector from './lib/TaskInspector.svelte';
   import Message from './lib/Message.svelte';
   import Tool from './lib/Tool.svelte';
   import DiffPanel from './lib/DiffPanel.svelte';
   import { term as termState } from './lib/termstore.svelte.js';
-  import PermMode from './lib/PermMode.svelte';
   import Settings from './lib/Settings.svelte';
   import { THEMES, normalizeTheme } from './lib/themes.js';
 
@@ -146,12 +148,99 @@
   let showSettings = $state(false);
   let showDiff = $state(false);
   let panelTab = $state('files');
+  let drawerOpen = $state(false);
+  let paletteOpen = $state(false);
+  let inspectorOpen = $state(false);
+
   function toggleDp(t) {
-    if (showDiff && panelTab === t) showDiff = false;
-    else {
+    if (showDiff && panelTab === t) {
+      showDiff = false;
+    } else {
       panelTab = t;
       showDiff = true;
+      inspectorOpen = false;
     }
+  }
+
+  function toggleInspector() {
+    inspectorOpen = !inspectorOpen;
+    if (inspectorOpen) showDiff = false;
+  }
+
+  // ---- Éco v2 & Outils PC 0-token ----
+  function loadEcoV2() {
+    try {
+      const raw = localStorage.getItem('fscode.eco_v2');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {};
+  }
+  const initialEco = loadEcoV2();
+  let smartRoute = $state(initialEco.smartRoute || 'eco');
+  let conciseMode = $state(initialEco.conciseMode ?? true);
+  let ecoShield = $state(initialEco.ecoShield ?? true);
+  let autoCompactPct = $state(initialEco.autoCompactPct ?? 65);
+  let savedTokens = $state(initialEco.savedTokens ?? 0);
+  let savedRequests = $state(initialEco.savedRequests ?? 0);
+
+  $effect(() => {
+    try {
+      localStorage.setItem(
+        'fscode.eco_v2',
+        JSON.stringify({
+          smartRoute,
+          conciseMode,
+          ecoShield,
+          autoCompactPct,
+          savedTokens,
+          savedRequests,
+        })
+      );
+    } catch {}
+  });
+
+  let gitSummary = $state(null);
+  let sysInfo = $state(null);
+  let mcpConnected = $state(0);
+
+  let rangeModalOpen = $state(false);
+  let rangePath = $state('');
+  let rangeStart = $state(1);
+  let rangeEnd = $state(60);
+  let rangeError = $state('');
+  let rangeLoading = $state(false);
+
+  async function refreshSysInfo() {
+    try {
+      sysInfo = await api.pcSysInfo();
+    } catch {}
+  }
+
+  async function refreshGitSummary(dir) {
+    const target = dir ?? curWorkdir;
+    if (!target) {
+      gitSummary = null;
+      return;
+    }
+    try {
+      gitSummary = await api.pcGitSummary(target);
+    } catch {}
+  }
+
+  async function refreshMcpCount() {
+    try {
+      const res = await api.mcpStatus();
+      if (Array.isArray(res)) {
+        mcpConnected = res.filter((s) => s.connected || s.status === 'connected').length;
+      } else if (res && typeof res === 'object') {
+        mcpConnected = Object.values(res).filter((v) => v === true || v?.connected).length;
+      }
+    } catch {}
+  }
+
+  function isShortSimpleMessage(msg) {
+    const t = String(msg || '').trim();
+    return t.length > 0 && t.length <= 180 && !t.includes('```') && t.split('\n').length <= 3;
   }
   let settingsTab = $state('compte');
   let showJump = $state(false);
@@ -165,7 +254,7 @@
   let sessions = $state([]);
   let viewUid = $state(null);
 
-  let box;
+  let box = $state(null);
   let composer = $state(null);
   let uidSeq = 0;
   let runSeq = 0;
@@ -347,6 +436,23 @@
     cur?.chatId ? (chats.find((c) => c.id === cur.chatId)?.title ?? 'Chat') : 'Nouveau chat',
   );
   const cards = $derived(mode === 'code' ? CODE_CARDS : CHAT_CARDS);
+  const isLight = $derived(normalizeTheme(theme) === 'clair');
+  const gitDirtyCount = $derived(
+    (gitSummary?.modified_count || 0) + (gitSummary?.staged_count || 0) + (gitSummary?.untracked_count || 0)
+  );
+  const ctxPctNum = $derived(
+    ctxInfo?.used && ctxInfo?.max ? Math.min(100, Math.round((ctxInfo.used / ctxInfo.max) * 100)) : 0
+  );
+  const ecoLabel = $derived(
+    smartRoute === 'eco' ? 'Éco' : smartRoute === 'balanced' ? 'Équilibré' : 'Max'
+  );
+  const showEcoBanner = $derived(ecoShield && (budget?.pct ?? 0) >= 80 && smartRoute !== 'eco');
+
+  $effect(() => {
+    if (mode === 'code' && curWorkdir) {
+      refreshGitSummary(curWorkdir);
+    }
+  });
 
   const displayedChats = $derived.by(() => {
     const f = searchQuery.trim().toLowerCase();
@@ -766,7 +872,7 @@
       gerr = String(e);
       if (agentId == null) agentId = settings?.lastAgentId ?? -2001;
     }
-    await Promise.all([loadChats(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs()]);
+    await Promise.all([loadChats(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs(), refreshSysInfo(), refreshMcpCount()]);
   }
   async function loadSettings() {
     settings = await api.getSettings();
@@ -988,6 +1094,7 @@
         saveMemo(cur);
       }
       await api.saveSettings({ lastWorkdir: p });
+      refreshGitSummary(p);
     } catch (e) {
       gerr = String(e);
     }
@@ -1053,6 +1160,231 @@
     tick().then(() => composer?.focus());
   }
 
+  function appendLocalTurn(userText, systemReply) {
+    let s = cur;
+    if (!s) {
+      s = mkSession({ mode: draftMode, workdir, agentId });
+      drafts.delete('new');
+      viewUid = s.uid;
+    }
+    s.items.push({ kind: 'user', id: null, text: userText, images: [] });
+    s.items.push({ kind: 'assistant', id: null, text: systemReply, reasoning: '' });
+    toBottom();
+  }
+
+  function evalSafeCalc(expr) {
+    const cleaned = expr.trim();
+    if (!cleaned || !/^[0-9+\-*/().\s]+$/.test(cleaned)) {
+      throw new Error('Expression invalide (autorisés : 0-9 + - * / ( ) .)');
+    }
+    // eslint-disable-next-line no-new-func
+    const result = Function(`"use strict"; return (${cleaned});`)();
+    if (typeof result !== 'number' || !Number.isFinite(result)) {
+      throw new Error('Résultat non numérique');
+    }
+    return result;
+  }
+
+  async function handleLocalSlashCommand(rawText) {
+    const trimmed = String(rawText || '').trim();
+    if (!trimmed.startsWith('/')) return false;
+
+    const [cmdRaw, ...rest] = trimmed.split(/\s+/);
+    const cmd = cmdRaw.toLowerCase();
+    const arg = rest.join(' ').trim();
+    const cmdName = cmd.slice(1);
+
+    if (cmd === '/sys') {
+      try {
+        const info = await api.pcSysInfo();
+        sysInfo = info;
+        appendLocalTurn(
+          trimmed,
+          [
+            `**Système (0 token)**`,
+            `- OS : ${info?.os || 'N/A'} (${info?.arch || 'N/A'}) · ${info?.hostname || ''}`,
+            `- CPU : ${info?.cpu_cores ?? '?'} cœurs`,
+            `- RAM : ${info?.memory_hint || '?'}`,
+            `- Disque : ${info?.disk_hint || '?'}`,
+          ].join('\n')
+        );
+        savedRequests += 1;
+        savedTokens += 450;
+      } catch (e) {
+        gerr = String(e);
+      }
+      return true;
+    }
+
+    if (cmd === '/git') {
+      try {
+        const g = await api.pcGitSummary(curWorkdir || workdir || '.');
+        gitSummary = g;
+        const filesList = Array.isArray(g?.files) && g.files.length
+          ? g.files.slice(0, 15).map((f) => `- \`${f.status}\` ${f.path}`).join('\n')
+          : '- Aucun changement';
+        const commitsList = Array.isArray(g?.recent_commits) && g.recent_commits.length
+          ? g.recent_commits.slice(0, 5).map((c) => `- ${c}`).join('\n')
+          : '- Aucun';
+        appendLocalTurn(
+          trimmed,
+          [
+            `**Git (0 token)** — Branche : \`${g?.branch || 'N/A'}\` (${g?.modified_count ?? 0} modifié(s))`,
+            filesList,
+            `**Commits récents :**\n${commitsList}`,
+          ].join('\n\n')
+        );
+        savedRequests += 1;
+        savedTokens += 450;
+      } catch (e) {
+        gerr = String(e);
+      }
+      return true;
+    }
+
+    if (cmd === '/files') {
+      try {
+        const files = await api.pcFindFiles(curWorkdir || workdir || '.', arg || null, 60);
+        const list = Array.isArray(files) && files.length
+          ? files.map((f) => `- \`${f}\``).join('\n')
+          : 'Aucun fichier trouvé.';
+        appendLocalTurn(trimmed, `**Fichiers (0 token)** ${arg ? `(${arg})` : ''}\n\n${list}`);
+        savedRequests += 1;
+        savedTokens += 450;
+      } catch (e) {
+        gerr = String(e);
+      }
+      return true;
+    }
+
+    if (cmd === '/clean') {
+      try {
+        const preview = await api.pcQuickCleanPreview(curWorkdir || workdir || '.');
+        const itemsList = Array.isArray(preview?.items) && preview.items.length
+          ? preview.items.map((i) => `- \`${i.path || i.name}\` : ${i.size || '?'}`).join('\n')
+          : 'Aucun cache lourd détecté.';
+        appendLocalTurn(trimmed, `**Aperçu nettoyage caches (0 token)**\n\n${itemsList}`);
+        savedRequests += 1;
+        savedTokens += 450;
+      } catch (e) {
+        gerr = String(e);
+      }
+      return true;
+    }
+
+    if (cmd === '/calc') {
+      try {
+        const res = evalSafeCalc(arg);
+        appendLocalTurn(trimmed, `**Calcul (0 token) :** \`${arg}\` = **${res}**`);
+        savedRequests += 1;
+        savedTokens += 450;
+      } catch (e) {
+        gerr = String(e);
+      }
+      return true;
+    }
+
+    if (cmd === '/help') {
+      appendLocalTurn(
+        trimmed,
+        [
+          `**Commandes locales (0 token) :**`,
+          `- \`/sys\` — Infos système PC (OS, CPU, RAM, Disque)`,
+          `- \`/git\` — État Git et derniers commits`,
+          `- \`/files [filtre]\` — Lister les fichiers du projet`,
+          `- \`/clean\` — Aperçu des caches lourds`,
+          `- \`/calc <expr>\` — Calculatrice rapide`,
+          `- \`/compact\` — Compacter le contexte`,
+          `- \`/chat\` · \`/code\` · \`/dossier\` · \`/parametres\``,
+          ``,
+          `**Raccourcis :** \`Ctrl+K\` Palette · \`Ctrl+B\` Historique · \`Ctrl+N\` Nouveau chat`,
+        ].join('\n')
+      );
+      savedRequests += 1;
+      savedTokens += 450;
+      return true;
+    }
+
+    const matchCmd = COMMANDS.find(
+      (c) => c.name === cmdName || (c.alias && c.alias.includes(cmdName))
+    );
+    if (matchCmd) {
+      await matchCmd.run();
+      return true;
+    }
+
+    return false;
+  }
+
+  function openRangeModal() {
+    rangeError = '';
+    rangeModalOpen = true;
+  }
+
+  async function submitRangeModal() {
+    if (!rangePath.trim()) {
+      rangeError = 'Veuillez saisir un chemin de fichier.';
+      return;
+    }
+    rangeLoading = true;
+    rangeError = '';
+    try {
+      const start = Math.max(1, Number(rangeStart) || 1);
+      const end = Math.max(start, Number(rangeEnd) || start + 50);
+      const res = await api.pcReadRange(curWorkdir || workdir || '.', rangePath.trim(), start, end);
+      const label = `${rangePath.trim()}:L${start}-L${end}`;
+      const snippet = typeof res === 'string' ? res : res?.content || '';
+      attachments = [
+        ...attachments,
+        {
+          localId: 'range-' + (++attSeq),
+          name: label,
+          kind: 'file',
+          status: 'ready',
+          inlineContent: snippet,
+        },
+      ];
+      savedTokens += 600;
+      rangeModalOpen = false;
+      rangePath = '';
+    } catch (e) {
+      rangeError = String(e?.message || e || 'Impossible de lire la plage.');
+    } finally {
+      rangeLoading = false;
+    }
+  }
+
+  async function handlePaletteAction(action) {
+    if (!action) return;
+    paletteOpen = false;
+    switch (action.type) {
+      case 'slash_cmd':
+        await handleLocalSlashCommand(action.value);
+        break;
+      case 'new_chat':
+        newChat();
+        break;
+      case 'set_mode':
+        setMode(action.value === 'agent' ? 'code' : action.value);
+        break;
+      case 'compact':
+        await compact();
+        break;
+      case 'pick_folder':
+        await chooseFolder();
+        break;
+      case 'open_settings':
+        openSettings('compte');
+        break;
+      case 'set_theme':
+        theme = normalizeTheme(action.value);
+        break;
+      case 'select_chat':
+        await openChat(action.value);
+        break;
+    }
+  }
+
   // ---- envoi ----
   async function resolve(t, allow, always) {
     try {
@@ -1064,14 +1396,26 @@
     }
   }
 
-  async function send() {
+  async function send(overrideText = null) {
+    const rawFromComposer = typeof overrideText === 'string' ? overrideText : input;
+    const trimmedCmd = rawFromComposer.trim();
+    if (trimmedCmd.startsWith('/') && (await handleLocalSlashCommand(trimmedCmd))) {
+      input = '';
+      return;
+    }
+
     const readyAtts = attachments.filter((a) => a.status === 'ready');
     const uploading = attachments.some((a) => a.status === 'uploading');
     if (uploading) return;
 
-    const rawText = input.trim();
+    const rawText = trimmedCmd;
     if ((!rawText && readyAtts.length === 0) || busy || cur?.loading) return;
-    const content = rawText || 'Analyse ces pièces jointes.';
+
+    const inlineAtts = readyAtts.filter((a) => typeof a.inlineContent === 'string');
+    const inlineBlock = inlineAtts.length
+      ? inlineAtts.map((a) => `\`\`\`text:${a.name}\n${a.inlineContent}\n\`\`\``).join('\n\n') + '\n\n'
+      : '';
+    const content = inlineBlock + (rawText || 'Analyse ces pièces jointes.');
 
     if (mode === 'code' && !curWorkdir) {
       gerr = 'Choisis d’abord un dossier de travail (bouton Dossier sous la zone de texte).';
@@ -1083,10 +1427,10 @@
     }
 
     const imageIds = readyAtts
-      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'images')
+      .filter((a) => a.uploadedId && (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'images')
       .map((a) => a.uploadedId);
     const fileIds = readyAtts
-      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'files')
+      .filter((a) => a.uploadedId && (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'files')
       .map((a) => a.uploadedId);
     const userImages = readyAtts.filter((a) => a.kind === 'image' && a.previewUrl).map((a) => a.previewUrl);
     const attNames = readyAtts.filter((a) => a.kind === 'file').map((a) => a.name);
@@ -1132,7 +1476,7 @@
           content,
           workdir: s.mode === 'code' ? s.workdir : null,
           autoAccept,
-          eco,
+          eco: eco || (smartRoute === 'eco' && isShortSimpleMessage(content)) || (ecoShield && (budget?.pct ?? 0) >= 80),
           runId,
           images: imageIds,
           files: fileIds,
@@ -1244,16 +1588,25 @@
 
   function onWindowKey(e) {
     if (e.key === 'Escape') {
-      if (forkModal && !forkBusy) forkModal = null;
+      if (rangeModalOpen) rangeModalOpen = false;
+      else if (forkModal && !forkBusy) forkModal = null;
+      else if (paletteOpen) paletteOpen = false;
       else if (showSettings) showSettings = false;
+      else if (drawerOpen) drawerOpen = false;
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !showSettings && !forkModal) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && !forkModal && !rangeModalOpen) {
       const k = e.key.toLowerCase();
-      if (k === 'n') {
+      if (k === 'k') {
+        e.preventDefault();
+        paletteOpen = !paletteOpen;
+      } else if (k === 'b' && !showSettings) {
+        e.preventDefault();
+        drawerOpen = !drawerOpen;
+      } else if (k === 'n' && !showSettings) {
         e.preventDefault();
         newChat();
-      } else if (k === ',') {
+      } else if (k === ',' && !showSettings) {
         e.preventDefault();
         openSettings('compte');
       }
@@ -1263,292 +1616,405 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
-<div class="app" class:code={mode === 'code'} class:withdiff={showDiff}>
-  <Sidebar
-    chats={displayedChats}
-    {chatsLoaded}
-    activeChatId={cur?.chatId ?? null}
-    getState={chatState}
-    {theme}
-    {eco}
-    {searchQuery}
-    {searching}
-    {savedMessages}
-    {archivedChats}
-    bind:filterTab={sidebarTab}
-    ontheme={(t) => (theme = normalizeTheme(t))}
-    onsearch={handleSearch}
-    onnew={newChat}
-    onopen={openChat}
-    onrename={handleRename}
-    onpin={handlePin}
-    onarchive={handleArchive}
-    ondelete={handleDelete}
-    onsettings={openSettings}
-    onopensaved={handleOpenSavedMessage}
-    onunsavemsg={handleUnsaveMessage}
-    oncopysaved={handleCopySavedMessage}
-    onrestore={handleRestoreChat}
+<div class="app-shell">
+  <FloatingHeader
+    {isLight}
+    {mode}
+    workdir={curWorkdir || ''}
+    gitBranch={gitSummary?.branch || ''}
+    {gitDirtyCount}
+    {drawerOpen}
+    {inspectorOpen}
+    {ecoLabel}
+    {savedTokens}
+    usagePct={budget?.pct ?? null}
+    {mcpConnected}
+    {showDiff}
+    {panelTab}
+    {diffCount}
+    termUnread={termState.unread}
+    {busy}
+    onToggleDrawer={() => (drawerOpen = !drawerOpen)}
+    onNewChat={newChat}
+    onToggleInspector={toggleInspector}
+    onOpenPalette={() => (paletteOpen = true)}
+    onOpenSettings={() => openSettings('apparence')}
+    onPickFolder={chooseFolder}
+    onToggleDiff={toggleDp}
+    onOpenEco={() => openSettings('eco')}
   />
 
-  <section class="main">
-    <header class="top" class:scrolled>
-      {#key topTitle}
-        <h1 class="ttl anim-fade" title={topTitle}>{topTitle}</h1>
-      {/key}
-      {#key mode}
-        <span class="pill modep anim-fade">{#if mode === 'code'}&lt;/&gt; Code{:else}Chat{/if}</span>
-      {/key}
-      <span class="spacer"></span>
-      {#if busy}
-        <span class="pill live" out:fade={{ duration: ms(120) }}>Génération en cours</span>
-      {/if}
+  {#if showEcoBanner}
+    <div class="eco-banner">
+      <span>Bouclier Quota 80% actif ({Math.round(budget?.pct ?? 0)}%) — Bascule recommandée vers le mode Éco</span>
+      <button type="button" class="eco-banner-btn" onclick={() => (smartRoute = 'eco')}>Passer en Éco</button>
+    </div>
+  {/if}
 
-      {#if eco}
-        <button class="pill eco anim-fade" onclick={() => openSettings('usage')} title="Mode économie actif">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          <span>ÉCO</span>
-        </button>
-      {/if}
-      {#if budget}
-        <button class="pill anim-fade" onclick={() => openSettings('usage')} title="Budget utilisé">
-          Budget {budget.uncertain ? '~' : ''}{Math.round(budget.pct)}&#8239;%
-          <span class="mg" class:warn={budget.pct >= 80}><i style="width:{budget.pct}%"></i></span>
-        </button>
-      {/if}
-      <button type="button" class="pill anim-fade dfbtn" class:on={showDiff && panelTab === 'files'} onclick={() => toggleDp('files')} title="Fichiers modifiés ({diffCount})" aria-label="Fichiers modifiés">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><polyline points="14 3 14 8 19 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="12" y1="10" x2="12" y2="16"/></svg>
-        {#if diffCount}<span class="dfn">{diffCount}</span>{/if}
-      </button>
-      <button type="button" class="pill anim-fade dfbtn" class:on={showDiff && panelTab === 'term'} onclick={() => toggleDp('term')} title="Terminal" aria-label="Terminal">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
-        {#if termState.unread}<span class="dfn">{termState.unread}</span>{/if}
-      </button>
-    <PermMode />
-      {#if busy}
-        <div class="prog" transition:fade={{ duration: ms(160) }}></div>
-      {/if}
-    </header>
+  <div
+    class="app-workspace"
+    class:code={mode === 'code'}
+    class:withdiff={showDiff}
+    class:withins={mode === 'code' && inspectorOpen && !showDiff}
+  >
+    <section class="main">
+      {#if items.length === 0 && !cur?.loading}
+        <div class="zen-home">
+          <div class="zen-head stagger">
+            <BrandLogo variant="auto" {isLight} size={34} />
+            <h2>{mode === 'code' ? 'Que veux-tu construire ?' : 'France Student Desktop'}</h2>
+            <p class="dim">
+              {mode === 'code'
+                ? 'L’IA lit et modifie les fichiers du dossier choisi.'
+                : 'Pose ta question, utilise /sys, /git ou joins un fichier.'}
+            </p>
+          </div>
 
-    <div class="stage">
-      <div class="scroll" bind:this={box} onscroll={onScroll}>
-        <div class="col">
-          {#key viewUid}
-            <div class="view">
-              {#if cur?.loading}
-                <div class="loading"><span class="spin"></span> Chargement du chat…</div>
-              {:else if items.length === 0}
-                <div class="hero stagger">
-                  <div class="herologo" aria-hidden="true">
-                    <BrandLogo size={64} radius={18} />
-                  </div>
-                  <h2>{mode === 'code' ? 'Que veux-tu construire ?' : 'France Student Desktop'}</h2>
-                  <p class="dim">
-                    {mode === 'code'
-                      ? 'L’IA lit et modifie les fichiers du dossier choisi.'
-                      : 'Pose ta question ou joins un fichier.'}
-                  </p>
-                  <div class="cards">
-                    {#each cards as k, i (k.t)}
-                      <button class="card" style="animation-delay: {170 + i * 50}ms" onclick={() => useCard(k.p)}>
-                        <b>{k.t}</b>
-                        <span>{k.d}</span>
-                      </button>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
+          <div class="zen-composer">
+            <PillComposer
+              bind:this={composer}
+              bind:input
+              {mode}
+              centered={true}
+              disabled={!!cur?.loading}
+              running={busy}
+              {agents}
+              agent={curAgent}
+              {smartRoute}
+              {conciseMode}
+              workdir={curWorkdir || ''}
+              {attachments}
+              {skills}
+              ctx={ctxInfo}
+              {eco}
+              {enableWebSearch}
+              extraCommands={COMMANDS}
+              onModeChange={setMode}
+              onAgentChange={onAgentChange}
+              onSmartRouteChange={(r) => (smartRoute = r)}
+              onConciseChange={(v) => (conciseMode = v)}
+              onWebSearchChange={(v) => (enableWebSearch = v)}
+              onSend={send}
+              onCancel={stop}
+              onAttachFiles={handleAttachFiles}
+              onRemoveAttachment={removeAttachment}
+              onInjectRange={openRangeModal}
+              onPickFolder={chooseFolder}
+            />
+          </div>
 
-              {#each items as it, i (i)}
-                {#if it.kind === 'user'}
-                  <div class="u">
-                    <div class="ubub">
-                      {it.text}
-                      {#if it.images?.length}
-                        <div class="u-imgs">
-                          {#each it.images as src, idx (idx)}
-                            <img {src} alt="Image jointe {idx + 1}" />
-                          {/each}
+          <div class="cards zen-cards">
+            {#each cards as k, i (k.t)}
+              <button class="card" style="animation-delay: {170 + i * 50}ms" onclick={() => useCard(k.p)}>
+                <b>{k.t}</b>
+                <span>{k.d}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {:else}
+        <div class="stage">
+          <div class="scroll" bind:this={box} onscroll={onScroll}>
+            <div class="col">
+              {#key viewUid}
+                <div class="view">
+                  {#if cur?.loading}
+                    <div class="loading"><span class="spin"></span> Chargement du chat…</div>
+                  {/if}
+
+                  {#each items as it, i (i)}
+                    {#if it.kind === 'user'}
+                      <div class="u">
+                        <div class="ubub">
+                          {it.text}
+                          {#if it.images?.length}
+                            <div class="u-imgs">
+                              {#each it.images as src, idx (idx)}
+                                <img {src} alt="Image jointe {idx + 1}" />
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                        {#if it.id && cur?.chatId && !busy}
+                          <div class="u-acts">
+                            <button type="button" class="u-act" onclick={() => openForkModal(it)}>
+                              Créer une branche
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
+                    {:else if it.kind === 'assistant'}
+                      <div class="ai">
+                        {#if i === 0 || !['assistant', 'tool'].includes(items[i - 1].kind)}
+                          <div class="av" aria-hidden="true"><BrandLogo variant="badge" size={30} radius={9} /></div>
+                        {:else}
+                          <div></div>
+                        {/if}
+                        <div class="aib">
+                          <Message
+                            text={it.text}
+                            reasoning={it.reasoning}
+                            streaming={busy && i === items.length - 1}
+                            showActions={canShowTurnActions(items, i, busy)}
+                            pinned={isMessagePinned(cur?.chatId, it.id)}
+                            onopenurl={handleOpenUrl}
+                            onpin={it.id && cur?.chatId && !busy ? () => togglePinMessage(it, cur.chatId) : undefined}
+                          />
+                        </div>
+                      </div>
+                    {:else if it.kind === 'tool'}
+                      {@const turnAi = canShowTurnActions(items, i, busy) ? lastAssistantInTurn(items, i) : null}
+                      <div class="toolrow"><Tool t={it} onresolve={resolve} /></div>
+                      {#if turnAi}
+                        <div class="ai turn-tail">
+                          <div></div>
+                          <div class="aib">
+                            <Message
+                              text=""
+                              copyText={turnAi.text}
+                              showActions={true}
+                              pinned={isMessagePinned(cur?.chatId, turnAi.id)}
+                              onpin={turnAi.id && cur?.chatId ? () => togglePinMessage(turnAi, cur.chatId) : undefined}
+                            />
+                          </div>
                         </div>
                       {/if}
-                    </div>
-                    {#if it.id && cur?.chatId && !busy}
-                      <div class="u-acts">
-                        <button type="button" class="u-act" onclick={() => openForkModal(it)}>
-                          Créer une branche
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
-                {:else if it.kind === 'assistant'}
-                  <div class="ai">
-                    {#if i === 0 || !['assistant', 'tool'].includes(items[i - 1].kind)}
-                      <div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>
                     {:else}
-                      <div></div>
+                      {@const n = parseNote(it.text)}
+                      {#if n.kind === 'list'}
+                        <div class="mcpnote"><i class="dot"></i>MCP <b>{n.server}</b> · {n.count} outils</div>
+                      {:else if n.kind === 'call'}
+                        <details class="mcpcall {n.status}" class:nobody={!n.body} class:bad={n.label === 'erreur'}>
+                          <summary>
+                            <i class="dot"></i>
+                            <span class="mname">{n.tool}</span>
+                            {#if n.server}<span class="msrv">{n.server}</span>{/if}
+                            <span class="mst">{CALL_LABEL[n.status] ?? n.status}</span>
+                          </summary>
+                          {#if n.body}<pre>{n.body}</pre>{/if}
+                        </details>
+                      {:else if n.kind !== 'hide'}
+                        <div class="note">{it.text}</div>
+                      {/if}
                     {/if}
-                    <div class="aib">
-                      <Message
-                        text={it.text}
-                        reasoning={it.reasoning}
-                        streaming={busy && i === items.length - 1}
-                        showActions={canShowTurnActions(items, i, busy)}
-                        pinned={isMessagePinned(cur?.chatId, it.id)}
-                        onopenurl={handleOpenUrl}
-                        onpin={it.id && cur?.chatId && !busy ? () => togglePinMessage(it, cur.chatId) : undefined}
-                      />
-                    </div>
-                  </div>
-                {:else if it.kind === 'tool'}
-                  {@const turnAi = canShowTurnActions(items, i, busy) ? lastAssistantInTurn(items, i) : null}
-                  <div class="toolrow"><Tool t={it} onresolve={resolve} /></div>
-                  {#if turnAi}
-                    <div class="ai turn-tail">
-                      <div></div>
-                      <div class="aib">
-                        <Message
-                          text=""
-                          copyText={turnAi.text}
-                          showActions={true}
-                          pinned={isMessagePinned(cur?.chatId, turnAi.id)}
-                          onpin={turnAi.id && cur?.chatId ? () => togglePinMessage(turnAi, cur.chatId) : undefined}
-                        />
-                      </div>
-                    </div>
-                  {/if}
-                {:else}
-                  {@const n = parseNote(it.text)}
-                  {#if n.kind === 'list'}
-                    <div class="mcpnote"><i class="dot"></i>MCP <b>{n.server}</b> · {n.count} outils</div>
-                  {:else if n.kind === 'call'}
-                    <details class="mcpcall {n.status}" class:nobody={!n.body} class:bad={n.label === 'erreur'}>
-                      <summary>
-                        <i class="dot"></i>
-                        <span class="mname">{n.tool}</span>
-                        {#if n.server}<span class="msrv">{n.server}</span>{/if}
-                        <span class="mst">{CALL_LABEL[n.status] ?? n.status}</span>
-                      </summary>
-                      {#if n.body}<pre>{n.body}</pre>{/if}
-                    </details>
-                  {:else if n.kind !== 'hide'}
-                    <div class="note">{it.text}</div>
-                  {/if}
-                {/if}
-              {/each}
+                  {/each}
 
-              {#if typing}
-                <div class="ai">
-                  {#if typingAvatar}<div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>{:else}<div></div>{/if}
-                  <div class="aib"><Message text="" streaming /></div>
+                  {#if typing}
+                    <div class="ai">
+                      {#if typingAvatar}<div class="av" aria-hidden="true"><BrandLogo variant="badge" size={30} radius={9} /></div>{:else}<div></div>{/if}
+                      <div class="aib"><Message text="" streaming /></div>
+                    </div>
+                  {/if}
                 </div>
-              {/if}
+              {/key}
             </div>
-          {/key}
-        </div>
-      </div>
-
-      {#if showJump}
-        <button
-          class="jump"
-          transition:fly={{ y: 10, duration: ms(160) }}
-          onclick={() => toBottom(true)}
-          title="Aller en bas"
-          aria-label="Aller en bas">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
-        </button>
-      {/if}
-    </div>
-
-    <div class="dock">
-      <div class="dockin">
-        {#if error}
-          <div class="error errbar" out:fade={{ duration: ms(120) }}>
-            <span>{error}</span>
-            <button class="x" onclick={clearError} title="Fermer" aria-label="Fermer">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-            </button>
           </div>
+
+          {#if showJump}
+            <button
+              class="jump"
+              transition:fly={{ y: 10, duration: ms(160) }}
+              onclick={() => toBottom(true)}
+              title="Aller en bas"
+              aria-label="Aller en bas">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
+            </button>
+          {/if}
+        </div>
+
+        <div class="dock">
+          <div class="dockin">
+            {#if error}
+              <div class="error errbar" out:fade={{ duration: ms(120) }}>
+                <span>{error}</span>
+                <button class="x" onclick={clearError} title="Fermer" aria-label="Fermer">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            {/if}
+
+            <PillComposer
+              bind:this={composer}
+              bind:input
+              {mode}
+              centered={false}
+              disabled={!!cur?.loading}
+              running={busy}
+              {agents}
+              agent={curAgent}
+              {smartRoute}
+              {conciseMode}
+              workdir={curWorkdir || ''}
+              {attachments}
+              {skills}
+              ctx={ctxInfo}
+              {eco}
+              {enableWebSearch}
+              extraCommands={COMMANDS}
+              onModeChange={setMode}
+              onAgentChange={onAgentChange}
+              onSmartRouteChange={(r) => (smartRoute = r)}
+              onConciseChange={(v) => (conciseMode = v)}
+              onWebSearchChange={(v) => (enableWebSearch = v)}
+              onSend={send}
+              onCancel={stop}
+              onAttachFiles={handleAttachFiles}
+              onRemoveAttachment={removeAttachment}
+              onInjectRange={openRangeModal}
+              onPickFolder={chooseFolder}
+            />
+
+            <div class="help">
+              <span><kbd>Entrée</kbd> envoyer</span>
+              <span>·</span>
+              <span><kbd>Maj+Entrée</kbd> saut de ligne</span>
+              <span>·</span>
+              <span><kbd>/</kbd> commandes 0-token</span>
+              <span>·</span>
+              <span><kbd>$</kbd> skills</span>
+              <span>·</span>
+              <span><kbd>Ctrl+K</kbd> palette</span>
+              <span>·</span>
+              <span><kbd>Ctrl+B</kbd> historique</span>
+            </div>
+          </div>
+        </div>
+      {/if}
+    </section>
+
+    {#if showDiff}
+      <DiffPanel {items} cwd={curWorkdir} bind:tab={panelTab} onclose={() => (showDiff = false)} />
+    {:else if mode === 'code' && inspectorOpen}
+      <TaskInspector
+        open={true}
+        workdir={curWorkdir || ''}
+        {gitSummary}
+        {sysInfo}
+        {ecoShield}
+        onToggleEcoShield={(v) => (ecoShield = v)}
+        {savedTokens}
+        {savedRequests}
+        contextPct={ctxPctNum}
+        onPickFolder={chooseFolder}
+        onRunZeroToken={(cmd) => handleLocalSlashCommand(cmd)}
+        onCompact={compact}
+        onClose={() => (inspectorOpen = false)}
+      />
+    {/if}
+  </div>
+
+  <HistoryDrawer
+    open={drawerOpen}
+    chats={displayedChats}
+    {archivedChats}
+    {savedMessages}
+    activeChatId={cur?.chatId ?? null}
+    onClose={() => (drawerOpen = false)}
+    onSelectChat={(id) => {
+      drawerOpen = false;
+      openChat(id);
+    }}
+    onNewChat={() => {
+      drawerOpen = false;
+      newChat();
+    }}
+    onPinChat={(id) => {
+      const c = chats.find((x) => x.id === id);
+      if (c) handlePin(c);
+    }}
+    onRenameChat={handleRename}
+    onArchiveChat={(id) => {
+      const c = chats.find((x) => x.id === id);
+      if (c) handleArchive(c);
+    }}
+    onRestoreChat={(id) => {
+      const c = archivedChats.find((x) => x.id === id);
+      if (c) handleRestoreChat(c);
+    }}
+    onDeleteChat={handleDelete}
+  />
+
+  <CommandPalette
+    open={paletteOpen}
+    {mode}
+    {chats}
+    themes={THEMES}
+    currentTheme={normalizeTheme(theme)}
+    onClose={() => (paletteOpen = false)}
+    onRunAction={handlePaletteAction}
+  />
+
+  {#if showSettings && settings}
+    <Settings
+      {settings}
+      {usage}
+      {budget}
+      workdir={curWorkdir}
+      {autoAccept}
+      {eco}
+      {smartRoute}
+      {conciseMode}
+      {ecoShield}
+      {autoCompactPct}
+      {last}
+      session={tally}
+      ctx={ctxInfo}
+      chatId={cur?.chatId ?? null}
+      {busy}
+      {theme}
+      {notifSettings}
+      tab={settingsTab}
+      onclose={() => (showSettings = false)}
+      {onsaved}
+      oneco={setEco}
+      onauto={setAuto}
+      onsmartroute={(v) => (smartRoute = v)}
+      onconcise={(v) => (conciseMode = v)}
+      onecoshield={(v) => (ecoShield = v)}
+      onautocompact={(v) => (autoCompactPct = v)}
+      onpick={chooseFolder}
+      oncompact={compact}
+      onreset={resetTally}
+      oninsert={insertSkill}
+      onextchange={() => { loadSkills(mode, curWorkdir); refreshMcpCount(); }}
+      ontheme={(t) => (theme = normalizeTheme(t))}
+      onrefreshusage={loadUsage}
+      onnotifchange={handleNotifChange}
+      ontestnotif={testNotification}
+    />
+  {/if}
+
+  {#if rangeModalOpen}
+    <div class="modal-backdrop" role="presentation" onclick={() => (rangeModalOpen = false)}>
+      <div class="range-modal" role="dialog" aria-modal="true" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.key === 'Escape' && (rangeModalOpen = false)}>
+        <h3>Injecter une plage de lignes (0 token)</h3>
+        <label>
+          <span>Chemin du fichier</span>
+          <input type="text" bind:value={rangePath} placeholder="src/App.svelte" />
+        </label>
+        <div class="range-row">
+          <label>
+            <span>Ligne début</span>
+            <input type="number" min="1" bind:value={rangeStart} />
+          </label>
+          <label>
+            <span>Ligne fin</span>
+            <input type="number" min="1" bind:value={rangeEnd} />
+          </label>
+        </div>
+        {#if rangeError}
+          <p class="range-error">{rangeError}</p>
         {/if}
-
-        <Composer
-          bind:this={composer}
-          bind:input
-          bind:enableWebSearch
-          {busy}
-          loading={!!cur?.loading}
-          {mode}
-          workdir={curWorkdir}
-          {autoAccept}
-          {agents}
-          {curAgent}
-          {skills}
-          commands={COMMANDS}
-          ctx={ctxInfo}
-          {eco}
-          {attachments}
-          onerror={(m) => (gerr = m)}
-          onattachfiles={handleAttachFiles}
-          onremoveattachment={removeAttachment}
-          onagentchange={onAgentChange}
-          onmodechange={setMode}
-          onchoosefolder={chooseFolder}
-          onautochange={setAuto}
-          onsend={send}
-          onstop={stop}
-        />
-
-        <div class="help">
-          <span><kbd>Entrée</kbd> envoyer</span>
-          <span>·</span>
-          <span><kbd>Maj+Entrée</kbd> saut de ligne</span>
-          <span>·</span>
-          <span><kbd>/</kbd> commandes</span>
-          <span>·</span>
-          <span><kbd>$</kbd> skills</span>
-          <span>·</span>
-          <span><kbd>Ctrl+V</kbd> coller une image</span>
-          <span>·</span>
-          <span><kbd>Ctrl+N</kbd> nouveau chat</span>
+        <div class="range-actions">
+          <button type="button" class="btn-ghost" onclick={() => (rangeModalOpen = false)}>Annuler</button>
+          <button type="button" class="btn-primary" disabled={rangeLoading} onclick={submitRangeModal}>
+            {rangeLoading ? 'Lecture...' : 'Injecter'}
+          </button>
         </div>
       </div>
     </div>
-  </section>
-  {#if showDiff}
-    <DiffPanel {items} cwd={curWorkdir} bind:tab={panelTab} onclose={() => (showDiff = false)} />
   {/if}
 </div>
-
-{#if showSettings && settings}
-  <Settings
-    {settings}
-    {usage}
-    {budget}
-    workdir={curWorkdir}
-    {autoAccept}
-    {eco}
-    {last}
-    session={tally}
-    ctx={ctxInfo}
-    chatId={cur?.chatId ?? null}
-    {busy}
-    {theme}
-    {notifSettings}
-    tab={settingsTab}
-    onclose={() => (showSettings = false)}
-    {onsaved}
-    oneco={setEco}
-    onauto={setAuto}
-    onpick={chooseFolder}
-    oncompact={compact}
-    onreset={resetTally}
-    oninsert={insertSkill}
-    onextchange={() => loadSkills(mode, curWorkdir)}
-    ontheme={(t) => (theme = normalizeTheme(t))}
-    onrefreshusage={loadUsage}
-    onnotifchange={handleNotifChange}
-    ontestnotif={testNotification}
-  />
-{/if}
 
 {#if toastData}
   <div class="toast-pill" transition:fly={{ y: 12, duration: ms(160) }} role="status" aria-live="polite">
@@ -2431,5 +2897,190 @@
 
   .pill.dfbtn .dfn {
     border-radius: 6px;
+  }
+
+  .app-shell {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+  }
+
+  .eco-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 6px 16px;
+    font-size: 12px;
+    background: var(--panel2);
+    border-bottom: 1px solid var(--line);
+    color: var(--dim);
+    flex-shrink: 0;
+  }
+
+  .eco-banner-btn {
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line2);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .app-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 0px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+    --dpcol: max(300px, min(var(--dpw, clamp(320px, 32vw, 460px)), calc(100vw - 360px)));
+    transition: grid-template-columns 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .app-workspace.withdiff {
+    grid-template-columns: minmax(0, 1fr) var(--dpcol);
+  }
+
+  .app-workspace.withins {
+    grid-template-columns: minmax(0, 1fr) 280px;
+  }
+
+  :global(html.dp-drag) .app-workspace {
+    transition: none;
+  }
+
+  .zen-home {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 20px;
+    gap: 20px;
+    overflow-y: auto;
+  }
+
+  .zen-head {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 8px;
+  }
+
+  .zen-head h2 {
+    margin: 4px 0 0;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--text);
+  }
+
+  .zen-head p {
+    margin: 0;
+    font-size: 13.5px;
+  }
+
+  .zen-composer {
+    width: 100%;
+    max-width: 760px;
+  }
+
+  .zen-cards {
+    margin-top: 4px;
+    max-width: 760px;
+  }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 60;
+  }
+
+  .range-modal {
+    width: 100%;
+    max-width: 420px;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  }
+
+  .range-modal h3 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .range-modal label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--dim);
+  }
+
+  .range-modal input {
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .range-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .range-error {
+    margin: 0;
+    font-size: 12px;
+    color: var(--danger);
+  }
+
+  .range-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .btn-ghost,
+  .btn-primary {
+    padding: 7px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid var(--line);
+  }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: transparent;
   }
 </style>
