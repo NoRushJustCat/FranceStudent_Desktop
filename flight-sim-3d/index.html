@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="AERO HORIZON 3D - Simulateur de vol arcade en Three.js / WebGL">
+  <meta name="theme-color" content="#0a0f1c">
+  <title>AERO HORIZON 3D</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Import map : permet d'écrire `import * as THREE from 'three'` dans main.js, sans build step -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- ===================== SCÈNE 3D ===================== -->
+  <div id="canvas-container" aria-label="Vue 3D du simulateur"></div>
+
+  <!-- ===================== HUD ===================== -->
+  <div id="hud" class="hidden" aria-hidden="true">
+
+    <!-- Bande supérieure -->
+    <div id="hud-top" class="glass">
+      <div class="hud-cell">
+        <span class="hud-label">CAP</span>
+        <span id="hud-heading" class="hud-value">000°</span>
+      </div>
+      <div class="hud-cell">
+        <span class="hud-label">VITESSE</span>
+        <span id="hud-speed" class="hud-value">0</span>
+ <span class="hud-unit">KTS</span>
+      </div>
+      <div class="hud-cell">
+ <span class="hud-label">ALTITUDE</span>
+        <span id="hud-altitude" class="hud-value">0</span>
+        <span class="hud-unit">FT</span>
+      </div>
+      <div class="hud-cell">
+        <span class="hud-label">VARIO</span>
+        <span id="hud-vsi" class="hud-value">0</span>
+        <span class="hud-unit">FT/MIN</span>
+      </div>
+    </div>
+
+    <!-- Bande de cap défilante -->
+    <div id="heading-tape-wrapper">
+      <div id="heading-tape"></div>
+      <div id="heading-caret">▼</div>
+    </div>
+
+    <!-- Viseur tête haute central -->
+    <div id="hud-center">
+      <!-- Indicateur de roulis (arc + index) -->
+      <svg id="roll-indicator" viewBox="-160 -160 320 320" aria-hidden="true">
+        <g id="roll-scale"></g>
+        <polygon id="roll-pointer" points="0,-128 -7,-116 7,-116"></polygon>
+      </svg>
+
+      <!-- Horizon artificiel + échelle de tangage -->
+      <div id="attitude-mask">
+ <div id="pitch-ladder">
+   <div id="horizon-line"></div>
+          <!-- Les barreaux de tangage (-90° à +90°) sont générés par main.js -->
+ </div>
+      </div>
+
+      <!-- Repère fixe de l'avion (waterline) -->
+      <div id="aircraft-reticle">
+        <span class="wing left"></span>
+        <span class="dot"></span>
+        <span class="wing right"></span>
+      </div>
+
+      <!-- Vecteur vitesse / Flight Path Vector -->
+      <div id="fpv">
+        <span class="fpv-circle"></span>
+        <span class="fpv-wing left"></span>
+        <span class="fpv-wing right"></span>
+ <span class="fpv-fin"></span>
+      </div>
+    </div>
+
+    <!-- Jauge latérale gauche : poussée + configuration -->
+    <div id="hud-left" class="glass">
+      <span class="hud-label">THR</span>
+      <div id="throttle-gauge">
+        <div id="throttle-fill"></div>
+        <div class="throttle-ticks">
+   <span>100</span><span>75</span><span>50</span><span>25</span><span>0</span>
+        </div>
+      </div>
+      <span id="hud-throttle" class="hud-value small">0%</span>
+
+      <div class="config-block">
+ <span class="hud-label">FLAPS</span>
+        <span id="hud-flaps" class="status-pill">0°</span>
+      </div>
+      <div class="config-block">
+ <span class="hud-label">AÉROFREINS</span>
+        <span id="hud-brakes" class="status-pill off">OFF</span>
+      </div>
+    </div>
+
+    <!-- Indicateurs d'état (droite) -->
+    <div id="hud-right" class="glass">
+      <div class="status-row">
+        <span class="hud-label">TRAIN</span>
+        <span id="hud-gear" class="status-pill on">DOWN</span>
+      </div>
+      <div class="status-row">
+        <span class="hud-label">G</span>
+        <span id="hud-gforce" class="hud-value small">1.0</span>
+      </div>
+      <div class="status-row column">
+        <span class="hud-label">FUEL <span id="hud-fuel-text">100%</span></span>
+        <div class="bar"><div id="hud-fuel-bar" class="bar-fill"></div></div>
+      </div>
+      <div class="status-row">
+        <span class="hud-label">CAM</span>
+        <span id="hud-camera" class="status-pill">EXT</span>
+      </div>
+    </div>
+
+    <!-- Alertes clignotantes -->
+    <div id="hud-alerts" role="alert" aria-live="assertive">
+      <div id="alert-stall" class="alert hidden">STALL</div>
+      <div id="alert-pullup" class="alert hidden">PULL UP</div>
+      <div id="alert-overspeed" class="alert hidden">OVERSPEED</div>
+      <div id="alert-fuel" class="alert warn hidden">LOW FUEL</div>
+    </div>
+
+    <!-- Radar / minimap -->
+    <div id="radar-wrapper" class="glass">
+      <canvas id="radar" width="220" height="220"></canvas>
+      <div id="radar-info">
+        <span id="radar-waypoint">WPT --</span>
+ <span id="radar-distance">-- NM</span>
+      </div>
+    </div>
+
+    <!-- Messages contextuels (ex. "Atterrissage réussi") -->
+    <div id="hud-message" class="hidden"></div>
+  </div>
+
+  <!-- ===================== ÉCRAN D'ACCUEIL ===================== -->
+  <section id="title-screen" class="screen">
+    <div class="screen-panel glass">
+      <h1 class="logo">AERO <span>HORIZON</span> 3D</h1>
+      <p class="tagline">Simulateur de vol arcade WebGL</p>
+
+      <div class="title-grid">
+        <!-- Sélecteur d'ambiance -->
+        <div class="panel-block">
+          <h2>Météo / Ambiance</h2>
+   <div id="weather-select" class="weather-options" role="radiogroup" aria-label="Choix de l'ambiance">
+     <label class="weather-card">
+       <input type="radio" name="weather" value="noon" checked>
+       <span class="weather-preview noon"></span>
+       <span class="weather-name">Midi radieux</span>
+<span class="weather-desc">Ciel clair, visibilité maximale</span>
+     </label>
+     <label class="weather-card">
+       <input type="radio" name="weather" value="sunset">
+       <span class="weather-preview sunset"></span>
+       <span class="weather-name">Coucher de soleil synthwave</span>
+       <span class="weather-desc">Néons, brume magenta, soleil rétro</span>
+     </label>
+            <label class="weather-card">
+       <input type="radio" name="weather" value="night">
+       <span class="weather-preview night"></span>
+       <span class="weather-name">Vol de nuit</span>
+       <span class="weather-desc">Balises lumineuses et feux de piste</span>
+     </label>
+   </div>
+        </div>
+
+ <!-- Commandes -->
+ <div class="panel-block">
+          <h2>Commandes</h2>
+   <table class="controls-table">
+     <tbody>
+       <tr><td><kbd>Souris</kbd> ou <kbd>Z</kbd>/<kbd>S</kbd></td><td>Tangage (Pitch)</td></tr>
+       <tr><td><kbd>Q</kbd> / <kbd>D</kbd></td><td>Roulis (Roll)</td></tr>
+       <tr><td><kbd>A</kbd> / <kbd>E</kbd></td><td>Lacet (Yaw)</td></tr>
+       <tr><td><kbd>Maj</kbd> / <kbd>Ctrl</kbd></td><td>Poussée + / −</td></tr>
+       <tr><td><kbd>F</kbd></td><td>Volets (Flaps)</td></tr>
+       <tr><td><kbd>G</kbd></td><td>Train d'atterrissage</td></tr>
+       <tr><td><kbd>B</kbd></td><td>Aérofreins</td></tr>
+       <tr><td><kbd>C</kbd></td><td>Caméra cockpit / extérieure</td></tr>
+       <tr><td><kbd>P</kbd> / <kbd>Échap</kbd></td><td>Pause</td></tr>
+     </tbody>
+   </table>
+   <label class="option-row">
+     <input type="checkbox" id="opt-mouse" checked>
+     Contrôle du tangage/roulis à la souris
+   </label>
+   <label class="option-row">
+     <input type="checkbox" id="opt-invert">
+     Inverser l'axe de tangage
+          </label>
+ </div>
+      </div>
+
+      <button id="btn-start" class="btn primary">DÉCOLLER</button>
+      <p class="hint">Astuce : mets les gaz à fond, attends ~140 kts puis tire doucement.</p>
+    </div>
+  </section>
+
+  <!-- ===================== ÉCRAN PAUSE ===================== -->
+  <section id="pause-screen" class="screen hidden">
+    <div class="screen-panel glass small">
+      <h2 class="screen-title">PAUSE</h2>
+      <button id="btn-resume" class="btn primary">REPRENDRE</button>
+      <button id="btn-restart-pause" class="btn">RECOMMENCER</button>
+      <button id="btn-menu-pause" class="btn">MENU PRINCIPAL</button>
+    </div>
+  </section>
+
+  <!-- ===================== ÉCRAN CRASH ===================== -->
+  <section id="gameover-screen" class="screen hidden">
+    <div class="screen-panel glass small danger">
+      <h2 class="screen-title">CRASH</h2>
+      <p id="crash-reason">Impact avec le sol</p>
+      <div class="flight-stats">
+        <div><span class="hud-label">Temps de vol</span><span id="stat-time">00:00</span></div>
+ <div><span class="hud-label">Distance</span><span id="stat-distance">0 NM</span></div>
+        <div><span class="hud-label">Alt. max</span><span id="stat-maxalt">0 FT</span></div>
+        <div><span class="hud-label">Vitesse max</span><span id="stat-maxspeed">0 KTS</span></div>
+        <div><span class="hud-label">Waypoints</span><span id="stat-waypoints">0</span></div>
+      </div>
+      <button id="btn-restart" class="btn primary">REDÉCOLLER</button>
+      <button id="btn-menu" class="btn">MENU PRINCIPAL</button>
+    </div>
+  </section>
+
+  <!-- Message si WebGL indisponible -->
+  <noscript>
+    <div class="screen"><div class="screen-panel glass">JavaScript est requis pour lancer AERO HORIZON 3D.</div></div>
+  </noscript>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
