@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "fs-atg": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_DIR}/mcp_server.mjs"
+      ]
+    }
+  }
+}

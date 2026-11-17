@@ -8,6 +8,7 @@ mod ext;
 mod login;
 mod mcp;
 mod mcp_ctx;
+mod pc_tools;
 mod perm;
 mod skills;
 mod term;
@@ -1680,6 +1681,11 @@ fn main() {
             ext::mcp_upsert,
             ext::mcp_remove,
             ext::mcp_import,
+            pc_tools::pc_sys_info,
+            pc_tools::pc_git_summary,
+            pc_tools::pc_find_files,
+            pc_tools::pc_read_range,
+            pc_tools::pc_quick_clean_preview,
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement de FS Code")

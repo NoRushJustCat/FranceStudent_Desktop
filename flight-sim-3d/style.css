@@ -1,0 +1,1258 @@
+/* =========================================================================
+   AERO HORIZON 3D — style.css
+   HUD aviation néon + écrans modaux en glassmorphism
+   ========================================================================= */
+
+/* ----------------------------- 1. VARIABLES ----------------------------- */
+:root {
+  /* Palette aviation */
+  --hud-green: #00ffaa;
+  --hud-cyan: #00e5ff;
+  --hud-yellow: #ffcc00;
+  --hud-red: #ff3344;
+  --hud-white: #e8fff6;
+
+  --bg-glass: rgba(10, 15, 28, 0.85);
+  --bg-glass-light: rgba(10, 15, 28, 0.55);
+  --bg-deep: #0a0f1c;
+
+  --green-dim: rgba(0, 255, 170, 0.35);
+  --green-faint: rgba(0, 255, 170, 0.12);
+  --cyan-dim: rgba(0, 229, 255, 0.35);
+  --cyan-faint: rgba(0, 229, 255, 0.10);
+  --red-dim: rgba(255, 51, 68, 0.35);
+  --yellow-dim: rgba(255, 204, 0, 0.35);
+
+  /* Lueurs néon */
+  --glow-green: 0 0 4px rgba(0, 255, 170, 0.9), 0 0 12px rgba(0, 255, 170, 0.45);
+  --glow-cyan: 0 0 4px rgba(0, 229, 255, 0.9), 0 0 12px rgba(0, 229, 255, 0.45);
+  --glow-red: 0 0 6px rgba(255, 51, 68, 0.95), 0 0 18px rgba(255, 51, 68, 0.6);
+  --glow-yellow: 0 0 6px rgba(255, 204, 0, 0.9), 0 0 16px rgba(255, 204, 0, 0.5);
+
+  /* Typo */
+  --font-mono: 'Share Tech Mono', ui-monospace, 'Courier New', monospace;
+  --font-display: 'Orbitron', 'Share Tech Mono', sans-serif;
+
+  /* Géométrie */
+  --radius: 10px;
+  --radius-sm: 6px;
+  --hud-gap: 16px;
+  --hud-margin: clamp(10px, 2vw, 24px);
+  --throttle-h: 180px;
+  --radar-size: 180px;
+  --attitude-w: 340px;
+  --attitude-h: 300px;
+  --tape-w: 480px;
+
+  --transition: 160ms ease;
+}
+
+/* ------------------------------- 2. RESET ------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-deep);
+  color: var(--hud-white);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+img, svg, canvas { display: block; }
+
+button, input, select { font: inherit; color: inherit; }
+
+button { cursor: pointer; background: none; border: none; }
+
+table { border-collapse: collapse; }
+
+/* Utilitaire universel piloté par main.js */
+.hidden { display: none !important; }
+
+/* Panneau verre réutilisable */
+.glass {
+  background: var(--bg-glass-light);
+  border: 1px solid var(--green-dim);
+  border-radius: var(--radius);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35),
+       inset 0 0 18px var(--green-faint);
+}
+
+/* ---------------------------- 3. SCÈNE 3D ------------------------------ */
+#canvas-container {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: 1;
+}
+
+#canvas-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+  outline: none;
+}
+
+/* ================================ 4. HUD ================================ */
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
+  padding: var(--hud-margin);
+  color: var(--hud-green);
+  text-shadow: var(--glow-green);
+}
+
+/* Éléments génériques */
+.hud-label {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  color: var(--hud-cyan);
+  text-shadow: var(--glow-cyan);
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+.hud-value {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.45rem;
+  color: var(--hud-green);
+  text-shadow: var(--glow-green);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  min-width: 4ch;
+  text-align: right;
+}
+
+.hud-value.small { font-size: 1rem; min-width: 3ch; }
+
+.hud-unit {
+  font-size: 0.7rem;
+  color: var(--green-dim);
+  text-shadow: none;
+  margin-left: 2px;
+  letter-spacing: 0.1em;
+}
+
+/* --------------------------- 4.1 Bande haute --------------------------- */
+#hud-top {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  justify-self: center;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  padding: 6px 4px;
+}
+
+.hud-cell {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  align-items: baseline;
+  column-gap: 4px;
+  padding: 2px 18px;
+  min-width: 120px;
+}
+
+.hud-cell + .hud-cell { border-left: 1px solid var(--green-dim); }
+
+.hud-cell .hud-label { grid-column: 1 / -1; }
+
+/* ------------------------ 4.2 Bande de cap défilante ------------------- */
+#heading-tape-wrapper {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-self: center;
+  position: relative;
+  width: min(var(--tape-w), 80vw);
+  height: 44px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--green-dim);
+  /* Fondu sur les bords */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+   mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+
+/* main.js remplit #heading-tape et le translate en X (transform). */
+#heading-tape {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  white-space: nowrap;
+  will-change: transform;
+  /* Graduations de secours (tous les 10 px) si main.js n'en génère pas */
+  background-image:
+    repeating-linear-gradient(90deg, var(--hud-green) 0 1px, transparent 1px 10px);
+  background-size: 100% 8px;
+  background-repeat: repeat-x;
+  background-position: bottom;
+}
+
+/* Conventions suggérées pour les graduations générées par main.js */
+#heading-tape .tape-tick {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 100%;
+  text-align: center;
+  font-size: 0.75rem;
+}
+
+#heading-tape .tape-tick::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 1px;
+  height: 14px;
+  background: var(--hud-green);
+  box-shadow: var(--glow-green);
+}
+
+#heading-tape .tape-tick.major { font-family: var(--font-display); font-weight: 700; }
+#heading-tape .tape-tick.cardinal { color: var(--hud-cyan); text-shadow: var(--glow-cyan); }
+
+#heading-caret {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--hud-yellow);
+  text-shadow: var(--glow-yellow);
+  z-index: 2;
+}
+
+#heading-caret::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 2px;
+  height: 30px;
+  transform: translateX(-50%);
+  background: linear-gradient(var(--hud-yellow), transparent);
+}
+
+/* ---------------------- 4.3 Viseur tête haute central ------------------ */
+#hud-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--attitude-w);
+  height: var(--attitude-h);
+  transform: translate(-50%, -50%);
+}
+
+/* Arc de roulis */
+#roll-indicator {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 320px;
+  height: 320px;
+  transform: translate(-50%, -50%);
+  overflow: visible;
+  filter: drop-shadow(0 0 3px rgba(0, 255, 170, 0.7));
+}
+
+#roll-scale { will-change: transform; }
+
+#roll-scale line,
+#roll-scale path {
+  stroke: var(--hud-green);
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+}
+
+#roll-scale text {
+  fill: var(--hud-green);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+#roll-pointer {
+  fill: var(--hud-yellow);
+  filter: drop-shadow(0 0 4px rgba(255, 204, 0, 0.8));
+}
+
+/* Fenêtre de l'horizon artificiel */
+#attitude-mask {
+  position: absolute;
+  inset: 20px 30px;
+  overflow: hidden;
+  border-radius: 50% / 42%;
+  -webkit-mask-image: radial-gradient(ellipse at center, #000 62%, transparent 72%);
+          mask-image: radial-gradient(ellipse at center, #000 62%, transparent 72%);
+}
+
+/* main.js applique : transform: rotate(roll) translateY(pitch * px/deg) */
+#pitch-ladder {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  will-change: transform;
+  transform-origin: 0 0;
+}
+
+#horizon-line {
+  position: absolute;
+  left: -600px;
+  top: -1px;
+  width: 1200px;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent 0, var(--hud-green) 20%,
+    var(--hud-green) 44%, transparent 44%,
+    transparent 56%, var(--hud-green) 56%,
+    var(--hud-green) 80%, transparent 100%);
+  box-shadow: var(--glow-green);
+}
+
+/* Barreaux de tangage — conventions pour main.js :
+   <div class="pitch-rung [neg]" style="top:-Npx"><span>10</span><span>10</span></div> */
+#pitch-ladder .pitch-rung {
+  position: absolute;
+  left: -90px;
+  width: 180px;
+  height: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 2px solid var(--hud-green);
+  /* Trou central pour laisser voir le réticule */
+  -webkit-mask-image: linear-gradient(90deg, #000 38%, transparent 38%, transparent 62%, #000 62%);
+   mask-image: linear-gradient(90deg, #000 38%, transparent 38%, transparent 62%, #000 62%);
+  filter: drop-shadow(0 0 3px rgba(0, 255, 170, 0.8));
+}
+
+#pitch-ladder .pitch-rung.neg { border-top-style: dashed; }
+
+#pitch-ladder .pitch-rung span {
+  font-size: 0.7rem;
+  color: var(--hud-green);
+  transform: translateY(-2px);
+  margin: 0 -26px;
+  width: 22px;
+  text-align: center;
+}
+
+/* Réticule fixe de l'avion (waterline) */
+#aircraft-reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#aircraft-reticle .wing {
+  width: 46px;
+  height: 3px;
+  background: var(--hud-yellow);
+  box-shadow: var(--glow-yellow);
+  position: relative;
+}
+
+#aircraft-reticle .wing::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 3px;
+  height: 12px;
+  background: var(--hud-yellow);
+}
+
+#aircraft-reticle .wing.left::after { right: 0; }
+#aircraft-reticle .wing.right::after { left: 0; }
+
+#aircraft-reticle .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hud-yellow);
+  box-shadow: var(--glow-yellow);
+}
+
+/* Vecteur vitesse (FPV) — main.js le déplace via transform */
+#fpv,
+#flight-path-marker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  will-change: transform;
+  transition: opacity var(--transition);
+}
+
+#fpv .fpv-circle {
+  position: absolute;
+  left: -9px;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--hud-green);
+  border-radius: 50%;
+  box-shadow: var(--glow-green);
+}
+
+#fpv .fpv-wing {
+  position: absolute;
+  top: -1px;
+  width: 16px;
+  height: 2px;
+  background: var(--hud-green);
+  box-shadow: var(--glow-green);
+}
+
+#fpv .fpv-wing.left { right: 9px; }
+#fpv .fpv-wing.right { left: 9px; }
+
+#fpv .fpv-fin {
+  position: absolute;
+  left: -1px;
+  bottom: 9px;
+  width: 2px;
+  height: 9px;
+  background: var(--hud-green);
+  box-shadow: var(--glow-green);
+}
+
+/* -------------------- 4.4 Jauge de poussée (gauche) -------------------- */
+#hud-left {
+  position: absolute;
+  left: var(--hud-margin);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px;
+  width: 112px;
+}
+
+#throttle-gauge {
+  position: relative;
+  width: 26px;
+  height: var(--throttle-h);
+  border: 1px solid var(--green-dim);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: visible;
+  margin-right: 34px; /* place pour les graduations */
+}
+
+/* main.js règle style.height = "xx%" */
+#throttle-fill {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  height: 0%;
+  max-height: calc(100% - 4px);
+  border-radius: 2px;
+  /* Gradient calé sur la hauteur totale : la couleur dépend du niveau réel */
+  background: linear-gradient(to top,
+    var(--hud-green) 0%, var(--hud-green) 55%,
+    var(--hud-yellow) 75%, var(--hud-red) 100%);
+  background-size: 100% calc(var(--throttle-h) - 4px);
+  background-position: bottom;
+  box-shadow: 0 0 10px var(--green-dim);
+  transition: height 90ms linear;
+}
+
+/* Effet « énergie » qui monte dans la barre */
+#throttle-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(to top,
+    rgba(255, 255, 255, 0.18) 0 2px, transparent 2px 8px);
+  animation: throttle-flow 0.8s linear infinite;
+  border-radius: inherit;
+}
+
+@keyframes throttle-flow {
+  from { background-position: 0 0; }
+  to { background-position: 0 -8px; }
+}
+
+.throttle-ticks {
+  position: absolute;
+  left: calc(100% + 6px);
+  top: -7px;
+  bottom: -7px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-size: 0.65rem;
+  color: var(--green-dim);
+  text-shadow: none;
+}
+
+.throttle-ticks span { position: relative; padding-left: 6px; }
+
+.throttle-ticks span::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  width: 6px;
+  height: 1px;
+  background: var(--green-dim);
+}
+
+.config-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+/* ------------------- 4.5 Indicateurs d'état (droite) ------------------- */
+#hud-right {
+  position: absolute;
+  right: var(--hud-margin);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  width: 160px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.status-row.column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.status-row.column .hud-label {
+  display: flex;
+  justify-content: space-between;
+}
+
+#hud-fuel-text { color: var(--hud-green); text-shadow: var(--glow-green); }
+
+/* Pastilles d'état : .on (vert) / .off (gris) / .warn (jaune) / .danger (rouge) */
+.status-pill {
+  display: inline-block;
+  min-width: 56px;
+  padding: 2px 8px;
+  border: 1px solid var(--cyan-dim);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-align: center;
+  letter-spacing: 0.08em;
+  color: var(--hud-cyan);
+  text-shadow: var(--glow-cyan);
+  background: var(--cyan-faint);
+  transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+
+.status-pill.on {
+  color: var(--hud-green);
+  border-color: var(--hud-green);
+  background: var(--green-faint);
+  text-shadow: var(--glow-green);
+}
+
+.status-pill.off {
+  color: rgba(232, 255, 246, 0.45);
+  border-color: rgba(232, 255, 246, 0.2);
+  background: transparent;
+  text-shadow: none;
+}
+
+.status-pill.warn,
+.status-pill.transit {
+  color: var(--hud-yellow);
+  border-color: var(--hud-yellow);
+  background: rgba(255, 204, 0, 0.1);
+  text-shadow: var(--glow-yellow);
+}
+
+.status-pill.danger {
+  color: var(--hud-red);
+  border-color: var(--hud-red);
+  background: rgba(255, 51, 68, 0.12);
+  text-shadow: var(--glow-red);
+}
+
+/* Barre de carburant (main.js règle style.width) */
+.bar {
+  height: 8px;
+  border: 1px solid var(--green-dim);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.bar-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--hud-green), var(--hud-cyan));
+  box-shadow: 0 0 8px var(--green-dim);
+  transition: width 300ms linear, background 300ms;
+}
+
+.bar-fill.warn { background: var(--hud-yellow); }
+.bar-fill.danger { background: var(--hud-red); animation: alert-pulse 0.8s steps(2) infinite; }
+
+/* Facteur de charge : classes optionnelles */
+#hud-gforce.warn { color: var(--hud-yellow); text-shadow: var(--glow-yellow); }
+#hud-gforce.danger { color: var(--hud-red); text-shadow: var(--glow-red); }
+
+/* ------------------------- 4.6 Alertes urgentes ------------------------ */
+#hud-alerts {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + var(--attitude-h) / 2 + 10px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  max-width: 90vw;
+}
+
+.alert,
+.hud-alert,
+#alert-stall,
+#alert-pullup,
+#alert-overspeed,
+#alert-fuel,
+#alert-lowfuel {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.15rem;
+  letter-spacing: 0.2em;
+  padding: 6px 16px;
+  border: 2px solid var(--hud-red);
+  border-radius: var(--radius-sm);
+  color: var(--hud-red);
+  background: rgba(255, 51, 68, 0.14);
+  text-shadow: var(--glow-red);
+  box-shadow: var(--glow-red), inset 0 0 12px rgba(255, 51, 68, 0.35);
+  animation: alert-pulse 0.6s ease-in-out infinite alternate;
+}
+
+/* PULL UP = alerte la plus critique : plus grosse, plus rapide */
+#alert-pullup {
+  font-size: 1.5rem;
+  animation-duration: 0.35s;
+}
+
+/* Alerte d'avertissement (jaune) */
+.alert.warn,
+.hud-alert.warn,
+#alert-fuel,
+#alert-lowfuel {
+  border-color: var(--hud-yellow);
+  color: var(--hud-yellow);
+  background: rgba(255, 204, 0, 0.12);
+  text-shadow: var(--glow-yellow);
+  box-shadow: var(--glow-yellow), inset 0 0 12px rgba(255, 204, 0, 0.3);
+  animation-duration: 1s;
+}
+
+@keyframes alert-pulse {
+  0%   { opacity: 1;    transform: scale(1); }
+  100% { opacity: 0.35; transform: scale(0.97); }
+}
+
+/* ---------------------------- 4.7 Radar ------------------------------- */
+#radar-wrapper {
+  position: absolute;
+  right: var(--hud-margin);
+  bottom: var(--hud-margin);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+}
+
+#radar {
+  width: var(--radar-size);
+  height: var(--radar-size);
+  border-radius: 50%;
+  border: 1px solid var(--hud-green);
+  box-shadow: var(--glow-green), inset 0 0 24px var(--green-faint);
+  /* Grille néon : anneaux concentriques + croix (visible sous le canvas transparent) */
+  background:
+    linear-gradient(var(--green-dim), var(--green-dim)) center / 1px 100% no-repeat,
+    linear-gradient(var(--green-dim), var(--green-dim)) center / 100% 1px no-repeat,
+    repeating-radial-gradient(circle at center,
+      transparent 0, transparent calc(var(--radar-size) / 8 - 1px),
+      var(--green-faint) calc(var(--radar-size) / 8 - 1px), var(--green-faint) calc(var(--radar-size) / 8)),
+    radial-gradient(circle at center, rgba(0, 255, 170, 0.08), rgba(0, 0, 0, 0.6) 72%);
+}
+
+/* Balayage rotatif du radar */
+#radar-wrapper::before {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  width: var(--radar-size);
+  height: var(--radar-size);
+  margin-left: calc(var(--radar-size) / -2);
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(0, 255, 170, 0.35), transparent 60deg, transparent);
+  animation: radar-sweep 3s linear infinite;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+
+@keyframes radar-sweep {
+  to { transform: rotate(360deg); }
+}
+
+#radar-info {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+#radar-waypoint { color: var(--hud-cyan); text-shadow: var(--glow-cyan); }
+#radar-distance { font-variant-numeric: tabular-nums; }
+
+/* ----------------------- 4.8 Message contextuel ----------------------- */
+#hud-message {
+  position: absolute;
+  left: 50%;
+  top: 26%;
+  transform: translateX(-50%);
+  padding: 10px 26px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.2rem;
+  letter-spacing: 0.15em;
+  text-align: center;
+  color: var(--hud-cyan);
+  text-shadow: var(--glow-cyan);
+  border: 1px solid var(--cyan-dim);
+  border-radius: var(--radius);
+  background: var(--bg-glass-light);
+  animation: message-in 0.35s ease-out;
+}
+
+#hud-message.success { color: var(--hud-green); border-color: var(--hud-green); text-shadow: var(--glow-green); }
+#hud-message.danger { color: var(--hud-red); border-color: var(--hud-red); text-shadow: var(--glow-red); }
+
+@keyframes message-in {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* ========================== 5. ÉCRANS MODAUX ========================== */
+.screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  overflow-y: auto;
+  pointer-events: auto;
+  background:
+    radial-gradient(ellipse at center, rgba(10, 15, 28, 0.35), rgba(5, 8, 16, 0.85)),
+    repeating-linear-gradient(0deg, rgba(0, 255, 170, 0.03) 0 1px, transparent 1px 3px); /* scanlines */
+  animation: screen-in 0.3s ease-out;
+}
+
+@keyframes screen-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.screen-panel {
+  position: relative;
+  width: min(980px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: clamp(20px, 4vw, 40px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+  background: var(--bg-glass);
+  border: 1px solid var(--cyan-dim);
+  border-radius: 18px;
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 0 40px rgba(0, 229, 255, 0.15),
+    0 30px 80px rgba(0, 0, 0, 0.6);
+  animation: panel-in 0.4s cubic-bezier(.2, .9, .3, 1.2);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.screen-panel.small { width: min(440px, 100%); }
+
+.screen-panel.danger {
+  border-color: var(--red-dim);
+  box-shadow: 0 0 50px rgba(255, 51, 68, 0.25), 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Barre de défilement discrète */
+.screen-panel::-webkit-scrollbar { width: 8px; }
+.screen-panel::-webkit-scrollbar-thumb { background: var(--cyan-dim); border-radius: 4px; }
+
+/* Logo */
+.logo {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: clamp(2rem, 6vw, 3.6rem);
+  letter-spacing: 0.08em;
+  line-height: 1.05;
+  color: var(--hud-white);
+  text-shadow: 0 0 18px rgba(0, 229, 255, 0.5);
+}
+
+.logo span {
+  background: linear-gradient(90deg, var(--hud-cyan), var(--hud-green));
+  -webkit-background-clip: text;
+   background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 10px rgba(0, 255, 170, 0.5));
+}
+
+.tagline {
+  margin-top: -10px;
+  color: var(--hud-cyan);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.screen-title {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 2.2rem;
+  letter-spacing: 0.25em;
+  color: var(--hud-cyan);
+  text-shadow: var(--glow-cyan);
+}
+
+.danger .screen-title {
+  color: var(--hud-red);
+  text-shadow: var(--glow-red);
+  animation: alert-pulse 0.9s ease-in-out infinite alternate;
+}
+
+#crash-reason {
+  color: var(--hud-yellow);
+  letter-spacing: 0.05em;
+}
+
+/* Grille du menu titre */
+.title-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 20px;
+  width: 100%;
+  text-align: left;
+}
+
+.panel-block {
+  padding: 18px;
+  border: 1px solid rgba(0, 229, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.panel-block h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--hud-cyan);
+  margin-bottom: 14px;
+}
+
+/* --------------------- Cartes d'ambiance / mission -------------------- */
+.weather-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.weather-card,
+.mission-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 14px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid rgba(232, 255, 246, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform var(--transition), border-color var(--transition),
+       background var(--transition), box-shadow var(--transition);
+}
+
+.weather-card:hover,
+.mission-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--cyan-dim);
+  background: var(--cyan-faint);
+  box-shadow: 0 6px 20px rgba(0, 229, 255, 0.15);
+}
+
+/* Carte sélectionnée */
+.weather-card:has(input:checked),
+.mission-card.selected {
+  border-color: var(--hud-green);
+  background: var(--green-faint);
+  box-shadow: 0 0 0 1px var(--hud-green), 0 0 18px rgba(0, 255, 170, 0.25);
+}
+
+.weather-card:has(input:focus-visible) {
+  outline: 2px solid var(--hud-cyan);
+  outline-offset: 3px;
+}
+
+/* Le bouton radio est masqué mais reste accessible au clavier */
+.weather-card input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.weather-preview {
+  grid-row: 1 / span 2;
+  width: 72px;
+  height: 52px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Aperçus d'ambiance */
+.weather-preview.noon {
+  background:
+    radial-gradient(circle at 75% 25%, #fffbe0 0 6px, rgba(255, 251, 224, 0.4) 7px, transparent 16px),
+    linear-gradient(to bottom, #3a8dde 0%, #9fd3ff 62%, #4f8a3c 62%, #2f5e24 100%);
+}
+
+.weather-preview.sunset {
+  background:
+    radial-gradient(circle at 50% 66%, #ffde59 0 10px, #ff6ec7 14px, transparent 22px),
+    repeating-linear-gradient(to bottom, transparent 0 34px, #1a0b2e 34px 36px),
+    linear-gradient(to bottom, #2b1055 0%, #d53a9d 45%, #ff9f43 64%, #1a0b2e 64%, #12061f 100%);
+}
+
+.weather-preview.night {
+  background:
+    radial-gradient(1px 1px at 20% 20%, #fff, transparent),
+    radial-gradient(1px 1px at 60% 12%, #fff, transparent),
+    radial-gradient(1px 1px at 82% 34%, #fff, transparent),
+    radial-gradient(1.5px 1.5px at 38% 40%, #cfe8ff, transparent),
+    radial-gradient(2px 2px at 30% 82%, var(--hud-yellow), transparent),
+    radial-gradient(2px 2px at 50% 82%, var(--hud-yellow), transparent),
+    radial-gradient(2px 2px at 70% 82%, var(--hud-yellow), transparent),
+    linear-gradient(to bottom, #050a1a 0%, #0d1838 64%, #03060d 64%, #000 100%);
+}
+
+.weather-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--hud-white);
+  letter-spacing: 0.04em;
+}
+
+.weather-desc {
+  font-size: 0.78rem;
+  color: rgba(232, 255, 246, 0.6);
+}
+
+/* ------------------------- Tableau des commandes ----------------------- */
+.controls-table {
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+.controls-table tr { border-bottom: 1px solid rgba(232, 255, 246, 0.07); }
+.controls-table tr:last-child { border-bottom: none; }
+.controls-table tr:hover { background: rgba(0, 229, 255, 0.05); }
+
+.controls-table td {
+  padding: 6px 4px;
+  vertical-align: middle;
+}
+
+.controls-table td:first-child { white-space: nowrap; color: rgba(232, 255, 246, 0.6); }
+.controls-table td:last-child { text-align: right; color: var(--hud-white); }
+
+kbd {
+  display: inline-block;
+  min-width: 24px;
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  text-align: center;
+  color: var(--hud-green);
+  background: rgba(0, 255, 170, 0.08);
+  border: 1px solid var(--green-dim);
+  border-bottom-width: 3px;
+  border-radius: 5px;
+}
+
+/* Options (cases à cocher) */
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: rgba(232, 255, 246, 0.85);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.option-row input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--cyan-dim);
+  background: rgba(0, 0, 0, 0.4);
+  position: relative;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.option-row input[type="checkbox"]::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(232, 255, 246, 0.5);
+  transition: transform var(--transition), background var(--transition);
+}
+
+.option-row input[type="checkbox"]:checked {
+  background: rgba(0, 255, 170, 0.2);
+  border-color: var(--hud-green);
+}
+
+.option-row input[type="checkbox"]:checked::after {
+  transform: translateX(16px);
+  background: var(--hud-green);
+  box-shadow: var(--glow-green);
+}
+
+.option-row input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--hud-cyan);
+  outline-offset: 2px;
+}
+
+/* ------------------------------ Boutons ------------------------------- */
+.btn {
+  pointer-events: auto;
+  min-width: 240px;
+  padding: 12px 28px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+  letter-spacing: 0.2em;
+  color: var(--hud-cyan);
+  border: 1px solid var(--cyan-dim);
+  border-radius: 10px;
+  background: rgba(0, 229, 255, 0.06);
+  transition: transform var(--transition), box-shadow var(--transition),
+background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.btn:hover {
+  color: var(--hud-white);
+  border-color: var(--hud-cyan);
+  background: rgba(0, 229, 255, 0.16);
+  box-shadow: var(--glow-cyan);
+  transform: translateY(-2px);
+}
+
+.btn:active { transform: translateY(0) scale(0.98); }
+
+.btn:focus-visible {
+  outline: 2px solid var(--hud-white);
+  outline-offset: 3px;
+}
+
+.btn.primary {
+  color: #03140e;
+  font-weight: 900;
+  font-size: 1.05rem;
+  border: none;
+  background: linear-gradient(90deg, var(--hud-green), var(--hud-cyan));
+  box-shadow: 0 0 18px rgba(0, 255, 170, 0.45);
+  text-shadow: none;
+}
+
+.btn.primary:hover {
+  color: #000;
+  box-shadow: 0 0 10px rgba(0, 255, 170, 0.9), 0 0 32px rgba(0, 229, 255, 0.6);
+  filter: brightness(1.1);
+}
+
+.screen-panel.small .btn { width: 100%; }
+
+.danger .btn.primary {
+  background: linear-gradient(90deg, var(--hud-yellow), var(--hud-red));
+  box-shadow: 0 0 18px rgba(255, 51, 68, 0.45);
+}
+
+.hint {
+  font-size: 0.8rem;
+  color: rgba(232, 255, 246, 0.55);
+  font-style: italic;
+}
+
+/* --------------------- Statistiques de vol (crash) -------------------- */
+.flight-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  width: 100%;
+}
+
+.flight-stats > div {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid rgba(232, 255, 246, 0.1);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  text-align: left;
+}
+
+/* La dernière stat (nombre impair) prend toute la largeur */
+.flight-stats > div:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+.flight-stats > div > span:last-child {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.2rem;
+  color: var(--hud-green);
+  text-shadow: var(--glow-green);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================ 6. RESPONSIVE ============================ */
+@media (max-width: 900px) {
+  :root {
+    --attitude-w: 280px;
+    --attitude-h: 240px;
+    --radar-size: 130px;
+    --throttle-h: 130px;
+  }
+
+  .title-grid { grid-template-columns: 1fr; }
+  .hud-cell { min-width: 0; padding: 2px 10px; }
+  .hud-value { font-size: 1.1rem; }
+  #roll-indicator { width: 260px; height: 260px; }
+  #hud-left { width: 90px; padding: 10px 8px; }
+  #hud-right { width: 130px; padding: 10px; }
+}
+
+@media (max-width: 600px) {
+  #hud-top { flex-wrap: wrap; justify-content: center; }
+  .hud-cell:nth-child(3) { border-left: none; }
+  #hud-left, #hud-right { top: auto; bottom: var(--hud-margin); transform: none; }
+  #hud-right { right: auto; left: calc(var(--hud-margin) + 100px); }
+  #radar-wrapper { bottom: auto; top: 140px; }
+  .btn { min-width: 0; width: 100%; }
+}
+
+@media (max-height: 560px) {
+  :root { --throttle-h: 100px; --radar-size: 110px; }
+  #hud-left .config-block { display: none; }
+}
+
+/* Accessibilité : réduit les animations si demandé par l'OS */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
+  /* Les alertes restent visibles sans clignoter */
+  .alert, .hud-alert { opacity: 1 !important; }
+}
