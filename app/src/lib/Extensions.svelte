@@ -2,6 +2,7 @@
   // Tiroir « Extensions » : skills (locaux + compte) et serveurs MCP locaux.
   // Ajout / modification / retrait directement depuis l'interface.
   import { onMount } from 'svelte';
+  import Bridge from './Bridge.svelte';
   import {
     getSettings,
     pickFolder,
@@ -673,6 +674,7 @@
       <p class="hint">
         Aucun serveur ne démarre seul. Chaque appel d’outil MCP demande confirmation, sauf <span class="nowrap">«&#8239;sans confirmation&#8239;»</span> <span class="nowrap">(session seulement).</span>
       </p>
+      <Bridge inline />
       {#if mcp.error}<p class="warn">{mcp.error}</p>{/if}
       {#if mcp.customRejected}
         <p class="warn">Le serveur France Student refuse les outils personnalisés : les MCP ne seront pas utilisables par le modèle.</p>

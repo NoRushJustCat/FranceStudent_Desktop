@@ -18,5 +18,14 @@ axum = "0.8"
 getrandom = "0.2"
 regex = "1"
 fs-api = { path = "../../crates/fs-api" }
+fs-agent = { path = "../../crates/fs-agent" }
 fs-store = { path = "../../crates/fs-store" }
 fs-tools = { path = "../../crates/fs-tools" }
+async-trait = "0.1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }

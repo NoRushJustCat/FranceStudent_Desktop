@@ -12,6 +12,8 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+pub mod routes;
+
 static BOUNDARY_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Options supplémentaires pour une requête de génération (`stream_chat` / `send_message`).
@@ -393,6 +395,53 @@ impl Client {
         self.request(m, path, body).await
     }
 
+    /// Appelle une route du catalogue (`routes::ROUTES`). Les routes multipart, SSE et binaires sont refusées.
+    /// Le chemin est reconstruit avec des segments encodés ; paramètres de requête et en-têtes
+    /// non documentés refusés. Corps vide => `Value::Null` ; texte non JSON => `Value::String`.
+    pub async fn call_route(
+        &self,
+        route: &routes::Route,
+        path_params: &std::collections::BTreeMap<String, String>,
+ query: &[(String, String)],
+        headers: &[(String, String)],
+        body: Option<Value>,
+    ) -> std::result::Result<Value, String> {
+        if !route.callable() {
+     return Err(format!("route « {} » non appelable en JSON (flux, fichier ou binaire)", route.id));
+        }
+        if body.is_some() && !route.has_body {
+     return Err(format!("la route « {} » n'accepte pas de corps", route.id));
+        }
+        if route.has_body && body.is_none() {
+     return Err(format!("la route « {} » exige un corps JSON", route.id));
+        }
+        route.check_extras(query, headers)?;
+        let path = route.build_path(path_params)?;
+        let method = Method::from_bytes(route.method.as_bytes()).map_err(|e| e.to_string())?;
+        let mut rb = self.http.request(method, self.url(&path));
+        if !query.is_empty() {
+     rb = rb.query(query);
+        }
+        for (k, v) in headers {
+     let mut hv = HeaderValue::from_str(v).map_err(|_| format!("valeur d'en-tête invalide : {k}"))?;
+     hv.set_sensitive(true);
+            rb = rb.header(k.as_str(), hv);
+        }
+        if let Some(b) = body {
+     rb = rb.json(&b);
+        }
+ let resp = rb.send().await.map_err(|e| Error::Http(e).to_string())?;
+ let status = resp.status();
+        let raw = resp.text().await.map_err(|e| Error::Http(e).to_string())?;
+        if !status.is_success() {
+     return Err(Error::Status { status: status.as_u16(), body: raw }.to_string());
+        }
+        if raw.trim().is_empty() {
+     return Ok(Value::Null);
+        }
+        Ok(serde_json::from_str(&raw).unwrap_or(Value::String(raw)))
+    }
+
     pub async fn agents(&self) -> Result<Vec<Agent>> {
         self.get("/chats/agents").await
     }
@@ -650,6 +699,20 @@ impl Client {
         opts: &StreamOptions,
         on_event: impl FnMut(ChatEvent),
     ) -> Result<()> {
+        self.stream_chat_with_options_id(agent_id, content, client_tools, opts, on_event)
+            .await
+            .map(|_| ())
+    }
+
+    /// Comme `stream_chat_with_options`, en renvoyant le dernier `Last-Event-ID`.
+    pub async fn stream_chat_with_options_id(
+        &self,
+        agent_id: i64,
+        content: &str,
+        client_tools: &[Value],
+        opts: &StreamOptions,
+        on_event: impl FnMut(ChatEvent),
+    ) -> Result<Option<String>> {
         let mut body = json!({
             "agentId": agent_id,
             "initialContent": content,
@@ -666,7 +729,7 @@ impl Client {
         if !client_tools.is_empty() {
             body["clientTools"] = json!(client_tools);
         }
-        self.stream("/chats/stream", body, on_event).await
+        self.stream_with_id("/chats/stream", body, on_event).await
     }
 
     /// Répond dans un chat existant (`POST /chats/{id}`).
@@ -707,6 +770,31 @@ impl Client {
         opts: &StreamOptions,
         on_event: impl FnMut(ChatEvent),
     ) -> Result<()> {
+        self.send_message_with_options_id(
+            chat_id,
+            content,
+            agent_id,
+            client_tools,
+            tool_results,
+            opts,
+            on_event,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Comme `send_message_with_options`, en renvoyant le dernier `Last-Event-ID`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_message_with_options_id(
+        &self,
+        chat_id: &str,
+        content: &str,
+        agent_id: Option<i64>,
+        client_tools: &[Value],
+        tool_results: &[ToolResult],
+        opts: &StreamOptions,
+        on_event: impl FnMut(ChatEvent),
+    ) -> Result<Option<String>> {
         let mut body = json!({});
         if !content.is_empty() {
             body["content"] = json!(content);
@@ -730,18 +818,53 @@ impl Client {
         } else {
             body["toolResults"] = json!(tool_results);
         }
-        self.stream(&format!("/chats/{chat_id}"), body, on_event)
+        self.stream_with_id(&format!("/chats/{chat_id}"), body, on_event)
+            .await
+    }
+
+    /// Ré-attache le flux d'une génération en cours (`GET /chats/{id}/stream`).
+    /// `last_event_id` évite de rejouer les événements déjà reçus.
+    pub async fn resume_stream(
+        &self,
+        chat_id: &str,
+        last_event_id: Option<&str>,
+        on_event: impl FnMut(ChatEvent),
+    ) -> Result<Option<String>> {
+        let mut request = self
+            .http
+            .get(self.url(&format!("/chats/{chat_id}/stream")))
+            .header(ACCEPT, "text/event-stream");
+        if let Some(id) = last_event_id {
+            if !id.is_empty() {
+                request = request.header("Last-Event-ID", id);
+            }
+        }
+        let resp = request.send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let raw = resp.text().await?;
+            return Err(Error::Status {
+                status: status.as_u16(),
+                body: raw,
+            });
+        }
+        self.read_sse(resp, on_event).await
+    }
+
+    /// `GET /chats/{id}/usage` : consommation de contexte du chat.
+    pub async fn chat_usage(&self, chat_id: &str) -> Result<Value> {
+        self.request(Method::GET, &format!("/chats/{chat_id}/usage"), None)
             .await
     }
 
     /// POST + lecture SSE. Garantit un événement terminal : si le flux se coupe
     /// sans `completed`/`error`/`cancelled`, émet `Error{STREAM_ENDED}`.
-    async fn stream(
+    async fn stream_with_id(
         &self,
         path: &str,
         body: Value,
-        mut on_event: impl FnMut(ChatEvent),
-    ) -> Result<()> {
+        on_event: impl FnMut(ChatEvent),
+    ) -> Result<Option<String>> {
         let resp = self
             .http
             .post(self.url(path))
@@ -757,12 +880,23 @@ impl Client {
                 body: raw,
             });
         }
+        self.read_sse(resp, on_event).await
+    }
 
+    async fn read_sse(
+        &self,
+        resp: reqwest::Response,
+        mut on_event: impl FnMut(ChatEvent),
+    ) -> Result<Option<String>> {
         let mut finished = false;
+        let mut last_id: Option<String> = None;
         let events = resp.bytes_stream().eventsource();
         futures_util::pin_mut!(events);
         while let Some(ev) = events.next().await {
             let ev = ev.map_err(|e| Error::Stream(e.to_string()))?;
+            if !ev.id.is_empty() {
+                last_id = Some(ev.id.clone());
+            }
             let Ok(v) = serde_json::from_str::<Value>(&ev.data) else {
                 continue; // keep-alive ou ligne non JSON
             };
@@ -783,6 +917,6 @@ impl Client {
                 retryable: true,
             }));
         }
-        Ok(())
+        Ok(last_id)
     }
 }

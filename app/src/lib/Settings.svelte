@@ -1,11 +1,12 @@
 <script>
   import DevConsole from './DevConsole.svelte';
   import { dev, setEnabled } from './devlog.svelte.js';
-  import AgentLive from './AgentLive.svelte';
   import { untrack } from 'svelte';
   import { saveSettings, storeApiToken, logout, openExternal } from './api.js';
   import { getUserInstructions, updateUserInstructions } from './instructions.js';
   import Extensions from './Extensions.svelte';
+  import ApiExplorer from './ApiExplorer.svelte';
+  import { instructionsStatus, instructionsSync, instructionsRemove, instructionsSetEnabled } from './api.js';
   import { THEMES, normalizeTheme } from './themes.js';
 
   let {
@@ -210,6 +211,24 @@
     }
   }
 
+  let sync = $state(null);
+  let syncBusy = $state(false);
+  let syncErr = $state('');
+  async function syncCall(fn) {
+    syncBusy = true;
+    syncErr = '';
+    try {
+      sync = await fn();
+    } catch (e) {
+      syncErr = String(e);
+    } finally {
+      syncBusy = false;
+    }
+  }
+  $effect(() => {
+    if (tab === 'instructions' && !sync) syncCall(instructionsStatus);
+  });
+
   let instr = $state('');
   let instrSaved = $state('');
   let instrLoaded = $state(false);
@@ -272,6 +291,7 @@
     { id: 'code', label: 'Mode Code' },
     { id: 'skills', label: 'Skills' },
     { id: 'mcp', label: 'MCP' },
+    { id: 'api', label: 'API' },
     { id: 'diag', label: 'Diagnostic' }
   ];
   const navItems = $derived(dev.enabled ? [...baseNav, { id: 'console', label: 'Console' }] : baseNav);
@@ -286,7 +306,6 @@
     <aside class="sidebar">
       <div class="sidebar-head">
         <span class="sidebar-title">Paramètres</span>
-        <AgentLive />
       </div>
 
       <nav class="nav" aria-label="Navigation paramètres">
@@ -740,6 +759,39 @@
           </div>
         </div>
 
+        <div class="card form-card">
+   <div class="field">
+     <div class="field-head">
+       <label for="sync-on">Informer l’IA des outils locaux (serveurs MCP du pont)</label>
+     </div>
+     <label>
+       <input id="sync-on" type="checkbox" checked={sync?.enabled ?? true} disabled={syncBusy || !sync}
+         onchange={(e) => syncCall(() => instructionsSetEnabled(e.currentTarget.checked))} />
+       Ajouter un bloc automatique à tes instructions tant que le pont est actif
+     </label>
+     <p class="sec-sub">Le bloc est retiré à la déconnexion et à la fermeture de l’app. Il ne contient aucun jeton ni chemin.</p>
+     {#if sync?.block}
+<textarea class="input input-area" readonly rows="6" value={sync.block}></textarea>
+     {/if}
+     <p class="sec-sub">
+       {sync?.active ? 'Bloc publié sur ton compte.' : 'Aucun bloc publié.'}
+     </p>
+          </div>
+   {#if sync?.cleanupPending}
+            <div class="msg-err">Le retrait du bloc a échoué à la dernière fermeture. Il sera retenté au prochain démarrage, ou retire-le maintenant.</div>
+   {/if}
+          {#if sync?.lastError}
+     <div class="msg-err">{sync.lastError}</div>
+          {/if}
+   {#if syncErr}
+     <div class="msg-err">{syncErr}</div>
+   {/if}
+          <div class="form-actions">
+     <button type="button" class="btn-ghost" disabled={syncBusy} onclick={() => syncCall(instructionsSync)}>Resynchroniser</button>
+     <button type="button" class="btn-ghost" disabled={syncBusy || !(sync?.active || sync?.cleanupPending)} onclick={() => syncCall(instructionsRemove)}>Retirer maintenant</button>
+          </div>
+        </div>
+
       {:else if tab === 'compte'}
         <header class="sec-head sec-head-row">
           <div>
@@ -879,6 +931,8 @@
 
       {:else if tab === 'skills' || tab === 'mcp'}
         <Extensions embedded section={tab} {workdir} {oninsert} onchange={onextchange} {onclose} />
+      {:else if tab === 'api'}
+        <ApiExplorer />
       {:else if tab === 'console'}
         <DevConsole />
 

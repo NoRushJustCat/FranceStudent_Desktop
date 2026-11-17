@@ -1,0 +1,6 @@
+# cloudflared 2026.11.0 — empreintes SHA-256 des binaires officiels.
+# Format : <sha256>  <nom du fichier de release>
+# Source : https://github.com/cloudflare/cloudflared/releases/tag/2026.11.0
+# Ne jamais mettre à jour automatiquement en release : changer la version,
+# télécharger, vérifier, puis reporter les empreintes ici.
+d5c1d82031da6253dcdcff64c944cd0fe063016edeb2e4fd088075fc9bd52d0a  cloudflared-windows-amd64.exe

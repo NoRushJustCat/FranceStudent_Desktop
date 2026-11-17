@@ -1,10 +1,13 @@
 // Pas de console supplémentaire sous Windows en release.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod agents;
-mod agents_live;
+mod agent;
+mod bridge;
 mod changelog;
 mod ext;
+mod api_explorer;
+mod instructions;
+mod jobguard;
 mod login;
 mod mcp;
 mod mcp_ctx;
@@ -18,27 +21,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use fs_api::{Agent, ChatEvent, Client, StreamOptions, ToolCall, ToolResult};
+use fs_api::{Agent, Client};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
-/// Nombre maximal d'allers-retours outils pour un seul message utilisateur.
-const MAX_STEPS: usize = 30;
-/// Idem en mode économie.
-const MAX_STEPS_ECO: usize = 10;
-/// Taille maximale (caractères) d'une sortie d'outil envoyée au modèle en mode économie.
-const ECO_OUTPUT_CAP: usize = 5_000;
-/// En dessous de ce nombre de tokens de prompt, le mode économie ne regarde même pas la compaction.
-const ECO_COMPACT_MIN: u64 = 20_000;
-/// Seuil de compaction automatique si la taille de contexte de l'agent est inconnue.
-const ECO_COMPACT_DEFAULT: u64 = 40_000;
-
 /// Compteur pour les identifiants de génération quand le front n'en fournit pas.
 static RUN_SEQ: AtomicU64 = AtomicU64::new(1);
+/// Fermeture en cours : évite de relancer le nettoyage en boucle.
+static QUITTING: AtomicBool = AtomicBool::new(false);
 
 /// Confirmation d'outil en attente : (identifiant de la génération, canal de réponse).
 type Pending = (String, oneshot::Sender<bool>);
@@ -46,7 +40,6 @@ type Pending = (String, oneshot::Sender<bool>);
 /// Client HTTP mis en cache (vidé quand l'URL ou la clé changent),
 /// confirmations d'outils en attente, générations en cours (une par chat, en parallèle),
 /// MCP et autorisations de session.
-#[derive(Default)]
 struct AppState {
     client: Mutex<Option<Client>>,
     /// Confirmations en attente, par `call_id`.
@@ -58,17 +51,37 @@ struct AppState {
     mcp_up: Mutex<HashSet<String>>,
     /// Outils MCP « toujours autoriser » pour cette session (jamais enregistré sur disque).
     trusted: Mutex<HashSet<String>>,
-    /// Chats qui ont déjà reçu la liste des serveurs MCP locaux (bloc « [Contexte client] »)
-    /// pendant cette session. Vidé quand mcp.json change.
-    ctx_sent: Mutex<HashSet<String>>,
     /// Terminal intégré (shell persistant).
     terms: term::Terms,
     /// Mode d'autorisation courant (non persisté : jamais « système » au redémarrage).
     perm: Mutex<perm::Mode>,
+    /// Flux simultanés (2 par défaut).
+    gate: tokio::sync::Semaphore,
+    /// Chat → run actif (un seul run par chat).
+    chat_runs: Mutex<HashMap<String, String>>,
+    /// Pont MCP + tunnel Cloudflare.
+    bridge: bridge::Bridge,
 }
 
-fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_config_dir().map_err(|e| e.to_string())
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            client: Mutex::new(None),
+            pending: Mutex::new(HashMap::new()),
+            runs: Mutex::new(HashMap::new()),
+            mcp: mcp::Hub::default(),
+            mcp_up: Mutex::new(HashSet::new()),
+            trusted: Mutex::new(HashSet::new()),
+            terms: term::Terms::default(),
+            perm: Mutex::new(perm::Mode::default()),
+            gate: tokio::sync::Semaphore::new(2),
+            chat_runs: Mutex::new(HashMap::new()),
+            bridge: bridge::Bridge::default(),
+        }
+    }
+}
+
+fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {    app.path().app_config_dir().map_err(|e| e.to_string())
 }
 
 static ECO_TOKEN_CACHE: OnceLock<Mutex<Option<(String, u64)>>> = OnceLock::new();
@@ -323,12 +336,20 @@ async fn login_password(
     if let Ok(mut active) = ACTIVE_CLIENT_KEY.get_or_init(|| Mutex::new(None)).lock() {
  *active = None;
     }
+    instructions::schedule(&app);
     Ok(())
 }
 
-/// Déconnexion : efface le jeton enregistré dans le coffre-fort système et la session locale.
+/// Déconnexion : retire d'abord le bloc d'instructions (tant que le jeton existe), puis efface
+/// le jeton du coffre-fort système et la session locale. Si le retrait échoue ou dépasse 6 s,
+/// la déconnexion continue ; le nettoyage est réessayé à la prochaine connexion.
 #[tauri::command]
-fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn logout(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(6),
+        instructions::remove(&app),
+    )
+    .await;
     fs_store::clear_key();
     login::clear_session(&config_dir(&app)?)?;
     *state.client.lock().map_err(|_| "état interne verrouillé".to_string())? = None;
@@ -433,7 +454,6 @@ async fn list_chats(
         .await
         .map_err(|e| e.to_string())?;
     mcp_ctx::strip_context(&mut v);
-    agents_live::hide_chats(&app, &mut v);
     Ok(v)
 }
 
@@ -503,12 +523,9 @@ async fn search_chats(
     limit: Option<u32>,
 ) -> Result<Value, String> {
     let c = client(&app, &state).await?;
-    let mut v = c
-        .search_chats(query.trim(), limit.unwrap_or(20))
+    c.search_chats(query.trim(), limit.unwrap_or(20))
         .await
-        .map_err(|e| e.to_string())?;
-    agents_live::hide_chats(&app, &mut v);
-    Ok(v)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -837,12 +854,8 @@ fn mcp_get_config(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn mcp_save_config(app: AppHandle, state: State<'_, AppState>, text: String) -> Result<(), String> {
+fn mcp_save_config(app: AppHandle, text: String) -> Result<(), String> {
     mcp::save_config_text(&config_dir(&app)?, &text)?;
-    // La liste des serveurs/outils a pu changer : elle sera rejointe au prochain message de chaque chat.
-    if let Ok(mut sent) = state.ctx_sent.lock() {
-        sent.clear();
-    }
     Ok(())
 }
 
@@ -946,11 +959,40 @@ enum UiEvent {
         retryable: bool,
     },
     Cancelled,
+    /// Reprise d'un run interrompu.
+    Resumed {
+        run_id: String,
+    },
+    /// Appels d'outils en attente de décision.
+    AwaitingTools {
+        run_id: String,
+        calls: usize,
+    },
+    /// Run interrompu qui ne peut pas reprendre automatiquement.
+    RunInterrupted {
+        run_id: String,
+        reason: String,
+    },
+    /// Consommation de contexte du chat (`GET /chats/{id}/usage`).
+    Usage {
+        chat_id: String,
+        percent: Option<f64>,
+        used_tokens: Option<u64>,
+    },
+    /// Seuil de requêtes atteint pour ce run.
+    BudgetWarning {
+        run_id: String,
+        requests: u32,
+    },
+    /// Run en file d'attente (limite de flux simultanés).
+    Queued {
+        run_id: String,
+    },
 }
 
 /// Attend la réponse de l'utilisateur pour un outil. `run` = génération concernée
 /// (permet d'annuler les confirmations d'un seul chat).
-async fn ask(state: &State<'_, AppState>, run: &str, call_id: &str) -> bool {
+pub(crate) async fn ask(state: &State<'_, AppState>, run: &str, call_id: &str) -> bool {
     let (tx, rx) = oneshot::channel();
     if let Ok(mut map) = state.pending.lock() {
         map.insert(call_id.to_string(), (run.to_string(), tx));
@@ -958,98 +1000,10 @@ async fn ask(state: &State<'_, AppState>, run: &str, call_id: &str) -> bool {
     rx.await.unwrap_or(false)
 }
 
-/// Version courte d'une sortie d'outil pour l'affichage (le modèle reçoit la sortie complète
-/// ou, en mode économie, une version plafonnée).
-fn preview(s: &str) -> String {
-    if s.chars().count() > 4000 {
-        let mut t: String = s.chars().take(4000).collect();
-        t.push_str("\n[…]");
-        t
-    } else {
-        s.to_string()
-    }
-}
-
-/// Arguments pour l'affichage : ajoute les anciens noms (`old_string`, `new_string`,
-/// `pattern`) à côté des noms du serveur (`old_text`, `new_text`, `query`), pour que
-/// l'interface affiche les deux sans changement.
-fn display_args(args: &Value) -> Value {
-    let mut a = args.clone();
-    if let Some(o) = a.as_object_mut() {
-        for (from, to) in [
-            ("old_text", "old_string"),
-            ("new_text", "new_string"),
-            ("query", "pattern"),
-        ] {
-            if let Some(v) = o.get(from).cloned() {
-                o.entry(to).or_insert(v);
-            }
-        }
-    }
-    a
-}
-
-/// Message d'erreur lisible pour l'utilisateur. `tools_on` : des outils client étaient
-/// proposés au modèle (mode Code, ou serveurs MCP locaux configurés).
-fn explain(e: fs_api::Error, tools_on: bool) -> String {
-    if let fs_api::Error::Status { status, body } = &e {
-        if tools_on && *status == 403 {
-            return format!(
-                "Outils client refusés (HTTP 403) : le flag `2026_11_client_tools` n'est probablement pas activé pour ton compte. Détail : {}",
-                clip(body, 300)
-            );
-        }
-        if tools_on && *status == 400 && body.contains("not supported by this model") {
-            return "Ce modèle ne gère pas les outils client (Gemini). Choisis un modèle OpenAI ou Claude (mode Code ou outils MCP).".to_string();
-        }
-    }
-    e.to_string()
-}
-
-/// Mode économie : compacte le contexte quand il devient gros.
-async fn eco_compact(
-    c: &Client,
-    chat_id: &str,
-    agent_id: i64,
-    prompt_tokens: u64,
-    on_event: &Channel<UiEvent>,
-) {
-    if prompt_tokens < ECO_COMPACT_MIN {
-        return;
-    }
-    let window = c
-        .agents()
-        .await
-        .ok()
-        .and_then(|a| a.into_iter().find(|x| x.id == agent_id))
-        .and_then(|x| x.context_window);
-    let threshold = window.map(|w| w / 3).unwrap_or(ECO_COMPACT_DEFAULT);
-    if prompt_tokens < threshold {
-        return;
-    }
-    let text = match c.compact(chat_id).await {
-        Ok(_) => format!("Mode éco : contexte compacté (il pesait {prompt_tokens} tokens)."),
-        Err(e) => format!("Mode éco : compaction auto impossible ({e})."),
-    };
-    let _ = on_event.send(UiEvent::Notice { text });
-}
-
-/// `chat_id` absent => nouveau chat ; présent => réponse dans ce chat
-/// (l'agent peut changer d'un message à l'autre).
-/// `workdir` présent => mode Code : les 6 outils du serveur (fichiers + commande) sont
-/// proposés au modèle et exécutés ici, dans ce dossier uniquement.
-/// Sans `workdir`, si des serveurs MCP sont configurés, seul `run_command` est proposé, et
-/// uniquement pour les commandes `mcp …` (serveurs MCP locaux).
-/// `eco` absent => valeur des réglages.
-/// `run_id` : identifiant de cette génération (choisi par le front) ; permet d'en annuler
-/// une seule alors que plusieurs chats génèrent en parallèle.
-///
-/// Les générations sont indépendantes : changer de chat dans l'interface ne coupe rien,
-/// les événements continuent d'arriver sur le même canal.
-///
-/// Les skills passent par `$nom` dans le message (instructions jointes au texte). Les
-/// serveurs MCP locaux passent par l'outil client `run_command` (`mcp list|tools|call …`) :
-/// leur liste est jointe au premier message d'un chat. Pas de pont, pas de tunnel.
+/// Envoie un message. `workdir` renseigné => mode Code (les 6 outils du catalogue).
+/// Sans `workdir`, aucun outil client n'est proposé : les MCP passent par le tunnel
+/// France Student, jamais par la boucle locale.
+/// `local_prompt` est accepté pour compatibilité mais n'est plus jamais injecté.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn send_message(
@@ -1068,542 +1022,209 @@ async fn send_message(
     local_prompt: Option<String>,
     on_event: Channel<UiEvent>,
 ) -> Result<(), String> {
+    let _ = local_prompt; // plus jamais ajouté au message
+    let dir = config_dir(&app)?;
+    let eco = eco.unwrap_or_else(|| fs_store::load(&dir).eco);
     let run = run_id
         .filter(|r| !r.is_empty())
         .unwrap_or_else(|| format!("run-{}", RUN_SEQ.fetch_add(1, Ordering::SeqCst)));
+
     let flag = Arc::new(AtomicBool::new(false));
-    if let Ok(mut m) = state.runs.lock() {
-        m.insert(run.clone(), flag.clone());
+    if let Ok(mut runs) = state.runs.lock() {
+        runs.insert(run.clone(), flag.clone());
     }
 
-    let opts = StreamOptions {
-        images: images.unwrap_or_default(),
-        files: files.unwrap_or_default(),
-        enable_web_search: enable_web_search.unwrap_or(false),
-    };
-
-    let result = run_message(
-        &app,
-        &state,
-        chat_id,
-        agent_id,
-        content,
-        workdir,
-        auto_accept,
-        eco,
-        opts,
-        local_prompt,
-        &run,
-        &flag,
- &on_event,
-    )
-    .await;
-
-    if let Ok(mut m) = state.runs.lock() {
-        m.remove(&run);
+    // Un seul run actif par chat.
+    let chat_key = chat_id.clone();
+    if let Some(chat) = chat_key.as_deref() {
+        if let Ok(mut guard) = state.chat_runs.lock() {
+            match guard.get(chat) {
+                Some(owner) if owner != &run => {
+                    let _ = on_event.send(UiEvent::Failed {
+                        code: "CHAT_BUSY".to_string(),
+                        message: "Une réponse est déjà en cours dans ce chat.".to_string(),
+                        retryable: false,
+                    });
+                    if let Ok(mut runs) = state.runs.lock() {
+                        runs.remove(&run);
+                    }
+                    return Ok(());
+                }
+                Some(_) => {}
+                None => {
+                    guard.insert(chat.to_string(), run.clone());
+                }
+            }
+        }
     }
-    if let Ok(mut p) = state.pending.lock() {
-        p.retain(|_, (r, _)| r != &run);
-    }
-    result
-}
 
-/// Titre local d'un chat : première ligne du message, 50 caractères au plus.
-fn local_title(s: &str) -> String {
-    let line = s
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("Nouveau chat");
-    let mut t: String = line.chars().take(50).collect();
-    if line.chars().count() > 50 {
-        t.push('…');
-    }
-    t
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_message(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    chat_id: Option<String>,
-    agent_id: i64,
-    content: String,
-    workdir: Option<String>,
-    auto_accept: bool,
-    eco: Option<bool>,
-    mut opts: StreamOptions,
-    local_prompt: Option<String>,
-    run: &str,
-    flag: &AtomicBool,
-    on_event: &Channel<UiEvent>,
-) -> Result<(), String> {
-    let dir = config_dir(app)?;
-    let eco = eco.unwrap_or_else(|| fs_store::load(&dir).eco);
-    let max_steps = if eco { MAX_STEPS_ECO } else { MAX_STEPS };
-    let out_cap = if eco {
-        ECO_OUTPUT_CAP
-    } else {
-        fs_tools::MAX_OUTPUT
-    };
-    let skill_cap = if eco { 4_000 } else { 20_000 };
-    if eco && opts.enable_web_search {
-        // Les résultats de recherche web pèsent lourd en tokens.
-        opts.enable_web_search = false;
-        let _ = on_event.send(UiEvent::Notice {
-            text: "Mode éco : recherche web désactivée pour ce message.".to_string(),
+    // Deux flux simultanés au maximum ; les autres attendent leur tour.
+    if state.gate.available_permits() == 0 {
+        let _ = on_event.send(UiEvent::Queued {
+            run_id: run.clone(),
         });
     }
+    let _permit = state
+        .gate
+        .acquire()
+        .await
+        .map_err(|_| "file d'attente indisponible".to_string())?;
 
-    let root = workdir.filter(|w| !w.trim().is_empty()).map(PathBuf::from);
-    let skill_list = skills::list(&dir, root.as_deref());
-    // Au moins un serveur MCP local configuré (mcp.json de l'app ou du projet) ?
-    let mcp_on = !mcp::Hub::load_all_servers(&dir, root.as_deref()).is_empty();
-
-    // Outils client : le catalogue fixe du serveur en mode Code ; sinon, seulement
-    // `run_command` (réservé aux commandes `mcp …`) quand des serveurs MCP existent.
-    let tools: Vec<Value> = if root.is_some() {
-        fs_tools::NAMES.iter().map(|n| json!(n)).collect()
-    } else if mcp_on {
-        vec![json!("run_command")]
+    let root = workdir
+        .filter(|w| !w.trim().is_empty())
+        .map(PathBuf::from);
+    let tools: Vec<String> = if root.is_some() {
+        fs_tools::NAMES.iter().map(|name| name.to_string()).collect()
     } else {
         Vec::new()
     };
 
-    // `$nom-de-skill` dans le message : les instructions sont jointes au message.
-    let mut content = content;
-    let raw_title = local_title(&content);
-    let (expanded, used) = skills::expand_mentions(&skill_list, &content, skill_cap);
-    if !used.is_empty() {
-        content = expanded;
-        let _ = on_event.send(UiEvent::Notice {
-            text: format!("Skills joints au message : {}.", used.join(", ")),
+    let outcome = async {
+        if let Err((code, message)) = agent::preflight(&app, agent_id, &tools).await {
+            let _ = on_event.send(UiEvent::Failed {
+                code,
+                message,
+                retryable: false,
+            });
+            return Ok(());
+        }
+
+        let request = fs_agent::RunRequest {
+            run_id: run.clone(),
+            chat_id,
+            agent_id,
+            content,
+            workdir: root,
+            auto_accept,
+            eco,
+            tools,
+            options: fs_api::StreamOptions {
+                images: images.unwrap_or_default(),
+                files: files.unwrap_or_default(),
+                enable_web_search: enable_web_search.unwrap_or(false),
+            },
+        };
+        let control = fs_agent::RunControl::from_flag(flag.clone());
+        agent::run(&app, request, control, &on_event)
+            .await
+            .map(|_| ())
+    }
+    .await;
+
+    if let Ok(mut runs) = state.runs.lock() {
+        runs.remove(&run);
+    }
+    if let Ok(mut chat_runs) = state.chat_runs.lock() {
+        if chat_key.as_deref().and_then(|chat| chat_runs.get(chat)) == Some(&run) {
+            if let Some(chat) = chat_key.as_deref() {
+                chat_runs.remove(chat);
+            }
+        }
+    }
+    if let Ok(mut pending) = state.pending.lock() {
+        pending.retain(|_, (owner, _)| owner != &run);
+    }
+    outcome
+}
+
+/// Runs non terminaux (reprise après redémarrage).
+#[tauri::command]
+async fn list_runs(app: AppHandle) -> Result<Vec<fs_agent::RunState>, String> {
+    agent::list_open(&app).await
+}
+
+/// Reprend un run interrompu.
+#[tauri::command]
+async fn resume_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    on_event: Channel<UiEvent>,
+) -> Result<(), String> {
+    let flag = {
+        let mut runs = state
+            .runs
+            .lock()
+            .map_err(|_| "état interne verrouillé".to_string())?;
+        runs.entry(run_id.clone())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
+    };
+    let control = fs_agent::RunControl::from_flag(flag);
+
+    // Même limites que `send_message` : un run par chat, deux flux simultanés.
+    let chat_key = match agent::load_run(&app, &run_id).await {
+        Ok(run) => run.chat_id,
+        Err(error) => {
+            if let Ok(mut runs) = state.runs.lock() {
+                runs.remove(&run_id);
+            }
+            return Err(error);
+        }
+    };
+    if let Some(chat) = chat_key.as_deref() {
+        let busy = state
+            .chat_runs
+            .lock()
+            .map(|guard| guard.contains_key(chat))
+            .unwrap_or(false);
+        if busy {
+            if let Ok(mut runs) = state.runs.lock() {
+                runs.remove(&run_id);
+            }
+            let _ = on_event.send(UiEvent::Failed {
+                code: "CHAT_BUSY".to_string(),
+                message: "Une réponse est déjà en cours dans ce chat.".to_string(),
+                retryable: false,
+            });
+            return Ok(());
+        }
+        if let Ok(mut guard) = state.chat_runs.lock() {
+            guard.insert(chat.to_string(), run_id.clone());
+        }
+    }
+    if state.gate.available_permits() == 0 {
+        let _ = on_event.send(UiEvent::Queued {
+            run_id: run_id.clone(),
         });
     }
+    let _permit = state
+        .gate
+        .acquire()
+        .await
+        .map_err(|_| "file d'attente indisponible".to_string())?;
 
-    // Premier message d'un chat (par session) : joint la liste des serveurs MCP locaux et
-    // la façon de les appeler. Marqué « envoyé » seulement une fois l'envoi réussi.
-    let mut mcp_ctx_pending = false;
-    let mut retitle: Option<String> = None;
-    if mcp_on {
-        let already_sent = match chat_id.as_deref() {
-            Some(id) => state
-                .ctx_sent
-                .lock()
-                .map(|s| s.contains(id))
-                .unwrap_or(false),
-            None => false,
-        };
-        if !already_sent {
-            if let Some(ctx) = state
-                .mcp
-                .context_text(&dir, root.as_deref(), eco)
-                .await
-            {
-                content = format!("{ctx}\n\n---\n{content}");
-                mcp_ctx_pending = true;
-                if chat_id.is_none() {
-                    retitle = Some(raw_title.clone());
-                }
-                let _ = on_event.send(UiEvent::Notice {
-                    text: "Outils MCP locaux joints au message.".to_string(),
-                });
+    let result = agent::resume(&app, &run_id, control, &on_event)
+        .await
+        .map(|_| ());
+    if let Ok(mut runs) = state.runs.lock() {
+        runs.remove(&run_id);
+    }
+    if let Some(chat) = chat_key.as_deref() {
+        if let Ok(mut guard) = state.chat_runs.lock() {
+            if guard.get(chat).map(String::as_str) == Some(run_id.as_str()) {
+                guard.remove(chat);
             }
         }
     }
+    if let Ok(mut pending) = state.pending.lock() {
+        pending.retain(|_, (owner, _)| owner != &run_id);
+    }
+    result
+}
 
-    // Instructions locales de l'utilisateur, jointes au message ([Contexte client]).
-    {
-        let mut pre = String::new();
-        // Prompt système local (mode développeur) : joint à chaque message, jamais synchronisé.
-        if let Some(p) = local_prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-     pre.push_str("Instructions locales de l'utilisateur :\n");
-     pre.push_str(p);
-     pre.push('\n');
-        }
-        if !pre.is_empty() {
-            let pre = pre.trim_end().to_string();
-            content = if content.starts_with("[Contexte client]") {
-                content.replacen(
-                    "[Contexte client]",
-                    &format!("[Contexte client]\n{pre}\n"),
-                    1,
-                )
-            } else {
-                format!("[Contexte client]\n{pre}\n\n---\n{content}")
-            };
-            if chat_id.is_none() && retitle.is_none() {
-                retitle = Some(raw_title.clone());
-            }
+/// Abandonne un run : drapeau d'annulation, confirmations en attente, état persisté.
+#[tauri::command]
+async fn abandon_run(app: AppHandle, state: State<'_, AppState>, run_id: String) -> Result<(), String> {
+    if let Ok(runs) = state.runs.lock() {
+        if let Some(flag) = runs.get(&run_id) {
+            flag.store(true, Ordering::SeqCst);
         }
     }
-
-    let mut chat = chat_id;
-    let mut results: Vec<ToolResult> = Vec::new();
-    let mut total_prompt: u64 = 0;
-    let mut total_output: u64 = 0;
-    let mut api_calls: u32 = 0;
-    let mut seen_ev: HashSet<String> = HashSet::new();
-
-    for _ in 0..max_steps {
-        // Un tour avec outils peut durer plus longtemps que le jeton initial.
-        let c = client(app, state).await?;
-        let target = chat.clone();
-        let mut calls: Vec<ToolCall> = Vec::new();
-        let mut done: Option<(String, String, Option<u64>, Option<u64>)> = None;
-        let mut stop = false;
-        let mut assistant_text = String::new();
-
-        let handler = |ev: ChatEvent| match ev {
-            ChatEvent::Opened { chat_id } => {
-                chat = Some(chat_id.clone());
-                let _ = on_event.send(UiEvent::Opened { chat_id });
-            }
-            ChatEvent::Title { chat_id, title } => {
-                let title = retitle.clone().unwrap_or(title);
-                let _ = on_event.send(UiEvent::Title { chat_id, title });
-            }
-            ChatEvent::Delta(text) => {
-                assistant_text.push_str(&text);
-                let _ = on_event.send(UiEvent::Delta { text });
-            }
-            ChatEvent::ReasoningDelta(text) => {
-                let _ = on_event.send(UiEvent::Reasoning { text });
-            }
-            ChatEvent::Completed { chat_id, message } => {
-                chat = Some(chat_id.clone());
-                if !message.content.is_empty() {
-                    assistant_text = message.content.clone();
-                }
-                let usage = message.token_usage.clone().unwrap_or_default();
-                done = Some((
-                    chat_id,
-                    message.id.clone(),
-                    usage.prompt_token_count,
-                    usage.candidates_token_count,
-                ));
-                calls = message.tool_calls;
-            }
-            ChatEvent::Error(e) => {
-                stop = true;
-                let _ = on_event.send(UiEvent::Failed {
-                    code: e.code,
-                    message: e.message,
-                    retryable: e.retryable,
-                });
-            }
-            ChatEvent::Cancelled { .. } => {
-                stop = true;
-                let _ = on_event.send(UiEvent::Cancelled);
-            }
-            ChatEvent::Mcp(text) | ChatEvent::Notice(text) => {
-                let _ = on_event.send(UiEvent::Notice { text });
-            }
-            ChatEvent::Other(ty) => {
-                if (ty.contains("mcp") || ty.contains("tool")) && seen_ev.insert(ty.clone()) {
-                    let _ = on_event.send(UiEvent::Notice {
-                        text: format!("France Student a émis un événement « {ty} »."),
-                    });
-                }
-            }
-        };
-
-        let r = match &target {
-            Some(id) => {
-                c.send_message_with_options(
-                    id,
-                    &content,
-                    Some(agent_id),
-                    &tools,
-                    &results,
-                    &opts,
-                    handler,
-                )
-                .await
-            }
-            None => {
-                c.stream_chat_with_options(agent_id, &content, &tools, &opts, handler)
-                    .await
-            }
-        };
-        r.map_err(|e| explain(e, !tools.is_empty()))?;
-
-        // Titre local : le serveur nommerait le chat d'après le bloc de contexte.
-        if let (Some(t), Some(id)) = (retitle.take(), chat.as_ref()) {
-            let _ = c.rename_chat(id, &t).await;
-            let _ = on_event.send(UiEvent::Title {
-                chat_id: id.clone(),
-                title: t,
-            });
-        }
-
-        // Le contexte MCP est parti avec ce message : on ne le rejoint plus dans ce chat.
-        if mcp_ctx_pending {
-            mcp_ctx_pending = false;
-            if let Some(id) = chat.as_ref() {
-                if let Ok(mut sent) = state.ctx_sent.lock() {
-                    sent.insert(id.clone());
-                }
-            }
-        }
-
-        if stop {
-            return Ok(());
-        }
-        let Some((chat_id, message_id, prompt_tokens, output_tokens)) = done else {
-            return Ok(());
-        };
-        api_calls += 1;
-        total_prompt += prompt_tokens.unwrap_or(0);
-        total_output += output_tokens.unwrap_or(0);
-
-        // Outils exécutés par France Student lui-même (pont MCP) : ce ne sont pas les nôtres, on ne les rejoue pas.
-        // `run_command` est à nous en mode Code, et hors mode Code dès que des serveurs MCP sont configurés.
-        let (calls, theirs): (Vec<ToolCall>, Vec<ToolCall>) = calls.into_iter().partition(|c| {
-            c.name.starts_with("mcp__")
-                || (root.is_some() && fs_tools::NAMES.iter().any(|n| *n == c.name))
-                || (mcp_on && c.name == "run_command")
-        });
-        if !theirs.is_empty() {
-            let names: Vec<String> = theirs.iter().map(|c| c.name.clone()).collect();
-            let _ = on_event.send(UiEvent::Notice {
-                text: format!(
-                    "Outils exécutés côté France Student : {}.",
-                    names.join(", ")
-                ),
-            });
-        }
-
-        if calls.is_empty() {
-            let _ = on_event.send(UiEvent::Done {
-                chat_id: chat_id.clone(),
-                message_id,
-                prompt_tokens,
-                output_tokens,
-                total_prompt_tokens: total_prompt,
-                total_output_tokens: total_output,
-                api_calls,
-                eco,
-            });
-            if eco {
-                if let Some(p) = prompt_tokens {
-                    eco_compact(&c, &chat_id, agent_id, p, on_event).await;
-                }
-            }
-            return Ok(());
-        }
-
-        // Le modèle demande des outils : exécution locale ou MCP, puis nouveau tour.
-        results.clear();
-        for call in calls {
-            if flag.load(Ordering::SeqCst) {
-                let _ = on_event.send(UiEvent::Cancelled);
-                return Ok(());
-            }
-            let args = fs_tools::parse_args(&call.arguments);
-
-            // `run_command` avec une commande `mcp …` (ou `fs-mcp …`) : serveurs MCP locaux,
-            // exécutés ici (aucun shell, aucun tunnel), y compris hors mode Code.
-            let mcp_cmd: Option<String> = if call.name == "run_command" {
-                args["command"]
-                    .as_str()
-                    .filter(|c| mcp_ctx::mcp_rest(c).is_some())
-                    .map(|c| c.trim().to_string())
-            } else {
-                None
-            };
-            // Commande lancée par l'IA : recopiée dans le terminal intégré avec sa sortie.
-            let ai_cmd: Option<String> = if call.name == "run_command" {
-                args["command"].as_str().map(str::to_string)
-            } else {
-                None
-            };
-            // Sous-agents : run_command dont la commande commence par `agent` (mode Code seulement).
-            let agent_cmd: Option<String> = if call.name == "run_command" && root.is_some() {
-                args["command"]
-                    .as_str()
-                    .and_then(agents::agent_rest)
-                    .map(str::to_string)
-            } else {
-                None
-            };
-            // Mode d autorisation lu une fois par appel ; blocked = refus automatique (planification).
-            let mode = perm::current(state);
-            let mut blocked: Option<String> = None;
-            let is_mcp_direct = call.name.starts_with("mcp__");
-            let change_label = changelog::label(&call.name, &args, mcp_cmd.as_deref());
-
-            let (origin, needs_confirm) = if let Some(cmd_text) = mcp_cmd.as_deref() {
-                // `mcp list` et `mcp tools …` sont sans effet de bord ; `mcp call …` demande accord.
-                let sub = mcp_ctx::mcp_rest(cmd_text).unwrap_or("");
-                let verb = sub
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                let is_safe = matches!(verb.as_str(), "" | "list" | "tools");
-                let tool = sub.split_whitespace().nth(2).unwrap_or("");
-                (
-                    "mcp".to_string(),
-                    !is_safe && perm::mcp_ask(mode, auto_accept, tool),
-                )
-            } else if is_mcp_direct {
-                let trusted: HashSet<String> =
-                    state.trusted.lock().map(|g| g.clone()).unwrap_or_default();
-                let is_trusted = trusted.contains(&call.name);
-                let tool = call.name.splitn(3, "__").nth(2).unwrap_or("");
-                (
-                    "mcp".to_string(),
-                    !is_trusted && perm::mcp_ask(mode, auto_accept, tool),
-                )
-            } else {
-                let nc = if root.is_none() {
-                    // Pas de mode Code : refus immédiat plus bas, inutile de demander.
-                    false
-                } else {
-                    if agent_cmd.is_some() {
-                        false
-                    } else {
-                        match perm::decide(mode, auto_accept, &call.name, &args, root.as_deref()) {
-                            perm::Verdict::Allow => false,
-                            perm::Verdict::Ask => true,
-                            perm::Verdict::Deny(m) => {
-                                blocked = Some(m);
-                                false
-                            }
-                        }
-                    }
-                };
-                ("local".to_string(), nc)
-            };
-
-            let _ = on_event.send(UiEvent::ToolCall {
-                call_id: call.call_id.clone(),
-                name: call.name.clone(),
-                origin,
-                args: display_args(&args),
-                needs_confirm,
-            });
-
-            let allowed = if needs_confirm {
-                ask(state, run, &call.call_id).await
-            } else {
-                true
-            };
-            if flag.load(Ordering::SeqCst) {
-                let _ = on_event.send(UiEvent::Cancelled);
-                return Ok(());
-            }
-
-            let (output, is_error) = if !allowed {
-                ("Refusé par l'utilisateur.".to_string(), true)
-            } else if let Some(m) = blocked.clone() {
-                (m, true)
-            } else if let Some(rest) = agent_cmd.as_deref() {
-                match root.as_deref() {
-                    Some(r) => {
-                        let env = agents::Env {
-                            app,
-                            client: &c,
-                            agent_id,
-                            root: r,
-                            auto_accept,
-                            run,
-                            flag,
-                            on_event,
-                            parent_call: &call.call_id,
-                        };
-                        agents::exec(&env, rest).await
-                    }
-                    None => (
-                        "Les sous-agents exigent le mode Code (dossier de travail).".to_string(),
-                        true,
-                    ),
-                }
-            } else if let Some(cmd_text) = mcp_cmd.as_deref() {
-                state
-                    .mcp
-                    .exec_mcp(&dir, root.as_deref(), cmd_text, eco)
-                    .await
-            } else if is_mcp_direct {
-                let stripped = call.name.strip_prefix("mcp__").unwrap_or("");
-                let parts: Vec<&str> = stripped.splitn(2, "__").collect();
-                let server = parts.first().copied().unwrap_or("");
-                let tool = parts.get(1).copied().unwrap_or("");
-                match state
-                    .mcp
-                    .call_tool_auto(&dir, root.as_deref(), server, tool, args)
-                    .await
-                {
-                    Ok((o, err)) => (o, err),
-                    Err(e) => (format!("Erreur MCP : {e}"), true),
-                }
-            } else {
-                match root.as_ref() {
-                    Some(r) => {
-                        let res = if mode == perm::Mode::Full {
-                            fs_tools::execute_full(r, &call.name, &call.arguments).await
-                        } else {
-                            fs_tools::execute(r, &call.name, &call.arguments).await
-                        };
-                        match res {
-                            Ok(o) => (o, false),
-                            Err(e) => (e, true),
-                        }
-                    }
-                    None if call.name == "run_command" => (
-                        "Hors mode Code, run_command n'accepte que les commandes `mcp …`."
-                            .to_string(),
-                        true,
-                    ),
-                    None => (
-                        "Outil de fichiers disponible uniquement en mode Code.".to_string(),
-                        true,
-                    ),
-                }
-            };
-            let _ = on_event.send(UiEvent::ToolResult {
-                call_id: call.call_id.clone(),
-                output: preview(&output),
-                is_error,
-                denied: !allowed || blocked.is_some(),
-            });
-            if let Some(cmd) = ai_cmd.as_deref().filter(|_| agent_cmd.is_none()) {
-                term::emit_ai(app, cmd, &clip(&output, 20_000), is_error, root.as_deref());
-            }
-            if let Some(label) = change_label.as_deref() {
-                let status = if !allowed {
-                    "refusé"
-                } else if is_error {
-                    "échec"
-                } else {
-                    "ok"
-                };
-                changelog::record(&dir, &call.name, label, status, root.as_deref());
-                let _ = on_event.send(UiEvent::Notice {
-                    text: format!("✎ {label} · {status}"),
-                });
-            }
-            let mut output = output;
-            if output.chars().count() > out_cap {
-                output = clip(&output, out_cap);
-                output.push_str(&format!("\n[sortie tronquée à {out_cap} caractères]"));
-            }
-            results.push(ToolResult {
-                call_id: call.call_id,
-                output,
-                is_error,
-            });
-        }
-        content = String::new();
+    if let Ok(mut pending) = state.pending.lock() {
+        pending.retain(|_, (owner, _)| owner != &run_id);
     }
-
-    let _ = on_event.send(UiEvent::Failed {
-        code: "MAX_STEPS".to_string(),
-        message: format!("Arrêt après {max_steps} appels d'outils sur un seul message."),
-        retryable: false,
-    });
-    Ok(())
+    agent::abandon(&app, &run_id).await.map(|_| ())
 }
 
 /// Journal des modifications faites par l'IA (les `limit` dernières, 200 par défaut).
@@ -1616,6 +1237,10 @@ fn get_change_log(app: AppHandle, limit: Option<usize>) -> Result<Vec<Value>, St
 }
 
 fn main() {
+    // Si l'app est tuée ou plante, Windows tue aussi cloudflared et les serveurs MCP.
+    if let Err(e) = jobguard::init() {
+ eprintln!("job object : {e}");
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
@@ -1648,9 +1273,6 @@ fn main() {
             upload_attachment,
             open_external,
             get_change_log,
-            agents_live::agents_live_snapshot,
-            agents_live::agents_live_cancel,
-            agents_live::agents_live_clear,
             term::term_start,
             term::term_write,
             term::term_kill,
@@ -1670,6 +1292,9 @@ fn main() {
             ext::mcp_call,
             trust_tool,
             send_message,
+            list_runs,
+            resume_run,
+            abandon_run,
             ext::skill_read,
             ext::skill_write,
             ext::skill_create,
@@ -1680,8 +1305,50 @@ fn main() {
             ext::mcp_upsert,
             ext::mcp_remove,
             ext::mcp_import,
+            bridge::bridge_start,
+            bridge::bridge_stop,
+            bridge::bridge_status,
+     bridge::bridge_confirm_answer,
+            bridge::bridge_set,
+            bridge::bridge_set_token,
+            bridge::bridge_set_access,
+            api_explorer::api_routes,
+     api_explorer::api_call,
+     instructions::instructions_status,
+     instructions::instructions_sync,
+     instructions::instructions_remove,
+     instructions::instructions_set_enabled,
         ])
+        .setup(|app| {
+            bridge::on_launch(app.handle());
+     instructions::on_launch(app.handle());
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("erreur au lancement de FS Code")
-        .run(|_app, _event| {});
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                if QUITTING.swap(true, Ordering::SeqCst) {
+                    api.prevent_exit();
+                    return;
+                }
+                api.prevent_exit();
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = tokio::time::timeout(
+                        bridge::SHUTDOWN_WAIT,
+                        async {
+       let b = app.clone();
+       let h = tauri::async_runtime::spawn(async move {
+    let _ = instructions::remove(&b).await;
+       });
+       let _ = bridge::stop(&app, false).await;
+       let _ = h.await;
+          },
+                    )
+                    .await;
+                    app.exit(0);
+                });
+            }
+        });
 }

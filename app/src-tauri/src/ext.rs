@@ -140,7 +140,7 @@ pub async fn account_skill_delete(
         .map_err(|e| e.to_string())
 }
 
-/// `PATCH /skills/{id}` (supposé) avec le JSON fourni.
+/// `POST /skills/{id}` (SkillUpdateDto) avec le JSON fourni.
 #[tauri::command]
 pub async fn account_skill_update(
     app: AppHandle,
@@ -150,7 +150,7 @@ pub async fn account_skill_update(
 ) -> Result<Value, String> {
     safe_id(&id)?;
     let c = client(&app, &state).await?;
-    c.send_json("PATCH", &format!("/skills/{id}"), Some(body))
+    c.send_json("POST", &format!("/skills/{id}"), Some(body))
         .await
         .map_err(|e| e.to_string())
 }

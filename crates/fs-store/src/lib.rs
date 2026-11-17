@@ -25,6 +25,9 @@ pub struct Settings {
     pub auto_accept: bool,
     /// Mode économie : sorties d'outils courtes, moins d'étapes, compaction auto.
     pub eco: bool,
+    /// Publier le contexte FS Code dans les instructions personnalisées du compte
+    /// (retiré à la fermeture). Activé par défaut.
+    pub sync_instructions: bool,
 }
 
 impl Default for Settings {
@@ -35,6 +38,7 @@ impl Default for Settings {
             last_workdir: None,
             auto_accept: false,
             eco: false,
+     sync_instructions: true,
         }
     }
 }
@@ -94,6 +98,32 @@ pub fn set_key(key: &str) -> Result<(), String> {
 
 pub fn clear_key() {
     if let Ok(e) = entry() {
+        let _ = e.delete_credential();
+    }
+}
+
+fn secret_entry(account: &str) -> Result<keyring::Entry, keyring::Error> {
+    keyring::Entry::new(SERVICE, account)
+}
+
+/// Secret nommé dans le coffre du système (jeton de tunnel, Cloudflare Access…).
+pub fn get_secret(account: &str) -> Option<String> {
+    secret_entry(account)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+pub fn set_secret(account: &str, value: &str) -> Result<(), String> {
+    secret_entry(account)
+        .map_err(|e| e.to_string())?
+        .set_password(value.trim())
+        .map_err(|e| e.to_string())
+}
+
+pub fn clear_secret(account: &str) {
+    if let Ok(e) = secret_entry(account) {
         let _ = e.delete_credential();
     }
 }

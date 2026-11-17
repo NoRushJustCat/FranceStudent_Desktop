@@ -65,15 +65,6 @@ pub(crate) fn current(state: &AppState) -> Mode {
     state.perm.lock().map(|m| *m).unwrap_or_default()
 }
 
-/// Rappel court joint aux messages (bloc « Contexte client », masqué à l'affichage).
-pub(crate) fn mode_hint(mode: Mode) -> Option<&'static str> {
-    match mode {
-        Mode::Plan => Some("[Mode planification] Lecture seule : explore (list_directory, read_file, search_files), n'écris rien et n'exécute aucune commande (refusées). Termine par un plan numéroté (fichiers touchés, étapes, risques) ; l'utilisateur dira quand l'exécuter."),
-        Mode::Full => Some("[Mode système complet] Chemins absolus hors projet autorisés, commandes sans confirmation : sois prudent, annonce les actions destructrices avant de les faire."),
-        _ => None,
-    }
-}
-
 /// Faut-il demander pour un outil local (`name`, `args`) ?
 pub(crate) fn decide(
     mode: Mode,
@@ -125,46 +116,6 @@ fn command_verdict(mode: Mode, args: &Value, root: Option<&Path>) -> Verdict {
     } else {
         Verdict::Ask
     }
-}
-
-/// Faut-il demander pour un outil MCP (`tool` = nom de l'outil, sans le serveur) ?
-pub(crate) fn mcp_ask(mode: Mode, auto_accept: bool, tool: &str) -> bool {
-    match mode {
-        Mode::Full => false,
-        Mode::Ask => !auto_accept,
-        Mode::Plan | Mode::Auto | Mode::Project => !read_only_name(tool),
-    }
-}
-
-const READ_WORDS: [&str; 23] = [
-    "get", "list", "read", "search", "find", "fetch", "query", "show", "describe", "inspect",
-    "view", "check", "status", "stat", "lookup", "browse", "tree", "info", "count", "exists", "ls",
-    "cat", "head",
-];
-
-fn read_only_name(tool: &str) -> bool {
-    let w = first_word(tool);
-    READ_WORDS.iter().any(|r| *r == w)
-}
-
-/// Premier mot d'un nom d'outil (`get_file`, `getFile`, `get-file` → `get`).
-fn first_word(s: &str) -> String {
-    let mut out = String::new();
-    let mut prev_lower = false;
-    for c in s.chars() {
-        if !c.is_alphanumeric() {
-            if out.is_empty() {
-                continue;
-            }
-            break;
-        }
-        if c.is_uppercase() && prev_lower && !out.is_empty() {
-            break;
-        }
-        prev_lower = c.is_lowercase();
-        out.extend(c.to_lowercase());
-    }
-    out
 }
 
 // ---------- analyse des commandes (sur texte en minuscules) ----------
@@ -666,10 +617,4 @@ mod tests {
         assert!(matches!(run(Mode::Auto, "echo hi > a.txt"), Verdict::Ask));
     }
 
-    #[test]
-    fn mcp_names() {
-        assert!(!mcp_ask(Mode::Auto, false, "getFile"));
-        assert!(mcp_ask(Mode::Auto, false, "delete_file"));
-        assert!(!mcp_ask(Mode::Full, false, "delete_file"));
-    }
 }

@@ -10,11 +10,12 @@
   const EMPTY = {
     phase: 'stopped',
     step: '',
+    mode: 'quick',
     url: null,
-    serverId: null,
     port: null,
     tools: 0,
     servers: [],
+    entries: [],
     error: null,
     warnings: [],
     registerNote: null,
@@ -22,6 +23,9 @@
     log: [],
     autoAllow: false,
     autoStart: false,
+    confirmReadOnly: true,
+    maxTools: 64,
+    namedReady: false,
   };
 
   function loadPos() {
@@ -44,6 +48,12 @@
   let pos = $state(loadPos()); // null = bas-droite ; sinon coin haut-gauche en px
   let urlCopied = $state(false);
   let confirmDangerous = $state(false);
+  let modeDraft = $state('quick');
+  let publicDraft = $state('');
+  let tokenDraft = $state('');
+  let accessId = $state('');
+  let accessSecret = $state('');
+  let modeTouched = $state(false);
   let drag = null; // non réactif : état du glissement en cours
   let copyTimer = null;
 
@@ -151,6 +161,10 @@
     try {
       s = await invoke('bridge_status');
       fault = '';
+      if (!modeTouched) {
+        modeDraft = s.mode || 'quick';
+        publicDraft = s.publicUrl || '';
+      }
     } catch (e) {
       fault = String(e);
     }
@@ -181,20 +195,56 @@
   const toggle = () => run(active ? 'bridge_stop' : 'bridge_start');
   const clean = () => run('bridge_stop');
 
-  async function setOpt(autoStart, autoAllow) {
+  async function setOpt(patch) {
     try {
-      s = await invoke('bridge_set', { autoStart, autoAllow });
+      s = await invoke('bridge_set', {
+        autoStart: patch.autoStart ?? null,
+        autoAllow: patch.autoAllow ?? null,
+        confirmReadOnly: patch.confirmReadOnly ?? null,
+        mode: patch.mode ?? null,
+        publicUrl: patch.publicUrl ?? null,
+      });
       fault = '';
-      if (autoAllow === false || autoAllow === true) confirmDangerous = false;
+      if (patch.autoAllow === false) confirmDangerous = false;
+      if (!modeTouched) {
+        modeDraft = s.mode || 'quick';
+        publicDraft = s.publicUrl || '';
+      }
     } catch (e) {
       fault = String(e);
       await refresh();
     }
   }
 
+  async function saveMode() {
+    modeTouched = false;
+    await setOpt({ mode: modeDraft, publicUrl: publicDraft });
+  }
+
+  async function saveToken() {
+    try {
+      s = await invoke('bridge_set_token', { token: tokenDraft });
+      tokenDraft = '';
+      fault = '';
+    } catch (e) {
+      fault = String(e);
+    }
+  }
+
+  async function saveAccess() {
+    try {
+      s = await invoke('bridge_set_access', { clientId: accessId, clientSecret: accessSecret });
+      accessId = '';
+      accessSecret = '';
+      fault = '';
+    } catch (e) {
+      fault = String(e);
+    }
+  }
+
   function onAutoAllowChange(e) {
     if (s.autoAllow) {
-      setOpt(null, false);
+      setOpt({ autoAllow: false });
     } else {
       e.currentTarget.checked = false;
       confirmDangerous = true;
@@ -289,29 +339,97 @@
             </button>
           </dd>
         {/if}
-        {#if s.serverId}
-          <dt>ID FS</dt>
-          <dd><code>{s.serverId}</code></dd>
-        {/if}
         {#if s.port}
           <dt>Port</dt>
           <dd><code>{s.port}</code></dd>
         {/if}
+        <dt>Mode</dt>
+        <dd>{s.mode === 'named' ? 'nommé (domaine Cloudflare)' : 'rapide (trycloudflare.com)'}</dd>
         <dt>Serveurs</dt>
         <dd>{s.servers.length ? s.servers.join(', ') : '—'}</dd>
         <dt>Outils</dt>
-        <dd>{s.tools}</dd>
+        <dd>{s.tools}{s.maxTools ? ` (max ${s.maxTools} par serveur)` : ''}</dd>
         <dt>Requêtes</dt>
         <dd>{s.hits}</dd>
       </dl>
+
+      {#if s.entries?.length}
+        <div class="entries">
+          {#each s.entries as e}
+            <div class="entry" class:bad={!!e.error}>
+              <div class="entry-head">
+                <b>{e.server}</b>
+                <span class="muted">{e.tools} outil{e.tools > 1 ? 's' : ''}</span>
+              </div>
+              <code class="entry-url">{e.url}</code>
+              {#if e.serverId}<span class="muted">id FS : {e.serverId}</span>{/if}
+              {#if e.error}<span class="msg danger">{e.error}</span>{/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="sec">
+        <div class="sec-title">Tunnel</div>
+        <select bind:value={modeDraft} onchange={() => (modeTouched = true)} disabled={active}>
+          <option value="quick">Rapide (trycloudflare.com)</option>
+          <option value="named">Nommé (domaine Cloudflare)</option>
+        </select>
+        {#if modeDraft === 'named'}
+          <input
+            type="url"
+            placeholder="https://fscode.example.com"
+            bind:value={publicDraft}
+            oninput={() => (modeTouched = true)}
+            disabled={active}
+          />
+          <div class="row">
+            <input
+              type="password"
+              placeholder={s.namedReady ? 'Jeton déjà dans le coffre' : 'Jeton du tunnel'}
+              bind:value={tokenDraft}
+            />
+            <button class="btn" type="button" disabled={!tokenDraft.trim()} onclick={saveToken}>
+              Jeton
+            </button>
+          </div>
+          <details>
+            <summary>Cloudflare Access (optionnel)</summary>
+            <div class="row">
+              <input placeholder="Client ID" bind:value={accessId} />
+              <input type="password" placeholder="Client Secret" bind:value={accessSecret} />
+            </div>
+            <button class="btn" type="button" onclick={saveAccess}>Enregistrer Access</button>
+          </details>
+        {/if}
+        <div class="row">
+          <button
+            class="btn"
+            type="button"
+            disabled={active || (modeDraft === 'named' && !publicDraft.trim())}
+            onclick={saveMode}
+          >
+            Appliquer le mode
+          </button>
+        </div>
+        <p class="muted">Le jeton reste dans le coffre du système, jamais dans bridge.json.</p>
+      </div>
 
         <label class="opt">
           <input
             type="checkbox"
             checked={s.autoStart}
-            onchange={(e) => setOpt(e.currentTarget.checked, null)}
+            onchange={(e) => setOpt({ autoStart: e.currentTarget.checked })}
           />
           Démarrer avec l’app
+        </label>
+        <label class="opt">
+          <input
+            type="checkbox"
+            checked={s.confirmReadOnly}
+            onchange={(e) => setOpt({ confirmReadOnly: e.currentTarget.checked })}
+          />
+          Confirmer aussi les outils en lecture seule
         </label>
         <label class="opt opt-danger" class:bad={s.autoAllow}>
           <input
@@ -324,13 +442,13 @@
             <line x1="12" y1="9" x2="12" y2="13" />
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
-          <span>Autoriser sans confirmation (dangereux)</span>
+          <span>Autoriser sans confirmation pour cette session (dangereux)</span>
         </label>
       {#if confirmDangerous && !s.autoAllow}
         <div class="opt bad opt-confirm">
-          <span>Exécuter tous les outils MCP sans demander&nbsp;?</span>
+          <span>Exécuter tous les outils MCP sans demander&nbsp;? (jusqu’au redémarrage)</span>
           <div class="row">
-            <button type="button" class="btn danger" onclick={() => setOpt(null, true)}>Confirmer</button>
+            <button type="button" class="btn danger" onclick={() => setOpt({ autoAllow: true })}>Confirmer</button>
             <button type="button" class="btn" onclick={() => (confirmDangerous = false)}>Annuler</button>
           </div>
         </div>

@@ -17,7 +17,6 @@ L’application réunit une interface de conversation et un mode Code permettant
 - **Autorisations** : sélection du mode depuis la barre de saisie.
 - **MCP** : configuration et utilisation de serveurs locaux, avec gestion des autorisations.
 - **Skills** : instructions réutilisables et insertion dans les conversations.
-- **Tâches parallèles** : exécution par vagues, contrat commun et suivi dédié.
 - **Personnalisation** : thèmes, notifications et mode économie.
 
 La disponibilité des modèles et de certaines fonctions dépend du compte, de l’API et du support des outils par le modèle sélectionné.
@@ -117,16 +116,6 @@ L’adresse de l’API est configurable dans les réglages. La valeur par défau
 Le mode **Système** demande une confirmation à l’activation et n’est pas restauré au redémarrage.
 
 > Les commandes et outils MCP s’exécutent avec les droits du processus local : le dossier de travail n’est pas un bac à sable système. Vérifiez les commandes, les modifications et les serveurs configurés. Utilisez Git et conservez des sauvegardes.
-
-### Tâches parallèles
-
-Exemple de forme acceptée :
-
-```text
-tasks parallel {"contract":"Conventions communes et fichiers attribués","tasks":[{"task":"Analyser la structure sans modifier les fichiers","role":"explore","name":"analyse","wave":1},{"task":"Réaliser une modification précisément décrite","role":"worker","name":"implementation","wave":2}]}
-```
-
-Limites définies dans `agents.rs` : **8 tâches par vague**, **12 par lancement**, **4 vagues au maximum**. Chaque tâche doit être autonome ; attribuez des fichiers distincts aux tâches qui écrivent.
 
 ## MCP et skills
 

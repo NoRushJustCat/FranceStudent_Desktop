@@ -1,4 +1,4 @@
-﻿<script>
+<script>
   // France Student Desktop : fenêtre principale.
   // Chaque chat ouvert = une « session » en mémoire. Changer de chat ne fait que changer
   // la session affichée : les générations en cours continuent en arrière-plan.
@@ -10,10 +10,9 @@
   import Composer from './lib/Composer.svelte';
   import Message from './lib/Message.svelte';
   import Tool from './lib/Tool.svelte';
+  import BridgeConfirm from './lib/BridgeConfirm.svelte';
   import DiffPanel from './lib/DiffPanel.svelte';
   import { term as termState } from './lib/termstore.svelte.js';
-  import AgentPanel from './lib/AgentPanel.svelte';
-  import { live as agentLive, view as agentView, init as initAgents } from './lib/agentlive.svelte.js';
   import Settings from './lib/Settings.svelte';
   import { THEMES, normalizeTheme } from './lib/themes.js';
 
@@ -137,6 +136,7 @@
   let draftMode = $state('chat');
   let workdir = $state(null);
   let gerr = $state('');
+  let openRuns = $state([]); // runs non terminaux (reprise possible), hors runs en cours
   let loginEmail = $state('');
   let loginPass = $state('');
   let loginBusy = $state(false);
@@ -393,6 +393,7 @@
       busy: false,
       loading: false,
       error: '',
+      banner: null,
       runId: null,
       unread: false,
       mode: 'chat',
@@ -771,7 +772,7 @@
       gerr = String(e);
       if (agentId == null) agentId = settings?.lastAgentId ?? -2001;
     }
-    await Promise.all([loadChats(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs()]);
+    await Promise.all([loadChats(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs(), loadOpenRuns()]);
   }
   async function submitLogin(e) {
     e?.preventDefault();
@@ -803,7 +804,6 @@
   }
 
   onMount(async () => {
-    initAgents();
     try {
       await loadSettings();
     } catch (e) {
@@ -1088,54 +1088,48 @@
     }
   }
 
-  async function send() {
-    const readyAtts = attachments.filter((a) => a.status === 'ready');
-    const uploading = attachments.some((a) => a.status === 'uploading');
-    if (uploading) return;
-
-    const rawText = input.trim();
-    if ((!rawText && readyAtts.length === 0) || busy || cur?.loading) return;
-    const content = rawText || 'Analyse ces pièces jointes.';
-
-    if (mode === 'code' && !curWorkdir) {
-      gerr = 'Choisis d’abord un dossier de travail (bouton Dossier sous la zone de texte).';
-      return;
+  // ---- reprise des runs interrompus ----
+  async function loadOpenRuns() {
+    try {
+      const live = new Set(sessions.filter((x) => x.busy && x.runId).map((x) => x.runId));
+      const list = await api.listRuns();
+      openRuns = (Array.isArray(list) ? list : []).filter((r) => !live.has(r.runId));
+    } catch {
+      openRuns = [];
     }
-    if (curAgent == null) {
-      gerr = 'Aucun agent disponible.';
-      return;
-    }
+  }
 
-    const imageIds = readyAtts
-      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'images')
-      .map((a) => a.uploadedId);
-    const fileIds = readyAtts
-      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'files')
-      .map((a) => a.uploadedId);
-    const userImages = readyAtts.filter((a) => a.kind === 'image' && a.previewUrl).map((a) => a.previewUrl);
-    const attNames = readyAtts.filter((a) => a.kind === 'file').map((a) => a.name);
-    attachments = [];
-
-    let s = cur;
-    if (!s) {
-      s = mkSession({ mode: draftMode, workdir, agentId });
-      drafts.delete('new');
-      viewUid = s.uid;
-    }
-    drafts.delete(s.uid);
-    input = '';
-    gerr = '';
+  async function resumeInterrupted(runId, chatId) {
+    openRuns = openRuns.filter((r) => r.runId !== runId);
+    if (chatId) await openChat(chatId);
+    const s = chatId ? byChat(chatId) : cur;
+    if (!s || s.busy) return;
+    s.banner = null;
     s.error = '';
     s.busy = true;
-    s.unread = false;
-    s.atBottom = true;
-    const runId = `r${Date.now().toString(36)}${++runSeq}`;
     s.runId = runId;
-    const displayLabel = attNames.length ? `${content}\nPièce(s) jointe(s) : ${attNames.join(', ')}` : content;
-    s.items.push({ kind: 'user', id: null, text: displayLabel, images: userImages });
-    showJump = false;
-    toBottom();
+    const h = makeRunHandler(s);
+    try {
+      await api.resumeRun(runId, h.onEvent);
+    } catch (e) {
+      s.error = String(e);
+    } finally {
+      finishRun(s, h.visible);
+    }
+  }
 
+  async function abandonInterrupted(runId) {
+    try {
+      await api.abandonRun(runId);
+    } catch (e) {
+      gerr = String(e);
+    }
+    openRuns = openRuns.filter((r) => r.runId !== runId);
+    for (const x of sessions) if (x.banner?.runId === runId) x.banner = null;
+  }
+
+  // Gestionnaire d’événements d’un run (envoi ou reprise).
+  function makeRunHandler(s) {
     let curA = null;
     let lastA = null;
     const assistant = () => {
@@ -1147,23 +1141,11 @@
       return curA;
     };
     const visible = () => s.uid === viewUid;
-
-    try {
-      await api.sendMessage(
-        {
-   chatId: s.chatId,
-   agentId: s.agentId,
-          content,
-          workdir: s.mode === 'code' ? s.workdir : null,
-   autoAccept,
-   eco,
-          runId,
-   images: imageIds,
-   files: fileIds,
-   enableWebSearch,
-        },
-        (ev) => {
+    const onEvent = (ev) => {
           const follow = visible() && nearBottom();
+   if (['delta', 'reasoning', 'tool_call', 'tool_result'].includes(ev.type) && ['queued', 'resumed', 'tools'].includes(s.banner?.kind)) {
+     s.banner = null;
+   }
    switch (ev.type) {
      case 'opened':
 s.chatId = ev.chat_id;
@@ -1233,22 +1215,127 @@ assistant().text += ev.text;
        curA = null;
        s.items.push({ kind: 'notice', text: 'Annulé.' });
        break;
+      case 'queued':
+       curA = null;
+       s.banner = { kind: 'queued', text: 'En file d’attente : une autre génération est en cours, celle-ci démarre dès qu’un créneau se libère.' };
+       break;
+      case 'usage':
+       if (ev.used_tokens != null) {
+         s.ctx = {
+           used: ev.used_tokens,
+           max: s.ctx?.max ?? null,
+           raw: s.ctx?.raw ?? null,
+         };
+       }
+       break;
+      case 'budget_warning':
+       curA = null;
+       s.banner = {
+         kind: 'budget',
+         text: `Budget : ${ev.requests} requêtes envoyées pour ce message. Arrête la génération si ce n’est pas attendu.`,
+       };
+       break;
+      case 'resumed':
+       curA = null;
+       s.banner = { kind: 'resumed', text: 'Reprise de la génération interrompue…' };
+       break;
+      case 'awaiting_tools':
+       s.banner = { kind: 'tools', text: `${ev.calls} outil(s) à exécuter.` };
+       break;
+      case 'run_interrupted':
+       curA = null;
+       s.banner = { kind: 'interrupted', text: ev.reason || 'Génération interrompue.', runId: ev.run_id ?? s.runId };
+       loadOpenRuns();
+       break;
           }
           if (follow) toBottom();
-        },
-      );
-    } catch (e) {
-      s.error = String(e);
-    } finally {
+    };
+    return { onEvent, visible };
+  }
+
+  // Fin d’un run : état, notification, rafraîchissements.
+  function finishRun(s, visible) {
       s.busy = false;
       s.runId = null;
       if (!visible()) s.unread = true;
-      if (!s.error && notifSettings.enabled && notifSettings.desktopComplete && (!visible() || document.hidden)) {
+      if (s.banner?.kind !== 'interrupted') s.banner = null;
+      if (!s.error && s.banner?.kind !== 'interrupted' && notifSettings.enabled && notifSettings.desktopComplete && (!visible() || document.hidden)) {
         notifyUser('Réponse terminée', chats.find((c) => c.id === s.chatId)?.title || 'France Student Desktop');
       }
       loadChats();
       loadUsage();
       loadCtx(s);
+  }
+
+  async function send() {
+    const readyAtts = attachments.filter((a) => a.status === 'ready');
+    const uploading = attachments.some((a) => a.status === 'uploading');
+    if (uploading) return;
+
+    const rawText = input.trim();
+    if ((!rawText && readyAtts.length === 0) || busy || cur?.loading) return;
+    const content = rawText || 'Analyse ces pièces jointes.';
+
+    if (mode === 'code' && !curWorkdir) {
+      gerr = 'Choisis d’abord un dossier de travail (bouton Dossier sous la zone de texte).';
+      return;
+    }
+    if (curAgent == null) {
+      gerr = 'Aucun agent disponible.';
+      return;
+    }
+
+    const imageIds = readyAtts
+      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'images')
+      .map((a) => a.uploadedId);
+    const fileIds = readyAtts
+      .filter((a) => (a.payloadKey ?? (a.kind === 'image' ? 'images' : 'files')) === 'files')
+      .map((a) => a.uploadedId);
+    const userImages = readyAtts.filter((a) => a.kind === 'image' && a.previewUrl).map((a) => a.previewUrl);
+    const attNames = readyAtts.filter((a) => a.kind === 'file').map((a) => a.name);
+    attachments = [];
+
+    let s = cur;
+    if (!s) {
+      s = mkSession({ mode: draftMode, workdir, agentId });
+      drafts.delete('new');
+      viewUid = s.uid;
+    }
+    drafts.delete(s.uid);
+    input = '';
+    gerr = '';
+    s.error = '';
+    s.busy = true;
+    s.unread = false;
+    s.atBottom = true;
+    const runId = `r${Date.now().toString(36)}${++runSeq}`;
+    s.runId = runId;
+    const displayLabel = attNames.length ? `${content}\nPièce(s) jointe(s) : ${attNames.join(', ')}` : content;
+    s.items.push({ kind: 'user', id: null, text: displayLabel, images: userImages });
+    showJump = false;
+    toBottom();
+
+    const h = makeRunHandler(s);
+    try {
+      await api.sendMessage(
+        {
+   chatId: s.chatId,
+   agentId: s.agentId,
+          content,
+          workdir: s.mode === 'code' ? s.workdir : null,
+   autoAccept,
+   eco,
+          runId,
+   images: imageIds,
+   files: fileIds,
+   enableWebSearch,
+        },
+        h.onEvent,
+      );
+    } catch (e) {
+      s.error = String(e);
+    } finally {
+      finishRun(s, h.visible);
     }
   }
 
@@ -1373,12 +1460,6 @@ assistant().text += ev.text;
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
         {#if termState.unread}<span class="dfn">{termState.unread}</span>{/if}
       </button>
-      {#if agentView.active || (showDiff && panelTab === 'agents')}
-        <button type="button" class="pill anim-fade dfbtn" class:on={showDiff && panelTab === 'agents'} class:wait={agentLive.waiting.length > 0} onclick={() => toggleDp('agents')} title="Agents" aria-label="Agents">
-   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          {#if agentView.count}<span class="dfn">{agentView.count}</span>{/if}
-        </button>
-      {/if}
       {#if busy}
         <div class="prog" transition:fade={{ duration: ms(160) }}></div>
       {/if}
@@ -1515,6 +1596,27 @@ assistant().text += ev.text;
 
     <div class="dock">
       <div class="dockin">
+        {#if cur?.banner}
+          <div class="banner {cur.banner.kind}" role="status">
+     <span class="msg">{cur.banner.text}</span>
+     {#if cur.banner.kind === 'interrupted' && cur.banner.runId && !cur.busy}
+       <button class="primary" onclick={() => resumeInterrupted(cur.banner.runId, cur.chatId)}>Reprendre</button>
+       <button onclick={() => abandonInterrupted(cur.banner.runId)}>Abandonner</button>
+     {/if}
+   </div>
+        {/if}
+        {#each openRuns.filter((r) => !cur?.banner?.runId || r.runId !== cur.banner.runId).slice(0, 2) as r (r.runId)}
+   <div class="banner interrupted" role="status">
+     <span class="msg">
+       Génération interrompue{r.userContent ? ` : « ${r.userContent.slice(0, 80)}${r.userContent.length > 80 ? '…' : ''} »` : '.'}
+       {#if r.pendingCalls?.some((c) => c.startedAt && !c.output)}
+  Un outil a peut-être déjà agi : il ne sera pas relancé.
+       {/if}
+     </span>
+     <button class="primary" disabled={busy} onclick={() => resumeInterrupted(r.runId, r.chatId)}>Reprendre</button>
+     <button onclick={() => abandonInterrupted(r.runId)}>Abandonner</button>
+   </div>
+        {/each}
         {#if error}
           <div class="error errbar" out:fade={{ duration: ms(120) }}>
      <span>{error}</span>
@@ -1566,11 +1668,7 @@ assistant().text += ev.text;
     </div>
   </section>
   {#if showDiff}
-    {#if panelTab === 'agents'}
-      <AgentPanel onclose={() => (showDiff = false)} />
-    {:else}
       <DiffPanel {items} cwd={curWorkdir} bind:tab={panelTab} onclose={() => (showDiff = false)} />
-    {/if}
   {/if}
 </div>
 
@@ -1626,6 +1724,8 @@ assistant().text += ev.text;
     </button>
   </div>
 {/if}
+
+<BridgeConfirm />
 
 {#if forkModal}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -2245,6 +2345,33 @@ assistant().text += ev.text;
     cursor: pointer;
     padding: 4px;
     box-shadow: none;
+  }
+
+  .banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--text);
+    font-size: 12.5px;
+  }
+  .banner.budget,
+  .banner.interrupted {
+    border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+    background: color-mix(in srgb, var(--warn) 12%, transparent);
+  }
+  .banner .msg {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .banner button {
+    padding: 3px 10px;
+    font-size: 12px;
   }
 
   .pill.ctx-pill {

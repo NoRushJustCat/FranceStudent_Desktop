@@ -1,6 +1,7 @@
-﻿<script>
+<script>
   import ContextRing from './ContextRing.svelte';
   import PermMode from './PermMode.svelte';
+  import { getUserInstructions, updateUserInstructions } from './instructions.js';
   let {
     input = $bindable(''),
     enableWebSearch = $bindable(false),
@@ -25,6 +26,42 @@
     onstop = () => {}
   } = $props();
 
+  // Niveau de raisonnement GPT : réglage du compte (PATCH /user/instructions, champ `gptReasoning`).
+  const EFFORTS = [
+    ['none', 'Aucun'],
+    ['minimal', 'Minimal'],
+    ['low', 'Faible'],
+    ['medium', 'Moyen'],
+    ['high', 'Élevé'],
+    ['xhigh', 'Très élevé']
+  ];
+  let effort = $state('');
+  let effortBusy = $state(false);
+  const isGpt = $derived.by(() => {
+    const a = agents.find((x) => x.id === (curAgent ?? agents[0]?.id));
+    return !!a && /gpt|openai/i.test(`${a.modelProvider ?? ''} ${a.model ?? ''} ${a.name ?? ''}`);
+  });
+  $effect(() => {
+    if (isGpt && !effort) {
+      getUserInstructions()
+        .then((d) => (effort = d?.gptReasoning || 'medium'))
+ .catch(() => {});
+    }
+  });
+  async function pickEffort(value) {
+    const prev = effort;
+    effort = value;
+    effortBusy = true;
+    try {
+      const d = await updateUserInstructions({ gptReasoning: value });
+      if (d?.gptReasoning) effort = d.gptReasoning;
+    } catch (e) {
+      effort = prev;
+      onerror(`Niveau de raisonnement non modifié : ${e}`);
+    } finally {
+      effortBusy = false;
+    }
+  }
   let ta = $state(null);
   let fileInput = $state(null);
   let dragging = $state(false);
@@ -443,6 +480,25 @@
         </div>
       {/if}
 
+      {#if isGpt && effort}
+ <div class="select-wrap">
+          <select
+     class="agent-select"
+     value={effort}
+     disabled={busy || effortBusy}
+            onchange={(e) => pickEffort(e.currentTarget.value)}
+     title="Niveau de raisonnement (modèles GPT, réglage du compte)"
+     aria-label="Niveau de raisonnement"
+   >
+     {#each EFFORTS as [v, label] (v)}
+       <option value={v}>Raisonnement : {label}</option>
+     {/each}
+   </select>
+   <svg class="select-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 12 15 18 9" />
+   </svg>
+        </div>
+      {/if}
       <div class="seg" role="group" aria-label="Mode">
         <button
           type="button"

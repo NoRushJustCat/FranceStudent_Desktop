@@ -71,6 +71,26 @@
     return String(a.path ?? a.name ?? '');
   });
 
+  // Infos affichées dans la demande de confirmation.
+  const READ_ONLY = ['list_directory', 'fs_list_dir', 'read_file', 'fs_read_file', 'search_files', 'fs_search_files', 'git_status', 'git_diff', 'git_log'];
+  const risk = $derived.by(() => {
+    if (isCmd) return { level: 'high', label: 'Exécute une commande' };
+    if (isEdit || isWrite) return { level: 'mid', label: isWrite ? 'Écrase un fichier' : 'Modifie un fichier' };
+    if (isMcp || isSkill) return { level: 'mid', label: 'Action externe' };
+    if (READ_ONLY.includes(baseName)) return { level: 'low', label: 'Lecture seule' };
+    return { level: 'mid', label: 'Effet inconnu' };
+  });
+  const originLabel = $derived.by(() => {
+    if (isMcp) return `MCP · ${name.split('__')[1] ?? 'serveur'}`;
+    if (isSkill) return 'Skill';
+    return 'Local';
+  });
+  const where = $derived.by(() => {
+    if (isCmd) return a.cwd ? String(a.cwd) : 'dossier de travail';
+    if (a.path) return String(a.path);
+    return '';
+  });
+
   const MAX = 40;
   const countLines = (s) => {
     const v = String(s ?? '');
@@ -169,6 +189,11 @@
   </details>
 
   {#if t.status === 'pending'}
+    <div class="facts">
+      <span class="risk {risk.level}">{risk.label}</span>
+      <span class="fact"><i>Origine</i> {originLabel}</span>
+      {#if where}<span class="fact" title={where}><i>{isCmd ? 'Dossier' : 'Chemin'}</i> <code>{where}</code></span>{/if}
+    </div>
     <div class="ask">
       <button class="primary" onclick={() => onresolve?.(t, true, always)}>Autoriser</button>
       <button onclick={() => onresolve?.(t, false, false)}>Refuser</button>
@@ -409,6 +434,46 @@
   }
   .raw-args pre {
     margin-top: 6px;
+  }
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 6px 12px 0;
+    font-size: 11.5px;
+    color: var(--dim);
+  }
+  .facts i {
+    font-style: normal;
+    color: var(--faint);
+    margin-right: 4px;
+  }
+  .facts code {
+    font-family: var(--mono);
+    color: var(--text);
+    background: transparent;
+    border: 0;
+    padding: 0;
+    overflow-wrap: anywhere;
+  }
+  .risk {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+    border: 1px solid var(--line2);
+  }
+  .risk.low {
+    color: var(--ok);
+    border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  }
+  .risk.mid {
+    color: var(--warn);
+    border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  }
+  .risk.high {
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
   }
   .chk {
     display: inline-flex;

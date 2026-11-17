@@ -1,15 +1,30 @@
-// Télécharge cloudflared dans src-tauri/binaries/ sous le nom attendu par Tauri
-// (« sidecar » : cloudflared-<triple>[.exe]). Idempotent : ne fait rien si le fichier existe.
-// Lancé par `npm install` (postinstall) et avant `npm run dev` / `npm run build`.
+// Télécharge `cloudflared` dans src-tauri/binaries/ sous le nom attendu par Tauri
+// (« sidecar » : cloudflared-<triple>[.exe]). Idempotent et vérifié.
+// Lancé par `npm install` (postinstall), avant `npm run dev` et `npm run build`.
 //
-// Variables optionnelles :
-//   CLOUDFLARED_VERSION  version à télécharger (ex. 2025.8.1), défaut : la dernière
+// La version est épinglée et l'empreinte SHA-256 est lue dans
+// `scripts/cloudflared.sha256`. Un binaire qui ne correspond pas est refusé :
+// aucune mise à jour silencieuse en release.
+//
+// Variables (développement uniquement) :
+//   CLOUDFLARED_VERSION  version à télécharger (désactive la vérification si ≠ épinglée)
 //   CLOUDFLARED_FORCE=1  re-télécharge même si le fichier existe
 import { execSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const PINNED_VERSION = "2026.11.0";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dir = join(root, "src-tauri", "binaries");
 
@@ -41,18 +56,64 @@ if (!asset) {
   process.exit(1);
 }
 
+const version = (process.env.CLOUDFLARED_VERSION || PINNED_VERSION).trim();
+const pinned = version === PINNED_VERSION;
 const isWin = triple.includes("windows");
 const dest = join(dir, `cloudflared-${triple}${isWin ? ".exe" : ""}`);
 
-if (existsSync(dest) && !process.env.CLOUDFLARED_FORCE) {
-  console.log(`[cloudflared] déjà présent : ${dest}`);
-  process.exit(0);
+function sha256(buf) {
+  return createHash("sha256").update(buf).digest("hex").toLowerCase();
 }
 
-const v = process.env.CLOUDFLARED_VERSION;
-const base = v
-  ? `https://github.com/cloudflare/cloudflared/releases/download/${v}`
-  : "https://github.com/cloudflare/cloudflared/releases/latest/download";
+let hashes = null;
+function expectedHash() {
+  if (!pinned) return null;
+  if (hashes) return hashes.get(asset) ?? null;
+  hashes = new Map();
+  try {
+    const text = readFileSync(join(root, "scripts", "cloudflared.sha256"), "utf8");
+    for (const line of text.split(/\r?\n/)) {
+      if (!line || line.trimStart().startsWith("#")) continue;
+      const m = line.trim().match(/^([0-9a-fA-F]{64})\s+\*?(\S+)$/);
+      if (m) hashes.set(m[2], m[1].toLowerCase());
+    }
+  } catch (e) {
+    console.error(`[cloudflared] scripts/cloudflared.sha256 illisible : ${e.message}`);
+  }
+  return hashes.get(asset) ?? null;
+}
+
+function verify(buf, label) {
+  const want = expectedHash();
+  if (!want) {
+    console.warn(
+      pinned
+        ? `[cloudflared] aucune empreinte pour ${asset} : téléchargement NON vérifié.`
+        : `[cloudflared] version ${version} ≠ ${PINNED_VERSION} : vérification désactivée (dev).`,
+    );
+    return;
+  }
+  const got = sha256(buf);
+  if (got !== want) {
+    throw new Error(
+      `${label} : SHA-256 inattendu (${got}, attendu ${want}). Refus d'utiliser ce binaire.`,
+    );
+  }
+}
+
+if (existsSync(dest) && !process.env.CLOUDFLARED_FORCE) {
+  try {
+    verify(readFileSync(dest), "binaire existant");
+    console.log(`[cloudflared] déjà présent et vérifié : ${dest}`);
+    process.exit(0);
+  } catch (e) {
+    console.error(`[cloudflared] ${e.message}`);
+    console.error(`[cloudflared] supprime le fichier ou lance CLOUDFLARED_FORCE=1 pour le remplacer : ${dest}`);
+    process.exit(1);
+  }
+}
+
+const base = `https://github.com/cloudflare/cloudflared/releases/download/${version}`;
 const url = `${base}/${asset}`;
 
 console.log(`[cloudflared] téléchargement ${url}`);
@@ -62,9 +123,17 @@ try {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   data = Buffer.from(await res.arrayBuffer());
+  verify(data, url);
 } catch (e) {
   const localWin = "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe";
   if (isWin && existsSync(localWin)) {
+    data = readFileSync(localWin);
+    try {
+      verify(data, "installation locale");
+    } catch (e2) {
+      console.error(`[cloudflared] ${e2.message}`);
+      process.exit(1);
+    }
     copyFileSync(localWin, dest);
     console.log(`[cloudflared] copié depuis installation locale : ${dest}`);
     process.exit(0);
@@ -73,9 +142,11 @@ try {
     const tmpDl = join(dir, asset);
     execSync(`curl.exe -fsSL -L "${url}" -o "${tmpDl}"`, { stdio: "inherit" });
     data = readFileSync(tmpDl);
+    verify(data, url);
     rmSync(tmpDl, { force: true });
   } catch (e2) {
     console.error(`[cloudflared] échec du téléchargement : ${e.message}`);
+    console.error(`[cloudflared] ${e2.message}`);
     console.error(`[cloudflared] télécharge-le à la main et place-le ici : ${dest}`);
     process.exit(1);
   }
@@ -93,4 +164,6 @@ if (asset.endsWith(".tgz")) {
 }
 if (!isWin) chmodSync(dest, 0o755);
 
-console.log(`[cloudflared] installé : ${dest} (${(data.length / 1048576).toFixed(1)} Mo)`);
+console.log(
+  `[cloudflared] installé : ${dest} (${(data.length / 1048576).toFixed(1)} Mo, ${sha256(data).slice(0, 12)}…)`,
+);

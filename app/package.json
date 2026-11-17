@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/fetch-cloudflared.mjs",
+    "predev": "node scripts/fetch-cloudflared.mjs",
+    "prebuild": "node scripts/fetch-cloudflared.mjs",
+    "fetch-cloudflared": "node scripts/fetch-cloudflared.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",

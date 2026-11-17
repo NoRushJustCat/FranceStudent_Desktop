@@ -1,6 +1,5 @@
 // Fine couche au-dessus des commandes Tauri (voir src-tauri/src/main.rs et ext.rs).
 import { invoke, Channel } from '@tauri-apps/api/core';
-import { activeLocalPrompt } from './devlog.svelte.js';
 
 export const getSettings = () => invoke('get_settings');
 export const storeApiToken = (token) => invoke('store_api_token', { token });
@@ -127,6 +126,8 @@ export const trustTool = (name, on) => invoke('trust_tool', { name, on });
 //   | notice{text}
 //   | done{chat_id,message_id,prompt_tokens,output_tokens,total_prompt_tokens,total_output_tokens,api_calls,eco}
 //   | failed{code,message,retryable} | cancelled
+//   | resumed{run_id} | awaiting_tools{run_id,calls} | run_interrupted{run_id,reason}
+// Le texte envoyé est exactement `content` : aucun contexte n'est ajouté.
 // La promesse se résout quand tout est terminé (outils compris).
 export function sendMessage(
   { chatId, agentId, content, workdir, autoAccept, eco, runId, images, files, enableWebSearch },
@@ -145,7 +146,24 @@ export function sendMessage(
     images: images?.length ? images : null,
     files: files?.length ? files : null,
     enableWebSearch: !!enableWebSearch,
-    localPrompt: activeLocalPrompt() || null,
     onEvent: channel,
   });
 }
+
+// Runs interrompus (redémarrage, coupure réseau, appels en attente).
+export const listRuns = () => invoke('list_runs');
+export const abandonRun = (runId) => invoke('abandon_run', { runId });
+export function resumeRun(runId, onEvent) {
+  const channel = new Channel();
+  channel.onmessage = onEvent;
+  return invoke('resume_run', { runId, onEvent: channel });
+}
+
+// Phase 2 : synchro des instructions (bloc FS Code) et Phase 4 : explorateur d'API.
+export const instructionsStatus = () => invoke('instructions_status');
+export const instructionsSync = () => invoke('instructions_sync');
+export const instructionsRemove = () => invoke('instructions_remove');
+export const instructionsSetEnabled = (enabled) => invoke('instructions_set_enabled', { enabled: !!enabled });
+export const apiRoutes = () => invoke('api_routes');
+export const apiCall = ({ id, pathParams, query, headers, body, confirmed }) =>
+  invoke('api_call', { id, pathParams, query, headers, body, confirmed: !!confirmed });
