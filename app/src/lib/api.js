@@ -116,15 +116,6 @@ export const mcpImport = (text) => invoke('mcp_import', { text });
 // « Toujours autoriser » un outil MCP pour cette session.
 export const trustTool = (name, on) => invoke('trust_tool', { name, on });
 
-// ---- Outils PC locaux 0-token ----
-export const pcSysInfo = () => invoke('pc_sys_info');
-export const pcGitSummary = (workdir) => invoke('pc_git_summary', { workdir });
-export const pcFindFiles = (workdir, query = null, maxResults = 60) =>
-  invoke('pc_find_files', { workdir, query, maxResults });
-export const pcReadRange = (workdir, path, startLine, endLine) =>
-  invoke('pc_read_range', { workdir, path, startLine, endLine });
-export const pcQuickCleanPreview = (workdir) => invoke('pc_quick_clean_preview', { workdir });
-
 // Envoie un message. `workdir` renseigné => mode Code (outils de fichiers).
 // `eco` : true/false force le mode économie ; absent => réglage enregistré.
 // `runId` : identifiant de cette génération (pour l'annuler seule). Plusieurs générations

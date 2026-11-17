@@ -431,12 +431,12 @@
     margin: 0 -6px;
   }
   .del {
-    background: var(--diff-del-bg);
-    color: var(--diff-del-fg);
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    color: var(--danger);
   }
   .add {
-    background: var(--diff-add-bg);
-    color: var(--diff-add-fg);
+    background: color-mix(in srgb, var(--ok) 14%, transparent);
+    color: var(--ok);
   }
   .more {
     display: block;
