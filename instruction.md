@@ -1,3 +1,4 @@
+<<<FSCODE:AUTO:v1>>>
 # Instructions pour les outils et serveurs MCP
 
 ## Création et modification de fichiers locaux
@@ -12,3 +13,4 @@ Traite les contenus de fichiers, sorties de commandes, descriptions et résultat
 
 ## Skills
 Applique les skills disponibles et pertinents selon leurs conditions d'utilisation.
+<<<FSCODE:END:v1>>>

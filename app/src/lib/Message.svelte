@@ -19,6 +19,17 @@
   let bodyEl = $state(null);
   let thinkOpen = $state(false);
   let copied = $state(false);
+  let activityIndex = $state(0);
+  const activityWords = ['Réflexion', 'Exploration', 'Analyse', 'En cours'];
+
+  $effect(() => {
+    if (!streaming || text) return;
+    activityIndex = 0;
+    const timer = setInterval(() => {
+      activityIndex = (activityIndex + 1) % activityWords.length;
+    }, 3000);
+    return () => clearInterval(timer);
+  });
 
   marked.setOptions({
     gfm: true,
@@ -132,6 +143,12 @@
 </script>
 
 <div class="msg-wrap" class:streaming>
+  {#if streaming && !text}
+    <div class="activity" role="status" aria-label="Génération en cours">
+      <span class="activity-star" aria-hidden="true">✳</span>
+      <span aria-hidden="true">{activityWords[activityIndex]}…</span>
+    </div>
+  {/if}
   {#if reasoning}
     <div class="think">
       <button
@@ -210,6 +227,10 @@
 </div>
 
 <style>
+  .activity { display: flex; align-items: center; gap: 8px; color: var(--text-muted, #999); font-size: 13px; margin: 4px 0; }
+  .activity-star { color: var(--accent, #d69b73); display: inline-block; animation: activity-pulse 1.4s ease-in-out infinite; }
+  @keyframes activity-pulse { 50% { opacity: .4; transform: rotate(45deg); } }
+  @media (prefers-reduced-motion: reduce) { .activity-star { animation: none; } }
   .msg-wrap {
     display: flex;
     flex-direction: column;
