@@ -90,14 +90,21 @@ et réutilise l'identifiant. Après une modification, relis le résultat avant d
 sinon dis qu'elle n'est pas vérifiée. Un refus ou un délai d'autorisation n'est pas une panne. \
 Si la liste est incomplète, appelle mcp_list_tools avant de conclure.\n\n";
 
+/// Texte fixe de l'application, modifiable uniquement dans le code source.
+/// Il est publié dans customInstructions, pas dans un véritable rôle système de l'API.
+const SYSTEM_PROMPT: &str = "Tu es l'assistant de France Student Desktop. Aide l'utilisateur de manière claire et honnête. Utilise uniquement les outils réellement disponibles et ne prétends jamais avoir effectué ou vérifié une action sans résultat correspondant. Respecte les instructions de sécurité et les demandes de l'utilisateur dans la limite des règles prioritaires.";
+
 /// Construit le bloc. Aucun jeton, chemin ni contenu de fichier : seulement les noms de
 /// serveurs MCP et leur nombre d'outils.
 pub fn build_block(servers: &[(String, usize)]) -> String {
     let head = format!(
         "{BEGIN}\n\
+# Prompt de l'application (fixe)\n\
+{SYSTEM_PROMPT}\n\n\
 # Instructions pour les outils et serveurs MCP\n\n\
 ## Création et modification de fichiers locaux\n\
 Pour toute demande de fichier, y compris « fais-le dans un txt », crée ou modifie un fichier réel dans le workspace local avec un outil d'écriture local disponible, notamment un outil MCP adapté. Choisis un nom et une extension appropriés si l'utilisateur ne les précise pas. Confirme le chemin relatif seulement après une écriture réussie.\n\n\
+Si write_file (ou un outil d'écriture MCP équivalent) est disponible dans ce tour, il crée un vrai fichier sur l'ordinateur de l'utilisateur : appelle-le avec le contenu complet, puis indique le chemin relatif. S'il n'apparaît pas dans ta liste, cherche-le une fois parmi les outils MCP. Si tu ne le trouves pas, dis que le mode Code avec un dossier de travail est nécessaire (commandes /code puis /dossier) et propose le texte dans la conversation.\n\n\
 N'utilise pas d'artefact, de panneau latéral ou de stockage cloud comme substitut à un fichier local, sauf demande explicite de l'utilisateur ou instruction prioritaire contraire. Si aucun outil d'écriture local n'est disponible ou si l'écriture est refusée, indique-le clairement et propose le contenu dans la conversation ; ne prétends pas avoir créé le fichier.\n\n\
 Utilise les chemins relatifs à la racine du workspace lorsque l'outil le permet. Cherche avant de lire, lis les passages nécessaires avant de modifier et regroupe les appels indépendants. Si une opération est refusée, ne la relance pas sans demande explicite.\n\n"
     );
@@ -157,6 +164,8 @@ pub struct State {
     /// Le dernier retrait a échoué : à réessayer.
     pub cleanup_pending: bool,
     pub last_error: Option<String>,
+    /// Valeur de `documentToolsEnabled` avant notre bloc (restaurée au retrait).
+    pub docs_before: Option<bool>,
 }
 
 fn now_secs() -> u64 {
@@ -192,6 +201,13 @@ fn clear_state(dir: &Path) {
 pub trait Remote: Send + Sync {
     async fn get(&self) -> Result<String, String>;
     async fn set(&self, text: &str) -> Result<(), String>;
+    /// `documentToolsEnabled` du compte (outils d'artefacts cloud). `None` = inconnu.
+    async fn docs_enabled(&self) -> Result<Option<bool>, String> {
+ Ok(None)
+    }
+    async fn set_docs(&self, _enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Écrit (ou met à jour) le bloc sur le compte.
@@ -202,6 +218,10 @@ pub async fn do_apply<R: Remote>(
 ) -> Result<(), String> {
     let remote = r.get().await?;
     let user = strip_block(&remote);
+    if !st.active {
+        // Bloc orphelin : les outils documents ont déjà été coupés par nous, on suppose le défaut (actif).
+ st.docs_before = if has_marker(&remote) { Some(true) } else { r.docs_enabled().await? };
+    }
     if !st.active {
  // Premier passage (ou bloc orphelin d'un crash) : on garde le texte d'origine.
         st.remote_before = if has_marker(&remote) { user.clone() } else { remote.clone() };
@@ -214,6 +234,8 @@ pub async fn do_apply<R: Remote>(
     if new != remote {
         r.set(&new).await?;
     }
+    // Les outils createDocument/editDocument… (artefacts cloud) sont coupés tant que le bloc est actif.
+    r.set_docs(false).await?;
     st.remote_after = new;
     st.active = true;
     st.cleanup_pending = false;
@@ -234,6 +256,9 @@ pub async fn do_remove<R: Remote>(r: &R, st: &mut State) -> Result<(), String> {
     };
     if target != remote {
         r.set(&target).await?;
+    }
+    if let Some(prev) = st.docs_before {
+        r.set_docs(prev).await?;
     }
     *st = State::default();
     Ok(())
@@ -256,6 +281,17 @@ impl Remote for ApiRemote {
         self.0
      .update_user_instructions(json!({ "customInstructions": text }))
             .await
+     .map(|_| ())
+     .map_err(|e| e.to_string())
+    }
+    async fn docs_enabled(&self) -> Result<Option<bool>, String> {
+        let v = self.0.get_user_instructions().await.map_err(|e| e.to_string())?;
+        Ok(v.get("documentToolsEnabled").and_then(|x| x.as_bool()))
+    }
+    async fn set_docs(&self, enabled: bool) -> Result<(), String> {
+        self.0
+     .update_user_instructions(json!({ "documentToolsEnabled": enabled }))
+     .await
      .map(|_| ())
      .map_err(|e| e.to_string())
     }
@@ -474,6 +510,15 @@ mod tests {
         assert_eq!(strip_block(&format!("garde\n{BEGIN}\nreste")), "garde");
         // Marqueur de fin isolé : seul le marqueur est retiré.
         assert_eq!(strip_block(&format!("a {END} b")), "a  b");
+    }
+
+    #[test]
+    fn fixed_prompt_and_instructions_are_combined_without_losing_user_text() {
+        let block = build_block(&srv());
+        assert!(block.contains(SYSTEM_PROMPT));
+        assert!(block.contains("# Instructions pour les outils et serveurs MCP"));
+        let combined = apply_block("instructions personnelles", &block);
+        assert_eq!(strip_block(&combined), "instructions personnelles");
     }
 
     #[test]

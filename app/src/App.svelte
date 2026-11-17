@@ -21,6 +21,13 @@
   const THEME_KEY = 'fs-theme';
   const NOTIF_KEY = 'fscode.notif';
   const SAVED_KEY = 'fscode.saved_messages';
+  const REASONING_KEY = 'fscode.show_reasoning';
+  let showReasoning = $state(false);
+  try { showReasoning = localStorage.getItem(REASONING_KEY) === 'true'; } catch { /* stockage indisponible */ }
+  function toggleReasoning() {
+    showReasoning = !showReasoning;
+    try { localStorage.setItem(REASONING_KEY, String(showReasoning)); } catch { /* stockage indisponible */ }
+  }
 
   const CHAT_CARDS = [
     { t: 'Expliquer un cours', d: 'Une notion difficile, expliquée simplement', p: 'Explique-moi simplement : ' },
@@ -369,6 +376,7 @@
   });
   const typingAvatar = $derived(items.length === 0 || items[items.length - 1].kind === 'user');
 
+  let commandNotice = $state('');
   const COMMANDS = [
     { name: 'nouveau', alias: ['new'], desc: 'Nouveau chat', run: () => newChat() },
     { name: 'parametres', alias: ['reglages', 'settings', 'options'], desc: 'Ouvrir les paramètres', run: () => openSettings('compte') },
@@ -378,11 +386,45 @@
     { name: 'dossier', alias: ['folder', 'cd'], only: 'code', desc: 'Choisir le dossier de travail', run: () => chooseFolder() },
     { name: 'auto', only: 'code', desc: 'Accepter auto les modifs : activer / désactiver', run: () => setAuto(!autoAccept) },
     { name: 'eco', desc: 'Mode économie : activer / désactiver', run: () => setEco(!eco) },
+    { name: 'reflexion', alias: ['raisonnement', 'thinking'], desc: 'Afficher / masquer automatiquement la réflexion', run: () => toggleReasoning() },
     { name: 'compacter', alias: ['compact'], desc: 'Compacter le contexte du chat', run: () => compact() },
     { name: 'contexte', alias: ['context'], desc: 'Contexte du chat et mode économie', run: () => openSettings('usage') },
     { name: 'compteurs', alias: ['stats', 'reset'], desc: 'Remettre les compteurs à zéro', run: () => resetTally() },
     { name: 'skills', desc: 'Lister les skills ($)', run: () => (input = '$') },
   ];
+
+  async function runCommand(command) {
+    commandNotice = `/${command.name} : exécution…`;
+    try {
+      if (command.name === 'compacter' && (!cur?.chatId || cur.busy)) {
+        commandNotice = '/compacter : indisponible sans conversation active ou pendant une génération.';
+        return;
+      }
+      if (['chat', 'code'].includes(command.name) && busy) {
+        commandNotice = `/${command.name} : impossible de changer de mode pendant une génération.`;
+        return;
+      }
+      const previousError = gerr;
+      await command.run();
+      if (gerr && gerr !== previousError) {
+        commandNotice = `/${command.name} : échec — ${gerr}`;
+        return;
+      }
+      const details = {
+        reflexion: `Affichage automatique de la réflexion ${showReasoning ? 'activé' : 'désactivé'}.`,
+        eco: `Mode économie ${eco ? 'activé' : 'désactivé'}.`,
+        auto: `Acceptation automatique ${autoAccept ? 'activée' : 'désactivée'}.`,
+        chat: 'Mode Chat actif.', code: 'Mode Code actif.',
+        nouveau: 'Nouvelle conversation ouverte.', parametres: 'Paramètres ouverts.',
+        stop: 'Demande d’arrêt envoyée.', dossier: 'Sélection du dossier terminée ou annulée.',
+        compacter: 'Demande de compactage terminée.', contexte: 'Paramètres du contexte ouverts.',
+        compteurs: 'Compteurs remis à zéro.', skills: 'Sélecteur de skills ouvert.',
+      };
+      commandNotice = `/${command.name} : ${details[command.name] || 'commande terminée.'}`;
+    } catch (err) {
+      commandNotice = `/${command.name} : échec — ${String(err)}`;
+    }
+  }
 
   // ---- sessions ----
   function mkSession(init) {
@@ -1526,6 +1568,7 @@ assistant().text += ev.text;
         <Message
           text={it.text}
    reasoning={it.reasoning}
+          {showReasoning}
           streaming={busy && i === items.length - 1}
    showActions={canShowTurnActions(items, i, busy)}
           pinned={isMessagePinned(cur?.chatId, it.id)}
@@ -1571,6 +1614,9 @@ assistant().text += ev.text;
          {/if}
        {/each}
 
+{#if commandNotice}
+  <div class="note" role="status">{commandNotice}</div>
+{/if}
 {#if typing}
   <div class="ai">
            {#if typingAvatar}<div class="av" aria-hidden="true"><BrandLogo size={32} radius={10} /></div>{:else}<div></div>{/if}
@@ -1637,7 +1683,7 @@ assistant().text += ev.text;
           {agents}
           {curAgent}
           {skills}
-          commands={COMMANDS}
+          commands={COMMANDS.map((command) => ({ ...command, run: () => runCommand(command) }))}
    ctx={ctxInfo}
           {eco}
    {attachments}

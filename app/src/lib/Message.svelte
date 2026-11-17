@@ -7,6 +7,7 @@
     text = '',
     copyText = '',
     reasoning = '',
+    showReasoning = false,
     streaming = false,
     showActions = true,
     images = [],
@@ -19,6 +20,7 @@
   let bodyEl = $state(null);
   let thinkOpen = $state(false);
   let copied = $state(false);
+  $effect(() => { thinkOpen = showReasoning; });
   let activityIndex = $state(0);
   const activityWords = ['Réflexion', 'Exploration', 'Analyse', 'En cours'];
 
