@@ -69,7 +69,12 @@ function finishJob(job, status) {
   running.delete(job.id);
   jobs.delete(job.id);
   state = loadState();
-  state.history = [{ ...job, thoughts: job.thoughts.slice(-5) }, ...(state.history || [])].slice(0, 30);
+  const histItem = {
+    ...publicView(job),
+    task: job.task,
+    isRaw: Boolean(job.isRaw || job.raw),
+  };
+  state.history = [histItem, ...(state.history || []).filter((h) => (h.jobId || h.id) !== job.id)].slice(0, 50);
   saveState(state);
   pump();
 }
@@ -96,16 +101,29 @@ async function runJob(job) {
     const route = pickModel(job.task, ids, state, job.explicitModel);
     job.model = route.model;
     job.routeReason = route.reason;
+    job.isRaw = Boolean(route.isRaw || job.raw);
+
+    const modelKey = route.model;
+    let resumeChatId = job.chatId || (state.activeChats ? state.activeChats[modelKey] : null) || null;
 
     let liveText = '';
     const result = await streamGeneration({
       state,
       model: route.model,
       agentMap,
-      instructions: `${ATG} Réponds de manière concise et structurée.`,
+      instructions: job.isRaw
+        ? 'Tu es un assistant IA bienveillant, direct et compétent. Réponds clairement et naturellement.'
+        : `${ATG} Réponds de manière concise et structurée.`,
       prompt: route.prompt,
+      chatId: resumeChatId,
+      isRaw: job.isRaw,
       signal: ac.signal,
-      onChatId: (cid) => { job.chatId = cid; },
+      onChatId: (cid) => {
+        job.chatId = cid;
+        state.activeChats = state.activeChats || {};
+        state.activeChats[modelKey] = cid;
+        saveState(state);
+      },
       onText: (d) => {
         job.receivedChars += d.length;
         liveText += d;
@@ -166,9 +184,24 @@ app.api('/api/state', async () => {
     tierModels: groupModelsByTier(ids, state, metaMap),
     models: ids,
     active: [...localActive, ...mcpActive],
+    activeChats: state.activeChats || {},
+    dailyCreatedChats: state.dailyCreatedChats || 0,
+    chatReserveQuota: state.chatReserveQuota || 15,
     history: (state.history || []).map((h) => (h.jobId ? h : publicView(h))),
   };
 }, 'GET');
+
+app.api('/api/reset-chat', (data) => {
+  state = loadState();
+  const model = data?.model;
+  if (model) {
+    if (state.activeChats) delete state.activeChats[model];
+  } else {
+    state.activeChats = {};
+  }
+  saveState(state);
+  return { ok: true, activeChats: state.activeChats || {} };
+});
 
 app.api('/api/clear-history', () => {
   state = loadState();
@@ -221,11 +254,23 @@ app.api('/api/settings', (data) => {
 app.api('/api/delegate', (data) => {
   const task = String(data.task ?? '').trim();
   if (!task) throw new Error('Tâche vide.');
-  const firstLine = task.split('\n')[0].replace(/^\s*(?:\[[^\]]+\]|\/[a-zA-ZÀ-ÿ0-9_-]+)\s*/, '');
+
+  if (/^\s*\/reset\b/i.test(task)) {
+    state = loadState();
+    if (data.model && state.activeChats) delete state.activeChats[data.model];
+    else state.activeChats = {};
+    saveState(state);
+    return { ok: true, reset: true };
+  }
+
+  const isDirect = Boolean(data.raw || /^\s*\/(raw|chat|direct)\b/i.test(task));
+  const firstLine = task.split('\n')[0].replace(/^\s*(?:\[[^\]]+\]|\/[a-zA-ZÀ-ÿ0-9_.-]+)\s*/, '');
+  const titleTag = isDirect ? '[CHAT]' : ATG;
   const job = {
     id: randomUUID().slice(0, 8),
-    title: `${ATG} ${firstLine.slice(0, 70)}${firstLine.length > 70 ? '…' : ''}`,
+    title: `${titleTag} ${firstLine.slice(0, 70)}${firstLine.length > 70 ? '…' : ''}`,
     task,
+    raw: isDirect,
     explicitModel: data.model || undefined,
     status: 'queued',
     createdAt: Date.now(),

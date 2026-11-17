@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -22,13 +23,40 @@ import {
 } from './fs_core.mjs';
 
 const INSTRUCTIONS = `Développeur expert. Sois direct et concis.
-Pour chaque fichier demandé :
-- Appelle l'outil write_file({ path, content }) pour créer ou modifier le fichier sur PC.
-- OU écris le fichier complet au format :
+RÈGLES STRICTES DE FORMAT ET QUALITÉ :
+1. AFFICHE TOUJOURS L'INTÉGRALITÉ DU CODE dans ton message. Ne réponds JAMAIS uniquement "Je crée les fichiers..." sans écrire le code complet.
+2. Pour chaque fichier demandé, fournis le code source complet et exhaustif au format standard :
 <<<FILE chemin/relatif
-contenu intégral du fichier
+contenu intégral et directement exécutable (sans placeholder, sans coupure, sans TODO)
 >>>END
-Fournis TOUJOURS le code source complet du ou des fichiers demandés.`;
+3. Si le projet comporte plusieurs fichiers (ex: index.html, style.css, audio.js, main.js), procède avec la plus grande rigueur technique fichier par fichier.
+4. Qualité visuelle & technique de haut niveau :
+   - Design soigné, moderne, responsive, animations fluides (60 FPS), palette harmonieuse et contrastée (néon / glassmorphism si jeu arcade/cyberpunk).
+   - Code JavaScript propre, modulaire, sans variable non déclarée, compatible ES Modules natif sans build step.
+   - Web Audio API procédurale intégrée avec gestion de l'AudioContext sur interaction utilisateur.
+5. Appelle également l'outil write_file({ path, content }) pour garantir l'écriture directe sur disque.`;
+
+function validateFileSyntax(absPath, relPath) {
+  try {
+    if (!existsSync(absPath)) return null;
+    const lower = relPath.toLowerCase();
+    if (lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) {
+      try {
+        execFileSync(process.execPath, ['-c', absPath], { stdio: 'pipe', encoding: 'utf-8', timeout: 5000 });
+      } catch (err) {
+        return `Erreur de syntaxe JavaScript dans ${relPath} :\n${err.stderr || err.message}`;
+      }
+    } else if (lower.endsWith('.json')) {
+      try {
+        const content = readFileSync(absPath, 'utf-8');
+        JSON.parse(content);
+      } catch (err) {
+        return `Erreur de syntaxe JSON dans ${relPath} :\n${err.message}`;
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
 
 const FINAL = new Set(['done', 'error', 'cancelled']);
 const jobs = new Map();
@@ -69,7 +97,12 @@ function finishJob(job, status) {
   running.delete(job.id);
   jobs.delete(job.id);
   const st = loadState();
-  st.history = [{ ...job, thoughts: job.thoughts.slice(-5) }, ...(st.history || [])].slice(0, 30);
+  const histItem = {
+    ...publicView(job),
+    task: job.task,
+    isRaw: Boolean(job.isRaw || job.raw),
+  };
+  st.history = [histItem, ...(st.history || []).filter((h) => (h.jobId || h.id) !== job.id)].slice(0, 50);
   saveState(st);
   notify();
   pump();
@@ -100,13 +133,14 @@ async function runJob(job) {
     const route = pickModel(job.task, ids, st, job.explicitModel);
     job.model = route.model;
     job.routeReason = route.reason;
+    job.isRaw = Boolean(route.isRaw || job.raw);
     notify();
 
     let prompt = route.prompt.replace(/^\s*Tu es un agent de code délégué[^.]*\.\s*/i, '');
     const modelKey = route.model;
     let resumeChatId = job.chatId || null;
     if (!resumeChatId && job.parentId) {
-      const parent = st.history?.find((h) => h.id === job.parentId);
+      const parent = st.history?.find((h) => (h.jobId || h.id) === job.parentId);
       if (parent) {
         if (!resumeChatId && parent.chatId) resumeChatId = parent.chatId;
         prompt = `Contexte (tâche précédente « ${parent.title} ») :\n${parent.summary}\n` +
@@ -134,11 +168,14 @@ async function runJob(job) {
       state: st,
       model: route.model,
       agentMap,
-      instructions: INSTRUCTIONS,
+      instructions: job.isRaw
+        ? 'Tu es un assistant IA expert, bienveillant et direct. Réponds naturellement et clairement.'
+        : INSTRUCTIONS,
       prompt,
-      workspaceRoot: job.workspaceRoot,
-      clientTools: job.workspaceRoot ? ['list_directory', 'read_file', 'search_files', 'edit_file', 'write_file'] : undefined,
+      workspaceRoot: job.isRaw ? undefined : job.workspaceRoot,
+      clientTools: (job.isRaw || !job.workspaceRoot) ? undefined : ['list_directory', 'read_file', 'search_files', 'edit_file', 'write_file'],
       chatId: resumeChatId,
+      isRaw: job.isRaw,
       signal: ac.signal,
       onChatId: (cid) => {
         job.chatId = cid;
@@ -180,6 +217,53 @@ async function runJob(job) {
         } catch { /* ignore */ }
       }
     }
+    // Auto-correction intelligente : vérification de syntaxe et réparation automatique
+    if (job.workspaceRoot && allWritten.length > 0 && !ac.signal.aborted) {
+      for (const rel of allWritten) {
+        try {
+          const { abs } = resolveSafe(job.workspaceRoot, rel);
+          const syntaxErr = validateFileSyntax(abs, rel);
+          if (syntaxErr) {
+            job.thoughts.push(`[Auto-correction] Erreur détectée dans ${rel} : ${syntaxErr.split('\n')[0]}`);
+            notify();
+
+            const fixPrompt = `[ATG] Auto-correction requise pour le fichier "${rel}".\n` +
+              `Une erreur de syntaxe a été détectée :\n${syntaxErr}\n\n` +
+              `Fournis le code source complet, corrigé et immédiatement fonctionnel de "${rel}" au format :\n` +
+              `<<<FILE ${rel}\ncontenu complet corrigé\n>>>END`;
+
+            const fixResult = await streamGeneration({
+              state: st,
+              model: route.model,
+              agentMap,
+              instructions: INSTRUCTIONS,
+              prompt: fixPrompt,
+              workspaceRoot: job.workspaceRoot,
+              clientTools: ['write_file'],
+              chatId: job.chatId || resumeChatId,
+              signal: ac.signal,
+              onText: (d) => { job.receivedChars += d.length; },
+              onReasoning: (d) => { thoughtBuf += d; if (thoughtBuf.length > 200) flushThought(); },
+            });
+
+            const fixBlocks = parseFileBlocks(fixResult.text, [rel]);
+            if (fixBlocks.length > 0) {
+              writeFileBlocks(job.workspaceRoot, fixBlocks);
+              const recheck = validateFileSyntax(abs, rel);
+              if (!recheck) {
+                job.thoughts.push(`[Auto-correction] ${rel} corrigé avec succès.`);
+              } else {
+                job.thoughts.push(`[Auto-correction] Avertissement : ${rel} contient encore une erreur.`);
+              }
+              notify();
+            }
+          }
+        } catch (err) {
+          console.error(`[FS-ATG] Auto-correction error on ${rel}:`, err?.message);
+        }
+      }
+    }
+
     job.written = allWritten;
     job.summary = stripFileBlocks(result.text).slice(0, 2000);
     job.usage = result.usage;
@@ -223,9 +307,10 @@ const server = new McpServer({ name: 'fs-atg', version: '0.1.0' });
 
 server.registerTool('fs_delegate', {
   title: 'Déléguer à France Student [ATG]',
-  description: 'Délègue une tâche de code à un agent France Student. Si workspaceRoot est fourni, les fichiers <<<FILE ...>>>END sont écrits directement sur disque : ne recopie pas le code. Asynchrone : renvoie un jobId, puis appelle fs_job_status.',
+  description: 'Délègue une tâche de code ou une question à un agent France Student. Commandes slash supportées dans task : /opus, /sonnet, /haiku, /fable, /sol, /gpt6, /gpt6.1, /terra, /luna, /astra, /raw (mode direct sans [ATG]).',
   inputSchema: {
-    task: z.string().min(3).describe('Consigne précise. Préfixe [haiku]/[sonnet]/[fable] pour forcer un modèle.'),
+    task: z.string().min(1).describe('Consigne. Commandes slash : /opus, /sonnet, /sol, /raw (mode direct sans [ATG])...'),
+    raw: z.boolean().optional().describe('Si true, envoie sans préfixe [ATG] ni contraintes de format de code.'),
     workspaceRoot: z.string().optional().describe('Chemin absolu du workspace où écrire les fichiers générés.'),
     files: z.array(z.string()).optional().describe('Chemins relatifs au workspace à joindre.'),
     model: z.string().optional(),
@@ -234,11 +319,14 @@ server.registerTool('fs_delegate', {
     chatId: z.string().optional().describe("ID d'un chat existant pour continuer dans la même conversation."),
   },
 }, async (a) => {
-  const firstLine = a.task.split('\n')[0].replace(/^\s*(?:\[[^\]]+\]|\/[a-zA-ZÀ-ÿ0-9_-]+)\s*/, '');
+  const isDirect = Boolean(a.raw || /^\s*\/(raw|chat|direct)\b/i.test(a.task));
+  const firstLine = a.task.split('\n')[0].replace(/^\s*(?:\[[^\]]+\]|\/[a-zA-ZÀ-ÿ0-9_.-]+)\s*/, '');
+  const titleTag = isDirect ? '[CHAT]' : ATG;
   const job = {
     id: randomUUID().slice(0, 8),
-    title: `${ATG} ${firstLine.slice(0, 70)}${firstLine.length > 70 ? '…' : ''}`,
+    title: `${titleTag} ${firstLine.slice(0, 70)}${firstLine.length > 70 ? '…' : ''}`,
     task: a.task,
+    raw: isDirect,
     workspaceRoot: a.workspaceRoot,
     files: a.files ?? [],
     explicitModel: a.model,

@@ -13,6 +13,11 @@
 - Format du prompt :
   * Ne commence JAMAIS le prompt par « Tu es un agent de code délégué... » ni aucune mention de format machine.
   * Préfixe simplement par `[ATG]` suivi directement de la consigne claire, du nom du fichier ciblé et des spécifications techniques.
-- Génération fichier par fichier :
-  * Pour un projet composé de plusieurs fichiers (ex: index.html, style.css, audio.js, main.js), procède fichier par fichier pour garantir une qualité maximale.
-  * Pas besoin de passer manuellement le chatId pour le même modèle : l'extension s'en charge automatiquement.
+  * Exige toujours un niveau visuel et technique irréprochable : design moderne (synthwave/glassmorphism/néon, responsive), Web Audio API autonome sans crash, 60 FPS fluide, zéro variable non déclarée.
+- Génération fichier par fichier (IMPÉRATIF) :
+  * Pour un projet composé de plusieurs fichiers (ex: index.html, style.css, audio.js, main.js), procède STRICTEMENT fichier par fichier (1 fichier par message/tour : 1er message = index.html, 2e message = style.css, etc.).
+  * Ne demande JAMAIS les 4 fichiers d'un coup dans le même message : cela évite les blocages, les réponses tronquées et les messages vides.
+  * Pas besoin de passer manuellement le chatId pour le même modèle : l'extension s'en charge automatiquement en réutilisant le fil actif.
+- Auto-correction & Qualité :
+  * L'extension vérifie automatiquement la syntaxe et l'intégrité des fichiers générés (`node -c`, parsing JSON).
+  * En cas d'erreur ou de bug détecté, l'extension déclenche automatiquement une boucle d'auto-correction dans la même discussion pour corriger immédiatement le fichier sur disque.

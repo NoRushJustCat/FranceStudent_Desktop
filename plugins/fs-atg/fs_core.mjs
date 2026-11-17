@@ -226,6 +226,21 @@ export function groupModelsByTier(available, state, metaMap) {
   return groups;
 }
 
+export const MODEL_SHORTCUTS = {
+  opus: 'claude-opus-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  haiku: 'claude-haiku-5-5',
+  fable: 'claude-fable-5-2',
+  sol: 'gpt-6-sol',
+  gpt6: 'gpt-6-sol',
+  gpt6sol: 'gpt-6-sol',
+  'gpt6.1': 'gpt-6.1-sol',
+  gpt61: 'gpt-6.1-sol',
+  terra: 'gpt-6.1-terra',
+  luna: 'gpt-6-luna',
+  astra: 'gpt-6-astra',
+};
+
 export function pickModel(raw, available, state, explicit) {
   const has = (id, pats) => pats.some((p) => id.toLowerCase().includes(p.toLowerCase()));
   const allowed = state.allowedModels || [];
@@ -237,18 +252,39 @@ export function pickModel(raw, available, state, explicit) {
   const tagModel = tag && tag[1].toUpperCase() !== 'ATG' ? tag[1] : undefined;
   if (tagModel) prompt = raw.slice(tag[0].length);
 
-  const slash = /^\s*\/([a-zA-ZÀ-ÿ0-9_-]+)(?:\s+|$)/.exec(prompt);
-  const slashNorm = slash ? slash[1].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') : '';
-  const SLASH_CMDS = {
+  let isRaw = false;
+  let explicitSlashModel = undefined;
+  let explicitSlashTier = undefined;
+
+  const SLASH_TIERS = {
     auto: 'auto',
     faible: 'light', leger: 'light', light: 'light',
     mid: 'medium', moyen: 'medium', equilibre: 'medium', intermediaire: 'medium', medium: 'medium',
     eleve: 'heavy', fort: 'heavy', puissant: 'heavy', heavy: 'heavy',
   };
-  const slashTarget = SLASH_CMDS[slashNorm];
-  if (slashTarget) prompt = prompt.slice(slash[0].length);
 
-  const wanted = slashTarget === 'auto' ? undefined : (slashTarget || explicit || tagModel);
+  // Traite les commandes slash en préfixe (ex: /opus /raw Bonjour ou /raw /sonnet ...)
+  let matched = true;
+  while (matched) {
+    const slash = /^\s*\/([a-zA-ZÀ-ÿ0-9_.-]+)(?:\s+|$)/.exec(prompt);
+    if (!slash) break;
+    const key = slash[1].toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (key === 'raw' || key === 'chat' || key === 'direct') {
+      isRaw = true;
+      prompt = prompt.slice(slash[0].length);
+    } else if (MODEL_SHORTCUTS[key]) {
+      explicitSlashModel = MODEL_SHORTCUTS[key];
+      prompt = prompt.slice(slash[0].length);
+    } else if (SLASH_TIERS[key]) {
+      explicitSlashTier = SLASH_TIERS[key];
+      prompt = prompt.slice(slash[0].length);
+    } else {
+      matched = false;
+    }
+  }
+
+  const slashTarget = explicitSlashModel || (explicitSlashTier === 'auto' ? undefined : explicitSlashTier);
+  const wanted = slashTarget || explicit || tagModel;
 
   const TIER_ALIAS = {
     faible: 'light', leger: 'light', light: 'light',
@@ -260,7 +296,7 @@ export function pickModel(raw, available, state, explicit) {
 
   if (wanted && !forcedTier) {
     const hit = pool.find((id) => has(id, [wanted]));
-    if (hit) return { model: hit, prompt, reason: `forcé : ${wanted}` };
+    if (hit) return { model: hit, prompt, reason: `forcé : ${wanted}`, isRaw };
     throw new Error(`Modèle « ${wanted} » indisponible ou bloqué.`);
   }
 
@@ -276,10 +312,11 @@ export function pickModel(raw, available, state, explicit) {
         model: hit,
         prompt,
         reason: forcedTier ? `catégorie : ${label}` : `auto : ${label}${t !== tier ? ' (repli)' : ''}`,
+        isRaw,
       };
     }
   }
-  return { model: pool[0], prompt, reason: 'auto : premier modèle autorisé' };
+  return { model: pool[0], prompt, reason: 'auto : premier modèle autorisé', isRaw };
 }
 
 export async function* readSse(stream) {
@@ -442,6 +479,7 @@ export async function streamGeneration({
   workspaceRoot,
   clientTools,
   chatId: incomingChatId,
+  isRaw = false,
   signal,
   onText,
   onReasoning,
@@ -452,12 +490,17 @@ export async function streamGeneration({
   const agentId = agentMap?.get(model);
   const writtenSet = new Set();
 
+  const effectivePrompt = isRaw ? prompt : (prompt.startsWith(ATG) ? prompt : `${ATG} ${prompt}`);
+  const effectiveInstructions = isRaw
+    ? 'Tu es un assistant IA expert, bienveillant, direct et compétent. Réponds clairement et naturellement.'
+    : instructions;
+
   const runOpenAiResponses = async () => {
     const body = {
       model,
-      instructions,
+      instructions: effectiveInstructions,
       stream: true,
-      input: [{ role: 'user', content: [{ type: 'input_text', text: `${ATG} ${prompt}` }] }],
+      input: [{ role: 'user', content: [{ type: 'input_text', text: effectivePrompt }] }],
     };
     if (state.showReasoning) body.reasoning = { summary: 'auto' };
     const res = await fetch(base + '/v1/responses', {
@@ -562,7 +605,7 @@ export async function streamGeneration({
           signal,
           headers,
           body: JSON.stringify({
-            content: prompt,
+            content: effectivePrompt,
             agentId: id,
             ...(toolsToSend?.length ? { clientTools: toolsToSend } : {}),
           }),
@@ -599,7 +642,7 @@ export async function streamGeneration({
             signal,
             headers,
             body: JSON.stringify({
-              content: prompt,
+              content: effectivePrompt,
               agentId: id,
               ...(toolsToSend?.length ? { clientTools: toolsToSend } : {}),
             }),
@@ -612,7 +655,7 @@ export async function streamGeneration({
       if (!initialRes || !chatId) {
         const payload = {
           agentId: id,
-          initialContent: prompt,
+          initialContent: effectivePrompt,
           ...(toolsToSend?.length ? { clientTools: toolsToSend } : {}),
         };
         initialRes = await fetch(base + '/chats/stream', {
@@ -634,7 +677,7 @@ export async function streamGeneration({
               signal,
               headers,
               body: JSON.stringify({
-                content: prompt,
+                content: effectivePrompt,
                 agentId: id,
                 ...(toolsToSend?.length ? { clientTools: toolsToSend } : {}),
               }),
@@ -681,7 +724,7 @@ export async function streamGeneration({
   };
 
   const tryChatWithFallbackTools = async (id) => {
-    const tools = (state.useClientTools !== false && workspaceRoot && clientTools?.length) ? clientTools : undefined;
+    const tools = (!isRaw && state.useClientTools !== false && workspaceRoot && clientTools?.length) ? clientTools : undefined;
     try {
       return await runChatStream(id, tools);
     } catch (e) {
