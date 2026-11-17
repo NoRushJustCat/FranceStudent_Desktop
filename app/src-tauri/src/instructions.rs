@@ -85,7 +85,7 @@ const MCP_HINT: &str = "Ces outils sont réels et utilisables : appelle-les dire
 (non listés au départ) : si tu ne les vois pas, lance d'abord la recherche d'outils avec le nom du \
 serveur ou un mot-clé de la tâche, puis appelle l'outil trouvé. \
 Ne dis jamais que tu n'as pas accès à un serveur MCP listé ci-dessus sans avoir cherché au moins \
-deux fois. Si un outil demande un identifiant (ex. studio_id), appelle d'abord l'outil de liste (list_*) \
+deux fois. Si un outil demande un identifiant (ex. id, project_id), appelle d'abord l'outil de liste (list_*) \
 et réutilise l'identifiant. Après une modification, relis le résultat avant d'affirmer qu'elle est faite, \
 sinon dis qu'elle n'est pas vérifiée. Un refus ou un délai d'autorisation n'est pas une panne. \
 Si la liste est incomplète, appelle mcp_list_tools avant de conclure.\n\n";

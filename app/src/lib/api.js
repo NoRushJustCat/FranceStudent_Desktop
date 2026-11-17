@@ -30,6 +30,9 @@ export const pickFolder = () => invoke('pick_folder');
 export const listAgents = () => invoke('list_agents');
 export const getUsage = () => invoke('get_usage');
 export const listChats = (limit = 40, cursor = null) => invoke('list_chats', { limit, cursor });
+export const listProjects = () => invoke('list_projects');
+export const listProjectChats = (projectId, limit = 40) => invoke('list_project_chats', { projectId, limit });
+export const attachChatToProject = (projectId, chatId) => invoke('attach_chat_to_project', { projectId, chatId });
 export const getChat = (chatId) => invoke('get_chat', { chatId });
 export const deleteChat = (chatId) => invoke('delete_chat', { chatId });
 export const renameChat = (chatId, title) => invoke('rename_chat', { chatId, title });
@@ -112,6 +115,13 @@ export const mcpUpsert = (oldName, name, config) =>
 export const mcpRemove = (name) => invoke('mcp_remove', { name });
 // Importe du JSON {"mcpServers": {...}} ; renvoie les noms ajoutés.
 export const mcpImport = (text) => invoke('mcp_import', { text });
+
+// Plugins (format Claude Code) : [{name, source: 'app'|'claude', path, skills, mcp, hooks}]
+export const pluginList = () => invoke('plugin_list');
+export const pluginAdd = (source, install = true) => invoke('plugin_add', { source, install });
+export const pluginEnable = (spec, enabled) => invoke('plugin_set_enabled', { spec, enabled });
+export const pluginUpdate = (name = null) => invoke('plugin_update', { name });
+export const pluginRemove = (name) => invoke('plugin_remove', { name });
 // « Toujours autoriser » un outil MCP pour cette session.
 export const trustTool = (name, on) => invoke('trust_tool', { name, on });
 
@@ -164,6 +174,4 @@ export const instructionsStatus = () => invoke('instructions_status');
 export const instructionsSync = () => invoke('instructions_sync');
 export const instructionsRemove = () => invoke('instructions_remove');
 export const instructionsSetEnabled = (enabled) => invoke('instructions_set_enabled', { enabled: !!enabled });
-export const apiRoutes = () => invoke('api_routes');
-export const apiCall = ({ id, pathParams, query, headers, body, confirmed }) =>
-  invoke('api_call', { id, pathParams, query, headers, body, confirmed: !!confirmed });
+

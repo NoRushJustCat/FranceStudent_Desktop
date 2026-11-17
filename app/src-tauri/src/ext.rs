@@ -65,6 +65,9 @@ pub fn skill_write(
         return Err("contenu vide".to_string());
     }
     let info = find_skill(&app, workdir, &name)?;
+    if info.source == "plugin" {
+ return Err("skill fourni par un plugin : lecture seule".to_string());
+    }
     fs::write(Path::new(&info.path).join("SKILL.md"), text).map_err(|e| e.to_string())
 }
 
@@ -108,6 +111,9 @@ pub fn skill_create(
 #[tauri::command]
 pub fn skill_delete(app: AppHandle, name: String, workdir: Option<String>) -> Result<(), String> {
     let info = find_skill(&app, workdir, &name)?;
+    if info.source == "plugin" {
+        return Err("skill fourni par un plugin : désinstalle le plugin pour le retirer".to_string());
+    }
     let dir = PathBuf::from(&info.path);
     if !dir.join("SKILL.md").is_file() {
         return Err("SKILL.md introuvable : rien supprimé".to_string());
@@ -237,7 +243,19 @@ pub async fn mcp_upsert(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from);
-    if command.is_empty() && url.is_none() {
+    let kind = config
+        .kind
+        .as_deref()
+        .map(|k| k.trim().to_ascii_lowercase())
+        .filter(|k| !k.is_empty() && k != "stdio");
+    if let Some(k) = &kind {
+        if !(k == "sse" || k.contains("http")) {
+            return Err(format!("type de serveur inconnu : {k}"));
+        }
+        if url.is_none() {
+            return Err("URL manquante pour un serveur distant".to_string());
+        }
+    } else if command.is_empty() && url.is_none() {
         return Err("commande ou URL manquante".to_string());
     }
     if let Some(u) = &url {
@@ -308,6 +326,12 @@ pub async fn mcp_upsert(
             "headers",
             (!config.headers.is_empty()).then(|| json!(config.headers)),
         );
+        // Alias d'autres clients : remplacés par les clés canoniques ci-dessus.
+        for alias in ["serverUrl", "httpUrl", "transport"] {
+            obj.remove(alias);
+        }
+        set_or_remove(&mut obj, "type", kind.map(|k| json!(k)));
+        set_or_remove(&mut obj, "disabled", config.disabled.then(|| json!(true)));
         servers.insert(name.clone(), Value::Object(obj));
         write_root(&dir, &root)?;
     }
@@ -350,7 +374,11 @@ pub fn mcp_import(app: AppHandle, text: String) -> Result<Vec<String>, String> {
                 .to_string(),
         );
     }
-    let found: Map<String, Value> = match obj.get("mcpServers").and_then(Value::as_object) {
+    let found: Map<String, Value> = match obj
+        .get("mcpServers")
+        .or_else(|| obj.get("servers"))
+        .and_then(Value::as_object)
+    {
         Some(m) => m.clone(),
         None => obj.clone(),
     };

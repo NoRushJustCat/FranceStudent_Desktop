@@ -109,8 +109,9 @@
           label: `/${c.name}`,
           desc: c.desc || '',
           insert: `/${c.name} `,
-          disabled: c.name === 'stop' && !busy,
-          run: c.run || null
+   disabled: c.name === 'stop' && !busy,
+   takesArgs: !!c.args,
+   run: c.run || null
         }));
       const skillList = skills.map((s) => ({
         type: 'skill',
@@ -199,7 +200,7 @@
   function applyAcItem(item) {
     if (!item || !ta || item.disabled) return;
     acOpen = false;
-    if (item.type === 'cmd' && typeof item.run === 'function') {
+    if (item.type === 'cmd' && !item.takesArgs && typeof item.run === 'function') {
       input = '';
       Promise.resolve(item.run()).catch((err) => onerror(String(err)));
       queueMicrotask(() => ta?.focus());
@@ -459,6 +460,69 @@
 
   <div class="bar">
     <div class="bar-left">
+      <input
+        bind:this={fileInput}
+        type="file"
+        multiple
+        accept="image/*,.pdf,.txt,.md,.csv,.json,.js,.ts,.py,.rs,.html,.css,.xml,.yaml,.yml"
+        class="hidden-file"
+        onchange={handleFileChange}
+      />
+
+      <div class="more-wrap">
+        <button
+          type="button"
+          class="tool-btn more-btn"
+          class:active={moreOpen || enableWebSearch}
+          aria-haspopup="menu"
+          aria-expanded={moreOpen}
+          onclick={() => (moreOpen = !moreOpen)}
+          title="Pièce jointe, recherche Web…"
+          aria-label="Plus d'options"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          {#if enableWebSearch}<span class="more-dot" aria-hidden="true"></span>{/if}
+        </button>
+
+        {#if moreOpen}
+          <div class="more-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              class="more-item"
+              onclick={() => {
+                moreOpen = false;
+                fileInput?.click();
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+              </svg>
+              <span>Pièce jointe</span>
+            </button>
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={enableWebSearch}
+              class="more-item"
+              class:active={enableWebSearch}
+              onclick={() => (enableWebSearch = !enableWebSearch)}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
+              <span>Recherche Web</span>
+              <span class="more-check" aria-hidden="true">{enableWebSearch ? '✓' : ''}</span>
+            </button>
+          </div>
+        {/if}
+      </div>
+
       {#if agents.length > 0}
         <div class="select-wrap">
           <select
@@ -541,69 +605,6 @@
     </div>
 
     <div class="bar-right">
-      <input
-        bind:this={fileInput}
-        type="file"
-        multiple
-        accept="image/*,.pdf,.txt,.md,.csv,.json,.js,.ts,.py,.rs,.html,.css,.xml,.yaml,.yml"
-        class="hidden-file"
-        onchange={handleFileChange}
-      />
-
-      <div class="more-wrap">
-        <button
-          type="button"
-          class="tool-btn more-btn"
-          class:active={moreOpen || enableWebSearch}
-          aria-haspopup="menu"
-          aria-expanded={moreOpen}
-          onclick={() => (moreOpen = !moreOpen)}
-          title="Pièce jointe, recherche Web…"
-          aria-label="Plus d'options"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
-          {#if enableWebSearch}<span class="more-dot" aria-hidden="true"></span>{/if}
-        </button>
-
-        {#if moreOpen}
-          <div class="more-menu" role="menu">
-            <button
-              type="button"
-              role="menuitem"
-              class="more-item"
-              onclick={() => {
-                moreOpen = false;
-                fileInput?.click();
-              }}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
-              <span>Pièce jointe</span>
-            </button>
-            <button
-              type="button"
-              role="menuitemcheckbox"
-              aria-checked={enableWebSearch}
-              class="more-item"
-              class:active={enableWebSearch}
-              onclick={() => (enableWebSearch = !enableWebSearch)}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="2" y1="12" x2="22" y2="12" />
-                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-              </svg>
-              <span>Recherche Web</span>
-              <span class="more-check" aria-hidden="true">{enableWebSearch ? '✓' : ''}</span>
-            </button>
-          </div>
-        {/if}
-      </div>
-
       <ContextRing {ctx} {eco} length={input.length} />
       {#if busy}
         <button
@@ -1025,7 +1026,6 @@
   .more-wrap {
     position: relative;
     display: inline-flex;
-    order: 9;
   }
 
   .more-btn {

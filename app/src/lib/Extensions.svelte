@@ -128,7 +128,7 @@
   });
 
   // ---------- skills locaux ----------
-  const SOURCES = { projet: 'PROJET', utilisateur: 'UTILISATEUR', app: 'APP' };
+  const SOURCES = { projet: 'PROJET', utilisateur: 'UTILISATEUR', app: 'APP', plugin: 'PLUGIN' };
   const clean = (s) =>
     String(s ?? '')
       .replace(/\\n/g, ' ')
@@ -282,17 +282,33 @@
     { name: 'web', label: 'Web (fetch)', command: 'uvx', args: ['mcp-server-fetch'] },
   ];
 
-  let f = $state({ orig: null, name: '', command: '', args: '', env: '', cwd: '' });
+  const KINDS = [
+    { id: 'stdio', label: 'Local (stdio)', hint: 'Lance une commande sur ce PC (npx, uvx, node, python…).' },
+    { id: 'http', label: 'Distant (HTTP)', hint: 'Serveur HTTP « Streamable » (URL en /mcp).' },
+    { id: 'sse', label: 'Distant (SSE)', hint: 'Serveur SSE (URL en /sse).' },
+  ];
+  const emptyForm = () => ({ orig: null, kind: 'stdio', name: '', command: '', args: '', env: '', cwd: '', url: '', token: '', headers: '', disabled: false });
+  let f = $state(emptyForm());
+
+  // Formulaire valide : nom + (commande en local | URL http(s) en distant).
+  let formOk = $derived(
+    !!f.name.trim() && (f.kind === 'stdio' ? !!f.command.trim() : /^https?:\/\//i.test(f.url.trim())),
+  );
+
+  function parseHeaders(text) {
+    const o = {};
+    for (const raw of text.split(/\r?\n/)) {
+      const l = raw.trim();
+      if (!l || l.startsWith('#')) continue;
+      const i = l.indexOf(':');
+      if (i < 1) throw new Error(`En-tête invalide : « ${l} » (attendu : Nom: valeur)`);
+      o[l.slice(0, i).trim()] = l.slice(i + 1).trim();
+    }
+    return o;
+  }
 
   function openServerForm(p = null) {
-    f = {
-      orig: null,
-      name: p?.name ?? '',
-      command: p?.command ?? '',
-      args: (p?.args ?? []).join('\n'),
-      env: '',
-      cwd: '',
-    };
+    f = { ...emptyForm(), name: p?.name ?? '', command: p?.command ?? '', args: (p?.args ?? []).join('\n') };
     view = 'mcp-form';
     msg = null;
   }
@@ -300,15 +316,25 @@
   async function editServer(s) {
     try {
       const c = await mcpGetServer(s.name);
+      const k = (c.type ?? '').toLowerCase();
+      const remote = !!(c.url || /^https?:\/\//i.test(c.command ?? ''));
       f = {
+ ...emptyForm(),
         orig: s.name,
+        kind: k === 'sse' ? 'sse' : k.includes('http') || remote ? 'http' : 'stdio',
         name: s.name,
         command: c.command ?? '',
         args: (c.args ?? []).join('\n'),
         env: Object.entries(c.env ?? {})
           .map(([k, v]) => `${k}=${v}`)
           .join('\n'),
-        cwd: c.cwd ?? '',
+ cwd: c.cwd ?? '',
+ url: c.url ?? '',
+        token: c.token ?? '',
+        headers: Object.entries(c.headers ?? {})
+          .map(([hk, hv]) => `${hk}: ${hv}`)
+   .join('\n'),
+        disabled: !!c.disabled,
       };
       view = 'mcp-form';
       msg = null;
@@ -363,11 +389,17 @@
   async function saveServer(connect) {
     const name = f.name.trim();
     try {
+      const remote = f.kind !== 'stdio';
       const config = {
-        command: f.command.trim(),
-        args: f.args.split(/\r?\n/).map((a) => a.trim()).filter(Boolean),
-        env: parseEnv(f.env),
-        cwd: f.cwd.trim() || null,
+        command: remote ? '' : f.command.trim(),
+        args: remote ? [] : f.args.split(/\r?\n/).map((a) => a.trim()).filter(Boolean),
+        env: remote ? {} : parseEnv(f.env),
+ cwd: remote ? null : f.cwd.trim() || null,
+        url: remote ? f.url.trim() : null,
+        token: remote ? f.token.trim() || null : null,
+        headers: remote ? parseHeaders(f.headers) : {},
+ type: f.kind === 'stdio' ? null : f.kind,
+        disabled: f.disabled,
       };
       await mcpUpsert(f.orig, name, config);
     } catch (e) {
@@ -757,10 +789,15 @@
         <p class="hint">
           {#if f.orig}Enregistrer déconnecte le serveur&#8239;; reconnecte-le ensuite.{:else}Écrit dans <code>mcp.json</code>&#8239;; démarre après un clic sur «&#8239;Connecter&#8239;» ou «&#8239;Enregistrer et connecter&#8239;».{/if}
         </p>
-        <div class="form-grid-2">
-          <label><span>Nom <span class="req">*</span></span><input bind:value={f.name} placeholder="fichiers" spellcheck="false" /></label>
-          <label><span>Commande <span class="req">*</span></span><input class="mono" bind:value={f.command} placeholder="npx" spellcheck="false" /></label>
+        <div class="kind-tabs" role="tablist" aria-label="Type de serveur">
+          {#each KINDS as k}
+            <button type="button" role="tab" class="kind-tab" class:on={f.kind === k.id} aria-selected={f.kind === k.id} onclick={() => (f.kind = k.id)}>{k.label}</button>
+          {/each}
         </div>
+ <p class="hint">{KINDS.find((k) => k.id === f.kind)?.hint}</p>
+ <label><span>Nom <span class="req">*</span></span><input bind:value={f.name} placeholder="fichiers" spellcheck="false" /></label>
+        {#if f.kind === 'stdio'}
+   <label><span>Commande <span class="req">*</span></span><input class="mono" bind:value={f.command} placeholder="npx" spellcheck="false" /></label>
         <label>
           <span>Arguments (un par ligne)</span>
           <textarea class="code" bind:value={f.args} rows="2" spellcheck="false" placeholder={'-y @modelcontextprotocol/server-filesystem'}></textarea>
@@ -775,12 +812,22 @@
           <span>Variables d’environnement (<code>NOM=valeur</code>, une par ligne)</span>
           <textarea class="code" bind:value={f.env} rows="2" spellcheck="false" placeholder="API_KEY=…"></textarea>
         </label>
-        <label><span>Dossier de lancement</span><input class="mono" bind:value={f.cwd} placeholder={'C:\\Projet'} spellcheck="false" /></label>
+          <label><span>Dossier de lancement</span><input class="mono" bind:value={f.cwd} placeholder={'C:\\Projet'} spellcheck="false" /></label>
+ {:else}
+   <label><span>URL <span class="req">*</span></span><input class="mono" bind:value={f.url} placeholder={f.kind === 'sse' ? 'https://exemple.com/sse' : 'https://exemple.com/mcp'} spellcheck="false" /></label>
+   <label><span>Jeton Bearer (optionnel)</span><input class="mono" type="password" bind:value={f.token} placeholder={'${MON_JETON} ou jeton'} spellcheck="false" autocomplete="off" /></label>
+          <label>
+     <span>En-têtes (<code>Nom: valeur</code>, un par ligne)</span>
+     <textarea class="code" bind:value={f.headers} rows="2" spellcheck="false" placeholder="X-Api-Key: …"></textarea>
+          </label>
+        {/if}
+        <p class="hint">Les variables <code>{'${NOM}'}</code> sont remplacées par l’environnement à la connexion.</p>
+        <label class="check"><input type="checkbox" bind:checked={f.disabled} /> <span>Désactivé (jamais lancé ni contacté)</span></label>
         <div class="bar form-bar">
-          <button type="button" class="pri" onclick={() => saveServer(true)} disabled={!f.name.trim() || !f.command.trim()}>
-            Enregistrer et connecter
-          </button>
-          <button type="button" class="sec" onclick={() => saveServer(false)} disabled={!f.name.trim() || !f.command.trim()}>Enregistrer</button>
+   <button type="button" class="pri" onclick={() => saveServer(true)} disabled={!formOk || f.disabled}>
+     Enregistrer et connecter
+   </button>
+          <button type="button" class="sec" onclick={() => saveServer(false)} disabled={!formOk}>Enregistrer</button>
           <button type="button" class="ghost" onclick={back}>Annuler</button>
         </div>
       </section>
@@ -1024,6 +1071,34 @@
   }
   .compact-bar {
     margin: -2px 0 9px;
+  }
+  .kind-tabs {
+    display: flex;
+    gap: 6px;
+    margin: 0 0 8px;
+  }
+  .kind-tab {
+    flex: 1;
+    padding: 7px 10px;
+    border: 1px solid var(--xt-line2);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--xt-mut);
+    cursor: pointer;
+  }
+  .kind-tab.on {
+    border-color: var(--xt-acc);
+    color: var(--xt-txt);
+    background: color-mix(in srgb, var(--xt-acc) 14%, transparent);
+  }
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+  }
+  .check input {
+    width: auto;
   }
   .nowrap {
     white-space: nowrap;

@@ -16,7 +16,7 @@ use serde::Serialize;
 pub struct SkillInfo {
     pub name: String,
     pub description: String,
-    /// `projet`, `utilisateur` ou `app`.
+    /// `projet`, `utilisateur`, `app` ou `plugin`.
     pub source: String,
     /// Dossier du skill.
     pub path: String,
@@ -36,6 +36,11 @@ fn roots(config: &Path, workdir: Option<&Path>) -> Vec<(&'static str, PathBuf)> 
         ));
     }
     v.push(("app", config.join("skills")));
+    for r in crate::plugins::roots(config) {
+        for d in crate::plugins::skill_dirs(&r) {
+     v.push(("plugin", d));
+ }
+    }
     v
 }
 

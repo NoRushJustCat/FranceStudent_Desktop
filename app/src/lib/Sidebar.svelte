@@ -1,4 +1,4 @@
-﻿<script>
+<script>
   import { onDestroy } from 'svelte';
   import BrandLogo from './BrandLogo.svelte';
 
@@ -26,7 +26,10 @@
     onopensaved,
     onunsavemsg,
     oncopysaved,
-    onrestore
+    onrestore,
+    projects = [],
+    projectId = null,
+    onproject
   } = $props();
 
   const FILTERS = [
@@ -37,6 +40,8 @@
   ];
 
   let filterOpen = $state(false);
+  let projOpen = $state(false);
+  let projName = $derived(projects.find((p) => p.id === projectId)?.name || 'Projet');
 
   function countFor(id) {
     if (id === 'pinned') return pinnedChatsCount;
@@ -163,9 +168,13 @@
 <svelte:window
   onclick={(e) => {
     if (filterOpen && !e.target.closest?.('.search-wrap')) filterOpen = false;
+    if (projOpen && !e.target.closest?.('.proj-wrap')) projOpen = false;
   }}
   onkeydown={(e) => {
-    if (e.key === 'Escape') filterOpen = false;
+    if (e.key === 'Escape') {
+      filterOpen = false;
+      projOpen = false;
+    }
   }}
 />
 
@@ -181,13 +190,64 @@
   </header>
 
   <div class="top-actions">
-    <button type="button" class="newbtn" onclick={() => onnew?.()}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <line x1="12" y1="5" x2="12" y2="19" />
-        <line x1="5" y1="12" x2="19" y2="12" />
-      </svg>
-      <span>Nouveau chat</span>
-    </button>
+    <div class="new-row">
+      <button type="button" class="newbtn" onclick={() => onnew?.()}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        <span>Nouveau chat</span>
+      </button>
+
+      <div class="proj-wrap">
+        <button
+          type="button"
+          class="projbtn"
+          class:active={projectId}
+          aria-haspopup="menu"
+          aria-expanded={projOpen}
+          title="Projets"
+          onclick={() => (projOpen = !projOpen)}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          <span>Projets</span>
+        </button>
+        {#if projOpen}
+          <div class="filter-menu proj-menu" role="menu">
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={!projectId}
+              class="filter-item"
+              class:active={!projectId}
+              onclick={() => {
+                projOpen = false;
+                onproject?.(null);
+              }}
+            >
+              <span class="filter-label">Chats</span>
+            </button>
+            {#each projects as p (p.id)}
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={projectId === p.id}
+                class="filter-item"
+                class:active={projectId === p.id}
+                onclick={() => {
+                  projOpen = false;
+                  onproject?.(p.id);
+                }}
+              >
+                <span class="filter-label">{truncate(p.name, 26)}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
 
     <div class="search-wrap">
       <svg class="search-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -258,6 +318,13 @@
         </div>
       {/if}
     </div>
+  </div>
+
+  <div class="proj-now">
+    <span class="proj-now-name" title={projectId ? projName : 'Chats'}>Projet ouvert : {projectId ? projName : 'Chats'}</span>
+    {#if projectId}
+      <button type="button" class="proj-back" onclick={() => onproject?.(null)}>← Chats</button>
+    {/if}
   </div>
 
   <div class="chat-list" role="list">
@@ -378,7 +445,7 @@
         {:else if filterTab === 'pinned'}
           Aucun chat épinglé
         {:else}
-          Aucun chat pour le moment
+          {projectId ? 'Aucun chat dans ce projet' : 'Aucun chat pour le moment'}
         {/if}
       </div>
     {:else}
@@ -616,6 +683,84 @@
 
   .newbtn:active {
     transform: translateY(1px);
+  }
+
+  .new-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .new-row .newbtn {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+
+  .proj-wrap {
+    position: relative;
+    display: flex;
+  }
+
+  .projbtn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--panel2);
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .projbtn:hover {
+    background: var(--hover);
+  }
+
+  .projbtn.active {
+    border-color: var(--accent-line);
+    color: var(--accent-text);
+  }
+
+  .proj-menu {
+    max-height: 260px;
+    overflow-y: auto;
+  }
+
+  .proj-now {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 0 var(--side-px, 12px) 4px;
+    text-align: left;
+    font-size: 11.5px;
+    color: var(--dim);
+  }
+
+  .proj-now-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .proj-back {
+    flex: none;
+    margin-left: auto;
+    padding: 2px 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--accent-text);
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+
+  .proj-back:hover {
+    background: var(--hover);
   }
 
   .search-wrap {
@@ -887,7 +1032,7 @@
     padding: 4px var(--side-px, 12px) 10px;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 1px;
   }
 
   .empty-state {
@@ -921,7 +1066,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 6px 8px 8px;
+    padding: 5px 6px 5px 8px;
     border: none;
     background: transparent;
     color: var(--text);

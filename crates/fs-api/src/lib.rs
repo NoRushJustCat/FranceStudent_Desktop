@@ -211,7 +211,24 @@ fn parse_web_search(ty: &str, v: &Value) -> Option<String> {
             let item = &v["item"];
             if item["type"].as_str() == Some("web_search_call") {
                 let status = item["status"].as_str().unwrap_or("completed");
-                Some(format!("Recherche web ({status})."))
+                let act = &item["action"];
+  let query = act["query"]
+      .as_str()
+      .or_else(|| act["queries"].get(0).and_then(Value::as_str))
+      .unwrap_or("");
+  let mut s = format!("Recherche web ({status})");
+         if !query.is_empty() {
+      s.push_str(&format!(" : « {query} »"));
+         }
+  let urls: Vec<&str> = act["sources"]
+      .as_array()
+      .map(|a| a.iter().filter_map(|x| x["url"].as_str()).take(5).collect())
+      .unwrap_or_default();
+         if !urls.is_empty() {
+      s.push_str(&format!(" — sources : {}", urls.join(", ")));
+         }
+         s.push('.');
+         Some(s)
             } else {
                 None
             }
@@ -459,6 +476,29 @@ impl Client {
             path.push_str(c);
         }
         self.request(Method::GET, &path, None).await
+    }
+
+    /// `GET /projects` : mes projets (tableau).
+    pub async fn projects(&self) -> Result<Value> {
+ self.request(Method::GET, "/projects", None).await
+    }
+
+    /// `GET /projects/shared` : projets partagés avec moi (tableau).
+    pub async fn shared_projects(&self) -> Result<Value> {
+        self.request(Method::GET, "/projects/shared", None).await
+    }
+
+    /// `GET /projects/{id}/chats` : chats d'un projet (`{chats, hasMore}`).
+    pub async fn project_chats(&self, project_id: &str, limit: u32) -> Result<Value> {
+        let path = format!("/projects/{project_id}/chats?limit={limit}");
+        self.request(Method::GET, &path, None).await
+    }
+
+    /// `PUT /projects/{id}/chats/{chat}` : rattache un chat à un projet.
+    pub async fn attach_chat(&self, project_id: &str, chat_id: &str) -> Result<()> {
+        let path = format!("/projects/{project_id}/chats/{chat_id}");
+ self.request(Method::PUT, &path, None).await?;
+ Ok(())
     }
 
     /// `GET /chats/{id}` : détail + messages.
@@ -918,5 +958,25 @@ impl Client {
             }));
         }
         Ok(last_id)
+    }
+}
+
+#[cfg(test)]
+mod web_search_tests {
+    use super::*;
+
+    #[test]
+    fn web_search_notice_shows_query_and_sources() {
+        let v: Value = serde_json::from_str(
+     r#"{"item":{"type":"web_search_call","status":"completed","action":{"query":"meteo paris","sources":[{"url":"https://a.fr"}]}}}"#,
+        )
+        .unwrap();
+        let s = parse_web_search("response.output_item.done", &v).unwrap();
+        assert!(s.contains("meteo paris") && s.contains("https://a.fr"));
+        let bare: Value = serde_json::from_str(r#"{"item":{"type":"web_search_call"}}"#).unwrap();
+        assert_eq!(
+            parse_web_search("response.output_item.done", &bare).unwrap(),
+     "Recherche web (completed)."
+        );
     }
 }

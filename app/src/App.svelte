@@ -130,6 +130,8 @@
   let pickedAgent = false;
   let chatAgent = null;
   let chats = $state([]);
+  let projects = $state([]); // [{ id, name }]
+  let projectId = $state(null); // null = « Chats » (chats de base)
   let chatsLoaded = $state(false);
   let searchQuery = $state('');
   let searching = $state(false);
@@ -363,7 +365,7 @@
   const displayedChats = $derived.by(() => {
     const f = searchQuery.trim().toLowerCase();
     if (!f) return chats;
-    if (searchResults !== null) return searchResults;
+    if (searchResults !== null && !projectId) return searchResults;
     return chats.filter((c) => c.title.toLowerCase().includes(f));
   });
 
@@ -391,7 +393,69 @@
     { name: 'contexte', alias: ['context'], desc: 'Contexte du chat et mode économie', run: () => openSettings('usage') },
     { name: 'compteurs', alias: ['stats', 'reset'], desc: 'Remettre les compteurs à zéro', run: () => resetTally() },
     { name: 'skills', desc: 'Lister les skills ($)', run: () => (input = '$') },
+    { name: 'plugin', alias: ['plugins'], args: true, desc: 'Plugins : list, marketplace add <source>, install|uninstall|enable|disable <nom@marketplace>, update', run: () => {} },
   ];
+
+  // /plugin [marketplace] list|add|remove|update  ·  /plugin install|uninstall|enable|disable nom@marketplace
+  async function runPlugin(arg) {
+    const words = arg.trim().split(/\s+/).filter(Boolean);
+    const market = ['marketplace', 'market'].includes(words[0]?.toLowerCase());
+    if (market) words.shift();
+    const sub = (words.shift() || 'list').toLowerCase();
+    const rest = words.join(' ');
+    const sum = (p) => p.name + '@' + p.market + (p.enabled ? '' : ' (désactivé)') + ' : ' + p.skills + ' skill(s), ' + p.mcp + ' MCP' + (p.hooks ? ', hooks ignorés' : '');
+    const reload = () => loadSkills(mode, curWorkdir);
+    commandNotice = '/plugin : en cours…';
+    try {
+      if ((sub === 'list' || sub === 'ls') && market) {
+ const l = (await api.pluginList()).filter((p) => p.source === 'app');
+        const m = new Map();
+        for (const p of l) m.set(p.store, (m.get(p.store) || 0) + 1);
+        commandNotice = m.size
+          ? 'Marketplaces :\n' + [...m].map(([s, n]) => '- ' + s + ' : ' + n + ' plugin(s)').join('\n')
+   : 'Aucune marketplace. Ajoute-en une : /plugin marketplace add owner/repo';
+      } else if (sub === 'list' || sub === 'ls') {
+        const l = await api.pluginList();
+        commandNotice = l.length
+          ? 'Plugins :\n' + l.map((p) => '- ' + sum(p) + ' [' + p.source + ']').join('\n')
+   : 'Aucun plugin. Ajoute une marketplace : /plugin marketplace add owner/repo';
+      } else if (sub === 'add' && market) {
+        const l = await api.pluginAdd(rest, false);
+        reload();
+        commandNotice = 'Marketplace ajoutée. Plugins disponibles (installe avec /plugin install nom@marketplace) :\n' + l.map((p) => '- ' + sum(p)).join('\n');
+      } else if (['add', 'install', 'i'].includes(sub)) {
+        if (/^[\w.-]+(@[\w.-]+)?$/.test(rest)) {
+   const p = await api.pluginEnable(rest, true);
+   reload();
+   commandNotice = '/plugin : « ' + p.name + '@' + p.market + ' » activé (' + p.skills + ' skill(s), ' + p.mcp + ' serveur(s) MCP)' + (p.hooks ? '. Ses hooks ne sont pas gérés.' : '.');
+        } else {
+          const l = await api.pluginAdd(rest, true);
+   reload();
+   commandNotice = '/plugin : ajouté et activé :\n' + l.map((p) => '- ' + sum(p)).join('\n');
+        }
+      } else if (['uninstall', 'disable'].includes(sub)) {
+ const p = await api.pluginEnable(rest, false);
+ reload();
+        commandNotice = '/plugin : « ' + p.name + '@' + p.market + ' » désactivé.';
+      } else if (sub === 'enable') {
+        const p = await api.pluginEnable(rest, true);
+ reload();
+        commandNotice = '/plugin : « ' + p.name + '@' + p.market + ' » activé.';
+      } else if (['remove', 'rm', 'delete'].includes(sub)) {
+        await api.pluginRemove(rest);
+ reload();
+        commandNotice = '/plugin : « ' + rest + ' » supprimé (marketplace et ses plugins).';
+      } else if (sub === 'update') {
+        const out = await api.pluginUpdate(rest || null);
+ reload();
+        commandNotice = '/plugin update :\n' + out;
+      } else {
+        commandNotice = '/plugin : sous-commande inconnue. Utilise list, marketplace add|list|remove|update, install|uninstall|enable|disable nom@marketplace, update.';
+      }
+    } catch (err) {
+      commandNotice = '/plugin : échec — ' + String(err);
+    }
+  }
 
   async function runCommand(command) {
     commandNotice = `/${command.name} : exécution…`;
@@ -561,9 +625,11 @@
 
   async function loadChats() {
     try {
-      const r = await api.listChats(40, null);
+      const pid = projectId;
+      const r = pid ? await api.listProjectChats(pid, 40) : await api.listChats(40, null);
+      if (pid !== projectId) return;
       const fresh = asArray(r, ['chats', 'items', 'data']).map(mapChatSummary);
-      const keep = chats.filter(
+      const keep = projectId ? [] : chats.filter(
  (c) => !fresh.some((f) => f.id === c.id) && sessions.some((s) => s.chatId === c.id && s.busy),
       );
       chats = [...keep, ...fresh];
@@ -571,6 +637,24 @@
       gerr = String(e);
     }
     chatsLoaded = true;
+  }
+  async function loadProjects() {
+    try {
+      projects = asArray(await api.listProjects(), ['projects', 'items', 'data']).map((p) => ({
+        id: String(p.id),
+        name: p.name || 'Sans nom',
+      }));
+    } catch {
+      /* facultatif */
+    }
+  }
+  async function selectProject(id) {
+    if ((id ?? null) === projectId) return;
+    projectId = id ?? null;
+    sidebarTab = 'all';
+    chats = [];
+    chatsLoaded = false;
+    await loadChats();
   }
   async function loadUsage() {
     try {
@@ -814,7 +898,7 @@
       gerr = String(e);
       if (agentId == null) agentId = settings?.lastAgentId ?? -2001;
     }
-    await Promise.all([loadChats(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs(), loadOpenRuns()]);
+    await Promise.all([loadChats(), loadProjects(), loadUsage(), loadSavedMessages(), loadArchivedChats(), loadNotifPrefs(), loadOpenRuns()]);
   }
   async function submitLogin(e) {
     e?.preventDefault();
@@ -1193,6 +1277,7 @@
 s.chatId = ev.chat_id;
        if (!chats.some((c) => c.id === ev.chat_id)) {
          chats = [{ id: ev.chat_id, title: 'Nouveau chat', pinned: false }, ...chats];
+         if (projectId) api.attachChatToProject(projectId, ev.chat_id).catch(() => {});
        }
        saveMemo(s);
        break;
@@ -1315,6 +1400,12 @@ assistant().text += ev.text;
     if (uploading) return;
 
     const rawText = input.trim();
+    const pm = rawText.match(/^\/plugins?(?:\s+([\s\S]*))?$/i);
+    if (pm) {
+      input = '';
+      await runPlugin(pm[1] || '');
+      return;
+    }
     if ((!rawText && readyAtts.length === 0) || busy || cur?.loading) return;
     const content = rawText || 'Analyse ces pièces jointes.';
 
@@ -1467,6 +1558,9 @@ assistant().text += ev.text;
     onunsavemsg={handleUnsaveMessage}
     oncopysaved={handleCopySavedMessage}
     onrestore={handleRestoreChat}
+    {projects}
+    {projectId}
+    onproject={selectProject}
   />
 
   <section class="main">
@@ -2257,6 +2351,7 @@ assistant().text += ev.text;
     background: var(--panel2);
     color: var(--dim);
     font-size: 12.5px;
+    white-space: pre-line;
   }
 
   .mcpnote {

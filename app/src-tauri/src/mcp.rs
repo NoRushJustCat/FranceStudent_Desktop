@@ -29,7 +29,10 @@ pub const EXAMPLE: &str = r#"{
     "exemple": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\Tom\\Documents"]
-    }
+    },
+    "distant-http": { "type": "http", "url": "https://exemple.com/mcp", "headers": { "Authorization": "Bearer ${MON_JETON}" } },
+    "distant-sse": { "type": "sse", "url": "https://exemple.com/sse" },
+    "desactive": { "command": "node", "args": ["srv.js"], "disabled": true }
   }
 }
 "#;
@@ -42,14 +45,79 @@ pub struct ServerConfig {
     pub env: HashMap<String, String>,
     pub cwd: Option<String>,
     /// Serveur HTTP (ex. `http://localhost:3000/mcp`) : remplace `command`.
+    /// Alias : `serverUrl` (Cursor/Windsurf), `httpUrl` (Gemini CLI).
+    #[serde(alias = "serverUrl", alias = "httpUrl")]
     pub url: Option<String>,
     /// Jeton optionnel, envoyé en `Authorization: Bearer …`.
     pub token: Option<String>,
     /// En-têtes HTTP supplémentaires.
     pub headers: HashMap<String, String>,
+    /// `stdio`, `http`/`streamable-http`, `sse`. Déduit si absent.
+    #[serde(
+        rename = "type",
+        alias = "transport",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub kind: Option<String>,
+    /// `true` : serveur ignoré (jamais lancé ni contacté).
+    pub disabled: bool,
+}
+
+/// `${VAR}` / `${env:VAR}` → variable d'environnement (vide si absente).
+fn expand_vars(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("${") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        match after.find('}') {
+            Some(j) => {
+                let key = after[..j].trim();
+                let key = key.strip_prefix("env:").unwrap_or(key);
+                out.push_str(&std::env::var(key).unwrap_or_default());
+                rest = &after[j + 1..];
+            }
+            None => {
+                out.push_str(&rest[i..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 impl ServerConfig {
+    /// Copie avec `${VAR}` développé. Fait à la connexion seulement : `mcp.json` reste intact.
+    pub fn expanded(&self) -> Self {
+        let mut c = self.clone();
+        c.command = expand_vars(&c.command);
+        c.args = c.args.iter().map(|a| expand_vars(a)).collect();
+        c.env = c
+            .env
+            .iter()
+            .map(|(k, v)| (k.clone(), expand_vars(v)))
+            .collect();
+        c.cwd = c.cwd.as_deref().map(expand_vars);
+        c.url = c.url.as_deref().map(expand_vars);
+        c.token = c.token.as_deref().map(expand_vars);
+        c.headers = c
+            .headers
+            .iter()
+            .map(|(k, v)| (k.clone(), expand_vars(v)))
+            .collect();
+        c
+    }
+
+    /// Transport SSE : explicite via `type`, sinon deviné par `/sse` dans l'URL.
+    pub fn is_sse(&self, url: &str) -> bool {
+        match self.kind.as_deref().map(|k| k.trim().to_ascii_lowercase()) {
+            Some(k) if k == "sse" => true,
+            Some(k) if k.contains("http") => false,
+            _ => url.to_ascii_lowercase().contains("/sse"),
+        }
+    }
+
     /// `(url, jeton)` si le serveur se joint par HTTP.
     /// Accepte aussi une `command` qui est en fait une URL (le jeton peut alors être `args[0]`).
     pub fn endpoint(&self) -> Option<(String, Option<String>)> {
@@ -92,7 +160,8 @@ fn clean_token(t: &str) -> String {
 
 #[derive(Default, Deserialize)]
 struct ConfigFile {
-    #[serde(default, rename = "mcpServers")]
+    /// `mcpServers` (Claude, Cursor, Gemini…) ou `servers` (VS Code).
+    #[serde(default, rename = "mcpServers", alias = "servers")]
     mcp_servers: BTreeMap<String, ServerConfig>,
 }
 
@@ -108,7 +177,7 @@ fn parse_config(text: &str) -> Result<ConfigFile, String> {
     let cfg: ConfigFile =
         serde_json::from_str(text).map_err(|e| format!("mcp.json invalide : {e}"))?;
     for (name, s) in &cfg.mcp_servers {
-        if !s.is_valid() {
+        if !s.disabled && !s.is_valid() {
             return Err(format!("serveur « {name} » : `command` ou `url` manquant"));
         }
     }
@@ -302,6 +371,7 @@ impl HttpLink {
         url: String,
         token: Option<String>,
         extra: &HashMap<String, String>,
+        is_sse: bool,
     ) -> Result<Self, String> {
         let mut headers = HeaderMap::new();
         for (k, v) in extra {
@@ -325,7 +395,6 @@ impl HttpLink {
         }
         let http = b.build().map_err(|e| e.to_string())?;
 
-        let is_sse = url.to_ascii_lowercase().contains("/sse");
         let mut target_url = url.clone();
         let mut session = None;
 
@@ -572,9 +641,15 @@ fn parse_tools(list: &Value, out: &mut Vec<McpTool>) {
 }
 
 async fn open(cfg: &ServerConfig) -> Result<(Conn, Vec<McpTool>), String> {
+    if cfg.disabled {
+        return Err("serveur désactivé (`disabled: true`)".to_string());
+    }
+    let cfg = &cfg.expanded();
     let (link, version) = match cfg.endpoint() {
         Some((url, token)) => (
-            Link::Http(HttpLink::connect(url, token, &cfg.headers).await?),
+            Link::Http(
+                HttpLink::connect(url.clone(), token, &cfg.headers, cfg.is_sse(&url)).await?,
+            ),
             "2024-11-05",
         ),
         None => {
@@ -739,6 +814,7 @@ impl Hub {
         workdir: Option<&Path>,
     ) -> BTreeMap<String, ServerConfig> {
         let mut map = BTreeMap::new();
+ map.extend(crate::plugins::mcp_servers(config_dir));
         if let Ok(c) = load_config(config_dir) {
             map.extend(c);
         }
@@ -755,6 +831,7 @@ impl Hub {
                 }
             }
         }
+        map.retain(|_, s| !s.disabled);
         map
     }
 
@@ -948,5 +1025,25 @@ pub fn parse_mcp_args(raw: &str) -> Result<Value, String> {
             let unescaped = clean.replace(r#"\""#, "\"");
             serde_json::from_str::<Value>(&unescaped).map_err(|_| e.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generic_formats_parse() {
+        let c = parse_config(
+            r#"{"servers":{
+     "a":{"command":"node","args":["x.js"]},
+     "b":{"type":"http","serverUrl":"http://h/mcp"},
+            "c":{"transport":"sse","httpUrl":"http://h/events"},
+     "d":{"disabled":true}}}"#,
+        )
+        .unwrap();
+        assert!(c.mcp_servers["c"].is_sse("http://h/events"));
+        assert!(!c.mcp_servers["b"].is_sse("http://h/mcp"));
+        assert_eq!(c.mcp_servers["b"].endpoint().unwrap().0, "http://h/mcp");
     }
 }

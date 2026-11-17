@@ -5,7 +5,7 @@
   import { saveSettings, storeApiToken, logout, openExternal } from './api.js';
   import { getUserInstructions, updateUserInstructions } from './instructions.js';
   import Extensions from './Extensions.svelte';
-  import ApiExplorer from './ApiExplorer.svelte';
+  import Plugins from './Plugins.svelte';
   import { instructionsStatus, instructionsSync, instructionsRemove, instructionsSetEnabled } from './api.js';
   import { THEMES, normalizeTheme } from './themes.js';
 
@@ -291,7 +291,7 @@
     { id: 'code', label: 'Mode Code' },
     { id: 'skills', label: 'Skills' },
     { id: 'mcp', label: 'MCP' },
-    { id: 'api', label: 'API' },
+    { id: 'plugins', label: 'Plugins' },
     { id: 'diag', label: 'Diagnostic' }
   ];
   const navItems = $derived(dev.enabled ? [...baseNav, { id: 'console', label: 'Console' }] : baseNav);
@@ -331,6 +331,8 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
               {:else if item.id === 'mcp'}
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+       {:else if item.id === 'plugins'}
+  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
               {:else}
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
               {/if}
@@ -931,8 +933,9 @@
 
       {:else if tab === 'skills' || tab === 'mcp'}
         <Extensions embedded section={tab} {workdir} {oninsert} onchange={onextchange} {onclose} />
-      {:else if tab === 'api'}
-        <ApiExplorer />
+      {:else if tab === 'plugins'}
+        <header class="sec-head"><div><h2>Plugins</h2><p class="sec-sub">Skills et serveurs MCP fournis par des plugins.</p></div></header>
+ <Plugins onchange={onextchange} />
       {:else if tab === 'console'}
         <DevConsole />
 

@@ -5,13 +5,13 @@ mod agent;
 mod bridge;
 mod changelog;
 mod ext;
-mod api_explorer;
 mod instructions;
 mod jobguard;
 mod login;
 mod mcp;
 mod mcp_ctx;
 mod perm;
+mod plugins;
 mod skills;
 mod term;
 
@@ -455,6 +455,64 @@ async fn list_chats(
         .map_err(|e| e.to_string())?;
     mcp_ctx::strip_context(&mut v);
     Ok(v)
+}
+
+fn check_id(s: &str) -> Result<(), String> {
+    if !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        Ok(())
+    } else {
+        Err("identifiant invalide".to_string())
+    }
+}
+
+/// Mes projets + ceux partagés avec moi (le partage est facultatif : erreur ignorée).
+#[tauri::command]
+async fn list_projects(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    let mut all = match c.projects().await.map_err(|e| e.to_string())? {
+ Value::Array(a) => a,
+        _ => Vec::new(),
+    };
+    if let Ok(Value::Array(shared)) = c.shared_projects().await {
+        for p in shared {
+     if !all.iter().any(|x| x["id"] == p["id"]) {
+         all.push(p);
+     }
+ }
+    }
+    Ok(Value::Array(all))
+}
+
+#[tauri::command]
+async fn list_project_chats(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    limit: Option<u32>,
+) -> Result<Value, String> {
+    check_id(&project_id)?;
+    let c = client(&app, &state).await?;
+    let mut v = c
+ .project_chats(&project_id, limit.unwrap_or(40))
+        .await
+        .map_err(|e| e.to_string())?;
+    mcp_ctx::strip_context(&mut v);
+    Ok(v)
+}
+
+#[tauri::command]
+async fn attach_chat_to_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    chat_id: String,
+) -> Result<(), String> {
+    check_id(&project_id)?;
+    check_id(&chat_id)?;
+    let c = client(&app, &state).await?;
+    c.attach_chat(&project_id, &chat_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1254,6 +1312,9 @@ fn main() {
             list_agents,
             get_usage,
             list_chats,
+     list_projects,
+     list_project_chats,
+     attach_chat_to_project,
             get_chat,
             delete_chat,
             rename_chat,
@@ -1305,6 +1366,11 @@ fn main() {
             ext::mcp_upsert,
             ext::mcp_remove,
             ext::mcp_import,
+     plugins::plugin_list,
+     plugins::plugin_add,
+     plugins::plugin_remove,
+     plugins::plugin_set_enabled,
+     plugins::plugin_update,
             bridge::bridge_start,
             bridge::bridge_stop,
             bridge::bridge_status,
@@ -1312,8 +1378,6 @@ fn main() {
             bridge::bridge_set,
             bridge::bridge_set_token,
             bridge::bridge_set_access,
-            api_explorer::api_routes,
-     api_explorer::api_call,
      instructions::instructions_status,
      instructions::instructions_sync,
      instructions::instructions_remove,
