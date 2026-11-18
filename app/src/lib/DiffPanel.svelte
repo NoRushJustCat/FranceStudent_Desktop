@@ -7,10 +7,12 @@
   import { cubicOut } from 'svelte/easing';
   import DiffView from './DiffView.svelte';
   import Terminal from './Terminal.svelte';
-  import { term } from './termstore.svelte.js';
+  import { term, tabs, addTerm, closeTerm } from './termstore.svelte.js';
   import { pathOf, statsOf } from './diffcalc.js';
 
   let { items = [], cwd = null, tab = $bindable('files'), onclose } = $props();
+
+  const activeTerm = $derived(tabs.list.find((s) => s.id === tabs.active) ?? term);
 
   const EDITS = ['edit_file', 'write_file'];
   const norm = (p) => String(p || '(fichier)').replace(/\\/g, '/');
@@ -226,58 +228,71 @@
   </header>
 
   {#if tab === 'term'}
-    <Terminal {cwd} />
+    <div class="ts" role="tablist" aria-label="Terminaux">
+      {#each tabs.list as s (s.id)}
+        <span class="tt" class:on={s.id === tabs.active}>
+   <button type="button" class="tn" role="tab" aria-selected={s.id === tabs.active} onclick={() => (tabs.active = s.id)}>
+     {s.name}{#if s.unread && s.id !== tabs.active}<span class="n hot">{s.unread}</span>{/if}
+          </button>
+          {#if s.id !== 'main'}
+     <button type="button" class="tc" aria-label="Fermer {s.name}" title="Fermer ce terminal" onclick={() => closeTerm(s)}>×</button>
+          {/if}
+        </span>
+      {/each}
+      <button type="button" class="tp" aria-label="Nouveau terminal" title="Nouveau terminal" onclick={addTerm}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+      </button>
+    </div>
+    {#key tabs.active}
+      <Terminal t={activeTerm} {cwd} />
+    {/key}
   {:else if list.length === 0}
     <p class="empty">Aucune modification de fichier dans ce chat.</p>
   {:else}
-    <div class="tree">
-      {#each rows as r (r.t + (r.t === 'd' ? r.id : r.f.key))}
-        {#if r.t === 'd'}
-          <button
-            type="button"
-            class="row dir"
-            style="padding-left:{8 + r.depth * 14}px"
-            aria-expanded={!collapsed[r.id]}
-            onclick={() => (collapsed[r.id] = !collapsed[r.id])}
-          >
-            <span class="chev">{collapsed[r.id] ? '▸' : '▾'}</span>
-            <span class="nm">{r.name}</span>
-            <span class="cn">{r.cnt}</span>
-            <span class="add">+{r.add}</span>
-            <span class="del">−{r.del}</span>
-          </button>
-        {:else}
-          <button
-            type="button"
-            class="row file"
-            class:on={r.f.key === curKey}
-            style="padding-left:{8 + r.depth * 14}px"
-            title={r.f.key}
-            onclick={() => (sel = r.f.key)}
-          >
-            <span class="chev"></span>
-            <span class="nm">{r.name}</span>
-            {#if r.f.wait}<span class="st w" title="en cours / à confirmer">…</span>{/if}
-            {#if r.f.bad}<span class="st b" title="échec ou refusé">!</span>{/if}
-            {#if r.f.edits.length > 1}<span class="cn">×{r.f.edits.length}</span>{/if}
-            <span class="add">+{r.f.add}</span>
-            <span class="del">−{r.f.del}</span>
-          </button>
+    <div class="split">
+      <div class="body">
+        {#if curFile}
+          {#if curFile.edits.length > 1}
+     <p class="sub">{curFile.edits.length} modifications de ce fichier, de la plus ancienne à la plus récente.</p>
+          {/if}
+   {#key curKey}
+     {#each curFile.edits as it}
+       <DiffView t={it} />
+            {/each}
+          {/key}
         {/if}
-      {/each}
-    </div>
+      </div>
 
-    <div class="body">
-      {#if curFile}
-        {#if curFile.edits.length > 1}
-          <p class="sub">{curFile.edits.length} modifications de ce fichier, de la plus ancienne à la plus récente.</p>
-        {/if}
-        {#key curKey}
-          {#each curFile.edits as it}
-            <DiffView t={it} />
-          {/each}
-        {/key}
-      {/if}
+      <div class="tree">
+        {#each rows as r (r.t + (r.t === 'd' ? r.id : r.f.key))}
+   {#if r.t === 'd'}
+     <button
+       type="button"
+       class="row dir"
+       style="padding-left:{4 + r.depth * 8}px"
+       aria-expanded={!collapsed[r.id]}
+onclick={() => (collapsed[r.id] = !collapsed[r.id])}
+     >
+       <span class="chev">{collapsed[r.id] ? '▸' : '▾'}</span>
+       <span class="nm">{r.name}</span>
+     </button>
+   {:else}
+     <button
+       type="button"
+       class="row file"
+       class:on={r.f.key === curKey}
+       style="padding-left:{4 + r.depth * 8}px"
+       title={r.f.key}
+       onclick={() => (sel = r.f.key)}
+     >
+       <span class="chev"></span>
+<span class="nm">{r.name}</span>
+       {#if r.f.wait}<span class="st w" title="en cours / à confirmer">…</span>{/if}
+{#if r.f.bad}<span class="st b" title="échec ou refusé">!</span>{/if}
+     </button>
+   {/if}
+        {/each}
+      </div>
     </div>
   {/if}
 </aside>
@@ -289,7 +304,7 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    height: 100vh;
+    height: calc(100vh - var(--titlebar-h, 34px));
     width: var(--dpcol, 100%);
     flex-shrink: 0;
     border-left: 1px solid var(--line);
@@ -405,20 +420,101 @@
     color: var(--text);
   }
 
-  .tree {
-    flex: 0 0 auto;
-    max-height: 38%;
-    overflow: auto;
-    padding: 6px 6px;
+  /* Onglets de terminaux */
+  .ts {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 4px 10px;
+    overflow-x: auto;
     border-bottom: 1px solid var(--line);
+  }
+  .tt {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .tt.on {
+    background: var(--accent-soft);
+  }
+  .tn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 24px;
+    padding: 0 9px;
+    border: 0;
+    background: transparent;
+    color: var(--dim);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .tt.on .tn {
+    color: var(--accent-text);
+  }
+  .tn:hover {
+    color: var(--text);
+  }
+  .tc {
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--dim);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .tc:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .tp {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .tp:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+
+  /* Diff à gauche, arborescence minimaliste à droite. */
+  .split {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+  .tree {
+    flex: 0 0 clamp(92px, 30%, 150px);
+    min-width: 0;
+    overflow: auto;
+    padding: 6px 4px;
+    border-left: 1px solid var(--line);
   }
   .row {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     width: 100%;
-    height: 26px;
-    padding-right: 8px;
+    height: 24px;
+    padding-right: 4px;
     border: 0;
     border-radius: 6px;
     background: transparent;
@@ -479,6 +575,7 @@
 
   .body {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     overflow: auto;
     padding: 10px;

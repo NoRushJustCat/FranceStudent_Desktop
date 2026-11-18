@@ -584,7 +584,7 @@
     background: var(--panel, #161616);
     border: 1px solid var(--line2, #3a3a3a);
     border-radius: var(--radius-sm, 10px);
-    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.54), 0 0 0 1px rgba(0, 0, 0, 0.16);
+    box-shadow: var(--shadow);
   }
   .panel-scroll {
     max-height: min(520px, calc(100vh - 60px));

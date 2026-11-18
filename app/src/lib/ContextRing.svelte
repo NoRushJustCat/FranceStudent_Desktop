@@ -1,5 +1,5 @@
 <script>
-  let { ctx = null, eco = false, length = 0, maxChars = 1048576 } = $props();
+  let { ctx = null, eco = false, busy = false, oncompact = () => {}, length = 0, maxChars = 1048576 } = $props();
 
   const nf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 });
   const nf0 = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
@@ -74,6 +74,22 @@
   });
 
   const segW = (t) => (max ? Math.min(100, (t / max) * 100) : used ? (t / used) * 100 : 0);
+
+  let cState = $state('');
+  let cMsg = $state('');
+  async function doCompact() {
+    if (cState === 'run') return;
+    const before = used;
+    cState = 'run';
+    cMsg = '';
+    const ok = await oncompact();
+    cState = '';
+    cMsg = ok === false
+      ? 'Échec ou indisponible (voir le message d’erreur).'
+      : before != null && used != null && used < before
+ ? `Compacté : ${tk(before)} → ${tk(used)} jetons`
+        : 'Demande envoyée, contexte inchangé.';
+  }
   const C = 2 * Math.PI * 9;
   const label = $derived(
     used != null ? `Contexte : ${tk(used)}${max ? ' / ' + tk(max) : ''} jetons` : 'Contexte : pas encore de données'
@@ -134,6 +150,10 @@
       {#if compactAt}
         <div class="note">Compaction automatique à partir de {tk(compactAt)} jetons</div>
       {/if}
+      <button type="button" class="cbtn" disabled={busy || used == null || cState === 'run'} onclick={doCompact}>
+ {cState === 'run' ? 'Compaction en cours…' : 'Compacter'}
+      </button>
+      {#if cMsg}<div class="note cmsg">{cMsg}</div>{/if}
     </div>
   </div>
 </div>
@@ -199,7 +219,7 @@
     background: var(--raised);
     border: 1px solid var(--accent-line, var(--line2));
     border-radius: 12px;
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+    box-shadow: var(--shadow);
     color: var(--text);
     font-size: 0.8rem;
   }
@@ -254,5 +274,25 @@
     margin-top: 2px;
     color: var(--dim);
     font-size: 0.74rem;
+  }
+
+  .cbtn {
+    align-self: flex-end;
+    padding: 3px 10px;
+    border: 1px solid var(--line2, var(--line));
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font-size: 0.74rem;
+    cursor: pointer;
+  }
+
+  .cbtn:hover:not(:disabled) {
+    background: var(--hover, var(--accent-soft));
+  }
+
+  .cbtn:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 </style>

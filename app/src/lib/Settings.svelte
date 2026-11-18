@@ -2,7 +2,7 @@
   import DevConsole from './DevConsole.svelte';
   import { dev, setEnabled } from './devlog.svelte.js';
   import { untrack } from 'svelte';
-  import { saveSettings, storeApiToken, logout, openExternal } from './api.js';
+  import { saveSettings, storeApiToken, logout, openExternal, getProfile, getTokenUsage } from './api.js';
   import { getUserInstructions, updateUserInstructions } from './instructions.js';
   import Extensions from './Extensions.svelte';
   import Plugins from './Plugins.svelte';
@@ -68,7 +68,78 @@
     baseUrl = settings?.baseUrl || '';
   });
 
+  let profile = $state(null);
+  let profileErr = $state('');
+  $effect(() => {
+    if (tab !== 'compte' || !settings?.hasKey || profile) return;
+    getProfile()
+      .then((p) => (profile = p))
+      .catch((e) => (profileErr = String(e?.message || e)));
+  });
+
   const activeTheme = $derived(normalizeTheme(theme));
+
+  // Activité de tokens (grille façon contributions : 1 colonne = 1 semaine, 7 lignes lun→dim)
+  const ACT_DAYS = 343;
+  let tokAct = $state(null);
+  let tokActErr = $state('');
+  let tokActBusy = false;
+  $effect(() => {
+    if (tab !== 'usage' || !settings?.hasKey || tokAct || tokActBusy) return;
+    tokActBusy = true;
+    getTokenUsage(ACT_DAYS)
+      .then((r) => (tokAct = r ?? {}))
+      .catch((e) => (tokActErr = String(e?.message || e)))
+      .finally(() => (tokActBusy = false));
+  });
+
+  let actWrap = $state(null);
+  let actTip = $state(null);
+  function showTip(e, c) {
+    const r = e.currentTarget.getBoundingClientRect();
+    const w = actWrap.getBoundingClientRect();
+    const x = r.left - w.left + r.width / 2;
+    const side = x < 90 ? 'l' : x > w.width - 90 ? 'r' : '';
+    const day = c.date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+    actTip = { x, y: r.top - w.top - 8, side, text: `${fmtNum(c.v)} tokens le ${day}` };
+  }
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const actGrid = $derived.by(() => {
+    const raw = tokAct?.last7DaysTokenUsage ?? tokAct?.dailyTokenUsage ?? (Array.isArray(tokAct) ? tokAct : []);
+    const byDay = new Map();
+    for (const d of raw) {
+      const k = String(d?.date ?? '').slice(0, 10);
+      byDay.set(k, (byDay.get(k) ?? 0) + Number(d?.totalTokens ?? (d?.inputTokens ?? 0) + (d?.outputTokens ?? 0)));
+    }
+    const end = new Date();
+    end.setHours(12, 0, 0, 0);
+    const start = new Date(end);
+    start.setDate(end.getDate() - (ACT_DAYS - 1));
+    const pad = (start.getDay() + 6) % 7;
+    const cells = Array.from({ length: pad }, () => null);
+    let total = 0;
+    let max = 0;
+    for (let i = 0; i < ACT_DAYS; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const v = byDay.get(ymd(d)) ?? 0;
+      total += v;
+      max = Math.max(max, v);
+      cells.push({ date: d, v });
+    }
+    for (const c of cells) if (c) c.lvl = !c.v ? 0 : Math.min(4, 1 + Math.floor((c.v / max) * 3.999));
+    const cols = Math.ceil(cells.length / 7);
+    const months = [];
+    let prev = -1;
+    for (let c = 0; c < cols; c++) {
+      const first = cells.slice(c * 7, c * 7 + 7).find(Boolean);
+      if (first && first.date.getMonth() !== prev) {
+        prev = first.date.getMonth();
+        months.push({ col: c + 1, name: first.date.toLocaleDateString('fr-FR', { month: 'short' }) });
+      }
+    }
+    return { cells, cols, months, total: total || Number(tokAct?.totalTokenCount ?? 0) };
+  });
 
   const budgetPct = $derived(
     Math.min(100, Math.max(0, Math.round(budget?.pct ?? usage?.chatBudget?.usedPercent ?? 0)))
@@ -287,7 +358,7 @@
     { id: 'notifications', label: 'Notifications' },
     { id: 'usage', label: 'Usage' },
     { id: 'instructions', label: 'Instructions' },
-    { id: 'compte', label: 'Compte et API' },
+    { id: 'compte', label: 'Compte' },
     { id: 'code', label: 'Mode Code' },
     { id: 'skills', label: 'Skills' },
     { id: 'mcp', label: 'MCP' },
@@ -614,33 +685,37 @@
           </div>
         </div>
 
-        {#if otherLimits.length > 0}
-          <details class="card accordion">
-            <summary class="accordion-sum">
-              <span>Autres limites ({extraLimitCount})</span>
-              <svg class="chev" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </summary>
-            <div class="accordion-body">
-              {#each otherLimits as lim}
-                {@const pct = Math.min(100, Math.max(0, Math.round(lim?.usedPercent ?? lim?.pct ?? 0)))}
-                <div class="quota-row compact">
-                  <div class="quota-meta">
-                    <div class="row-title">{lim?.name || lim?.id || 'Quota'}</div>
-                    <div class="row-sub">{limitDesc(lim)}</div>
-                  </div>
-                  <div class="quota-gauge">
-                    <div class="gauge-track">
-                      <div class="gauge-fill {gaugeTone(pct)}" style:width="{pct}%"></div>
-                    </div>
-                    <span class="quota-pct">{pct}&#8239;% utilisé</span>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </details>
-        {/if}
+ <h3 class="usage-kicker">Activité tokens</h3>
+        <div class="card usage-card act">
+   {#if tokActErr}
+     <div class="row-sub">{tokActErr}</div>
+          {:else if !tokAct}
+     <div class="row-sub">Chargement…</div>
+          {:else}
+     <div class="act-title">{fmtNum(actGrid.total)} tokens sur les {ACT_DAYS} derniers jours</div>
+   <div class="act-wrap" role="presentation" bind:this={actWrap} onmouseleave={() => (actTip = null)}>
+            <div class="act-months" style:--cols={actGrid.cols}>
+       {#each actGrid.months as m}
+  <span style:grid-column="{m.col} / span 4">{m.name}</span>
+       {/each}
+     </div>
+     <div class="act-grid" style:--cols={actGrid.cols}>
+       {#each actGrid.cells as c}
+  {#if c}
+           <span class="act-cell l{c.lvl}" onmouseenter={(e) => showTip(e, c)} role="presentation"></span>
+         {:else}
+    <span class="act-cell pad"></span>
+  {/if}
+       {/each}
+     </div>
+     {#if actTip}
+<div class="act-tip {actTip.side}" style:left="{actTip.x}px" style:top="{actTip.y}px">{actTip.text}</div>
+            {/if}
+   </div>
+   {/if}
+        </div>
 
-        <h3 class="usage-kicker">Conversation en cours</h3>
+ <h3 class="usage-kicker">Conversation en cours</h3>
         <div class="card usage-card">
           <div class="quota-row">
             <div class="quota-meta">
@@ -797,90 +872,44 @@
       {:else if tab === 'compte'}
         <header class="sec-head sec-head-row">
           <div>
-            <h2>Compte et API</h2>
-            <p class="sec-sub">Configure l’adresse du serveur et ton jeton d’authentification.</p>
+     <h2>Compte</h2>
+     <p class="sec-sub">Gère ta session France Student.</p>
           </div>
           <button type="button" class="head-x" aria-label="Fermer" onclick={() => onclose?.()}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </header>
 
-        <form class="card form-card" onsubmit={handleSaveAccount}>
-          <div class="field">
-            <div class="field-head">
-              <label for="base-url">Adresse de l’API</label>
-            </div>
-            <input
-              id="base-url"
-              type="url"
-              class="input"
-              placeholder="https://ia.francestudent.org"
-              bind:value={baseUrl}
-            />
-          </div>
-
-          <div class="field">
-            <div class="field-head">
-              <label for="api-key">Jeton de connexion</label>
-              {#if settings?.hasKey}
-                <span class="status-active compact">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
-                  Enregistrée
-                </span>
-              {/if}
-            </div>
-            <div class="input-wrap">
-              <input
-                id="api-key"
-                type={showKey ? 'text' : 'password'}
-                class="input"
-                placeholder={settings?.hasKey ? 'Laisse vide pour conserver le jeton actuel' : 'Colle ton jeton de connexion'}
-                bind:value={apiKey}
-              />
-              {#if apiKey.length > 0}
-                <button
-                  type="button"
-                  class="eye-btn"
-                  aria-label={showKey ? 'Masquer le jeton' : 'Afficher le jeton'}
-                  onclick={() => (showKey = !showKey)}
-                >
-                  {#if showKey}
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-                  {:else}
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                  {/if}
-                </button>
-              {/if}
-            </div>
-          </div>
-
-          {#if saveErr}
-            <div class="msg-err">{saveErr}</div>
-          {/if}
-          {#if saveMsg}
-            <div class="msg-ok">{saveMsg}</div>
-          {/if}
-
+ <div class="card form-card">
+   {#if profile}
+     <div class="acct">
+       <span class="acct-av" aria-hidden="true">{(profile.name || profile.email || '?').trim().charAt(0).toUpperCase()}</span>
+       <div class="acct-id">
+  <strong>{profile.name || '—'}</strong>
+  {#if profile.email}<span>{profile.email}</span>{/if}
+       </div>
+     </div>
+   {:else if profileErr}
+     <div class="msg-err">{profileErr}</div>
+   {/if}
+   {#if saveErr}
+     <div class="msg-err">{saveErr}</div>
+   {/if}
           <div class="form-actions">
-            <button type="submit" class="btn-primary" disabled={saving || !accountDirty}>
-              {saving ? 'Enregistrement…' : 'Enregistrer'}
-            </button>
+     <button type="button" class="btn-ghost" disabled={saving} onclick={async () => {
+       saving = true;
+       saveErr = '';
+       try {
+         await logout();
+  await onlogout?.();
+       } catch (err) {
+  saveErr = err?.message || 'Impossible de se déconnecter.';
+       } finally {
+         saving = false;
+       }
+     }}>Se déconnecter</button>
           </div>
-          {#if settings?.hasKey}
-            <button type="button" class="btn-ghost" disabled={saving} onclick={async () => {
-              saving = true;
-              saveErr = '';
-              try {
-                await logout();
-                await onlogout?.();
-              } catch (err) {
-                saveErr = err?.message || 'Impossible de se déconnecter.';
-              } finally {
-                saving = false;
-              }
-            }}>Se déconnecter</button>
-          {/if}
-        </form>
+ </div>
 
       {:else if tab === 'code'}
         <header class="sec-head sec-head-row">
@@ -968,8 +997,8 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-    background: rgba(5, 7, 13, 0.72);
-    backdrop-filter: blur(8px);
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -992,12 +1021,12 @@
     height: min(680px, 90vh);
     background: var(--bg);
     color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 16px;
+    border: 1px solid var(--line2);
+    border-radius: 14px;
     display: grid;
     grid-template-columns: 224px 1fr;
     overflow: hidden;
-    box-shadow: var(--shadow, 0 24px 64px rgba(0, 0, 0, 0.55));
+    box-shadow: var(--shadow);
   }
 
   .sidebar {
@@ -1056,8 +1085,8 @@
   }
 
   .nav-item.active {
-    background: var(--accent-soft);
-    border-color: var(--accent-line);
+    background: var(--hover);
+    border-color: transparent;
     color: var(--text);
     font-weight: 500;
   }
@@ -1236,7 +1265,7 @@
     color: var(--on-accent, #ffffff);
     display: grid;
     place-items: center;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    box-shadow: none;
     z-index: 2;
   }
 
@@ -1246,8 +1275,9 @@
 
   .theme-card.selected .theme-preview {
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent);
-    outline: none;
+    box-shadow: none;
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .theme-card.selected .theme-label {
@@ -1617,6 +1647,68 @@
     color: var(--dim);
   }
 
+  /* Activité tokens */
+  .act-title {
+    margin-bottom: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .act-wrap {
+    position: relative;
+    width: 100%;
+  }
+  .act-months,
+  .act-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+    gap: 3px;
+    width: 100%;
+  }
+  .act-months {
+    margin-bottom: 6px;
+    font-size: 10.5px;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .act-grid {
+    grid-template-rows: repeat(7, auto);
+    grid-auto-flow: column;
+  }
+  .act-cell {
+    aspect-ratio: 1;
+    min-width: 0;
+    border-radius: 3px;
+    background: var(--hover);
+  }
+  .act-cell:not(.pad):hover {
+    outline: 1px solid var(--text);
+    outline-offset: 0;
+  }
+  .act-cell.pad {
+    background: transparent;
+  }
+  .act-cell.l1 { background: color-mix(in srgb, var(--accent) 28%, var(--hover)); }
+  .act-cell.l2 { background: color-mix(in srgb, var(--accent) 50%, var(--hover)); }
+  .act-cell.l3 { background: color-mix(in srgb, var(--accent) 75%, var(--hover)); }
+  .act-cell.l4 { background: var(--accent); }
+  .act-tip {
+    position: absolute;
+    z-index: 10;
+    padding: 7px 12px;
+    border-radius: 10px;
+    background: #fff;
+    color: #111;
+    font-size: 12.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    pointer-events: none;
+    transform: translate(-50%, -100%);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  }
+  .act-tip.l { transform: translate(-12px, -100%); }
+  .act-tip.r { transform: translate(calc(-100% + 12px), -100%); }
+
   .icon-btn {
     width: 32px;
     height: 32px;
@@ -1837,8 +1929,36 @@
     opacity: 0.78;
   }
 
-  .input-wrap .input {
-    padding-right: 36px;
+  .acct {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .acct-av {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-weight: 600;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    border: 1px solid var(--accent-line);
+  }
+
+  .acct-id {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .acct-id span {
+    color: var(--dim);
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .input-area {

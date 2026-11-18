@@ -207,29 +207,20 @@
 
 <style>
   .tool {
-    background: var(--panel);
+    background: transparent;
     border: 1px solid var(--line);
-    border-left: 3px solid var(--line2);
-    border-radius: 10px;
+    border-radius: var(--radius);
     font-size: 13px;
     overflow: hidden;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+    box-shadow: none;
     animation: fs-rise var(--t-slow) var(--ease) both;
-    transition:
-      border-color var(--t),
-      box-shadow var(--t) var(--ease);
+    transition: border-color var(--t);
   }
   .tool.pending {
-    border-left-color: var(--warn);
-  }
-  .tool.running {
-    border-left-color: var(--accent);
-  }
-  .tool.ok {
-    border-left-color: rgba(63, 185, 80, 0.7);
+    border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
   }
   .tool.error {
-    border-left-color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
   }
 
   summary {
@@ -247,7 +238,7 @@
     display: none;
   }
   summary:hover {
-    background: var(--panel2);
+    background: var(--hover);
   }
   .act {
     font-weight: 600;

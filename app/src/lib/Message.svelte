@@ -276,7 +276,7 @@
 
   .think-dot.running {
     background: var(--state-running, var(--warn));
-    box-shadow: 0 0 8px var(--accent-glow);
+    box-shadow: none;
     animation: fs-pulse 1.4s ease-in-out infinite;
   }
 
@@ -387,11 +387,11 @@
 
   .msg-body :global(blockquote) {
     margin: 0.6em 0;
-    padding: 4px 12px;
-    border-left: 3px solid var(--accent-line);
+    padding: 2px 14px;
+    border-left: 2px solid var(--line2);
     color: var(--dim);
-    background: var(--accent-soft);
-    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: transparent;
+    border-radius: 0;
   }
 
   .msg-body :global(code:not(pre code)) {

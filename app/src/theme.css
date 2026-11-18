@@ -25,31 +25,31 @@
 @property --accent-glow {
   syntax: '<color>';
   inherits: true;
-  initial-value: rgba(0, 164, 239, 0.22);
+  initial-value: transparent;
 }
 
 :root {
   color-scheme: dark;
 
-  --bg: #070a12;
-  --panel: #0c111d;
-  --panel2: #121a2a;
-  --raised: #192338;
-  --hover: #1f2c46;
-  --line: #202c44;
-  --line2: #2e3e5e;
+  --bg: #0a0b0f;
+  --panel: #0f1116;
+  --panel2: #15171e;
+  --raised: #1a1d25;
+  --hover: rgba(255, 255, 255, 0.05);
+  --line: rgba(255, 255, 255, 0.07);
+  --line2: rgba(255, 255, 255, 0.12);
 
-  --text: #edf2fc;
-  --dim: #94a3b8;
-  --faint: #64748b;
+  --text: #ededef;
+  --dim: #9a9ca5;
+  --faint: #6b6e78;
 
-  --accent: #1868db;
+  --accent: #2f6fed;
   --accent-brand: #0139b7;
   --accent-cyan: #00a4ef;
-  --accent-soft: rgba(24, 104, 219, 0.14);
-  --accent-line: rgba(24, 104, 219, 0.34);
-  --accent-text: #7cc4ff;
-  --accent-glow: rgba(0, 164, 239, 0.22);
+  --accent-soft: rgba(47, 111, 237, 0.12);
+  --accent-line: rgba(47, 111, 237, 0.4);
+  --accent-text: #8ab4ff;
+  --accent-glow: transparent;
   --on-accent: #ffffff;
   --state-running: #f59e0b;
 
@@ -61,10 +61,11 @@
 
   --code-bg: #05080f;
   --code-head: #0b1120;
-  --shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.24);
   --topbar-h: 52px;
+  --titlebar-h: 34px;
   --side-px: 12px;
-  --radius: 12px;
+  --radius: 10px;
   --radius-sm: 8px;
   --r: 8px;
   --r-lg: 12px;
@@ -94,12 +95,12 @@
   --panel: #fafafa;
   --panel2: #f4f4f5;
   --raised: #ffffff;
-  --hover: rgba(0, 0, 0, 0.05);
-  --line: #e4e4e7;
-  --line2: #d4d4d8;
-  --text: #09090b;
-  --dim: #4b5563;
-  --faint: #6b7280;
+  --hover: rgba(0, 0, 0, 0.04);
+  --line: rgba(0, 0, 0, 0.08);
+  --line2: rgba(0, 0, 0, 0.14);
+  --text: #0a0a0b;
+  --dim: #52525b;
+  --faint: #71717a;
   --accent: #0139b7;
   --accent-brand: #0139b7;
   --accent-cyan: #0284c7;
@@ -116,7 +117,7 @@
   --violet: #7c3aed;
   --code-bg: #f4f4f5;
   --code-head: #e4e4e7;
-  --shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);
 }
 
 :root[data-theme='gris'] {
@@ -618,22 +619,26 @@ body,
   -moz-osx-font-smoothing: grayscale;
 }
 
+body {
+  padding-top: var(--titlebar-h);
+}
+
 .login-screen {
   min-height: 100%;
   display: grid;
   place-items: center;
   padding: 28px;
-  background: radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 58%), var(--bg);
+  background: var(--bg);
 }
 
 .login-card {
-  width: min(100%, 440px);
-  padding: 36px;
+  width: min(100%, 420px);
+  padding: 32px;
   text-align: center;
   background: var(--panel, var(--raised));
-  border: 1px solid var(--line2);
-  border-radius: 20px;
-  box-shadow: 0 24px 80px #0003;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: none;
 }
 
 .login-logo {
@@ -724,8 +729,8 @@ button.primary {
 button.primary:hover:not(:disabled) {
   background: var(--accent);
   border-color: var(--accent);
-  filter: brightness(1.08);
-  box-shadow: 0 4px 14px var(--accent-glow);
+  filter: brightness(1.1);
+  box-shadow: none;
 }
 
 button.wide {
@@ -833,27 +838,28 @@ pre code {
 /* Scrollbars toujours visibles et haut contraste */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #64748b #1e293b;
+  scrollbar-color: var(--line2) transparent;
 }
 
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
 }
 
 *::-webkit-scrollbar-track {
-  background: #1e293b;
-  border-radius: 999px;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #64748b;
+  background: var(--line2);
   border-radius: 999px;
-  border: 1px solid #1e293b;
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--faint);
+  background-clip: padding-box;
 }
 
 /* Utilitaires */
@@ -1271,4 +1277,12 @@ pre code {
 :root[data-theme='fs-light'] .hljs-addition {
   color: #047857;
   background: rgba(5, 150, 105, 0.1);
+}
+
+/* Design plat : aucun halo coloré, quel que soit le thème choisi */
+:root,
+:root[data-theme],
+.app.code,
+:root[data-theme] .app.code {
+  --accent-glow: transparent !important;
 }

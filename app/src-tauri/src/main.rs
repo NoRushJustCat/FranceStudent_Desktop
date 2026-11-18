@@ -442,6 +442,18 @@ async fn get_usage(app: AppHandle, state: State<'_, AppState>) -> Result<Value, 
 }
 
 #[tauri::command]
+async fn get_token_usage(app: AppHandle, state: State<'_, AppState>, days: u32) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.token_usage(days).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_profile(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    let c = client(&app, &state).await?;
+    c.profile().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn list_chats(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1311,6 +1323,8 @@ fn main() {
             pick_folder,
             list_agents,
             get_usage,
+     get_token_usage,
+     get_profile,
             list_chats,
      list_projects,
      list_project_chats,

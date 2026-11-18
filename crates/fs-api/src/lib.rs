@@ -468,6 +468,19 @@ impl Client {
         self.request(Method::GET, "/user/usage", None).await
     }
 
+    /// `GET /user/tokenusage?tokenUsageDays=N` en JSON brut (activité de tokens par jour).
+    pub async fn token_usage(&self, days: u32) -> Result<Value> {
+        let path = format!("/user/tokenusage?tokenUsageDays={}", days.clamp(1, 366));
+        self.request(Method::GET, &path, None).await
+    }
+
+    /// Profil (`UserDto`). Pas de `GET /user/@me` documenté : un `PATCH` vide renvoie le profil
+    /// sans rien modifier (champs absents inchangés).
+    pub async fn profile(&self) -> Result<Value> {
+        self.request(Method::PATCH, "/user/@me", Some(Value::Object(Default::default())))
+     .await
+    }
+
     /// `GET /chats` : historique, du plus récent au plus ancien.
     pub async fn list_chats(&self, limit: u32, cursor: Option<&str>) -> Result<Value> {
         let mut path = format!("/chats?limit={limit}&sortedBy=lastMessageAt");

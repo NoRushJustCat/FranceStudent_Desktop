@@ -2,9 +2,9 @@
   // Terminal intégré : shell PowerShell persistant + sorties des commandes lancées par l'IA.
   // L'état vit dans termstore.svelte.js : il survit à la fermeture du panneau et au changement d'onglet.
   import { onMount, tick } from 'svelte';
-  import { term, startTerm, runTerm, killTerm, clearTerm } from './termstore.svelte.js';
+  import { startTerm, runTerm, killTerm, clearTerm } from './termstore.svelte.js';
 
-  let { cwd = null } = $props();
+  let { cwd = null, t: term } = $props();
 
   let box;
   let inp;
@@ -29,8 +29,8 @@
   );
 
   onMount(() => {
-    startTerm(cwd);
-    inp?.focus();
+    startTerm(term, cwd);
+    inp?.focus({ preventScroll: true });
   });
 
   function onscroll() {
@@ -59,7 +59,7 @@
     hi = -1;
     draft = '';
     stick = true;
-    await runTerm(text, cwd);
+    await runTerm(term, text, cwd);
   }
 
   const hasSel = () =>
@@ -95,18 +95,18 @@
       // Ctrl+C : copie s'il y a une sélection, sinon interrompt la commande en cours.
       if (!hasSel() && term.pending > 0) {
         e.preventDefault();
-        killTerm();
+ killTerm(term);
       }
     } else if (e.ctrlKey && (e.key === 'l' || e.key === 'L')) {
       e.preventDefault();
-      clearTerm();
+      clearTerm(term);
     }
   }
 
   // Clic dans la zone de sortie : focus sur la saisie, sauf si on est en train de sélectionner du texte.
   function focusIn() {
     if (String(window.getSelection?.() ?? '')) return;
-    inp?.focus();
+    inp?.focus({ preventScroll: true });
   }
 </script>
 
@@ -116,10 +116,10 @@
     <span class="stt">{status}</span>
     <span class="cwd" title={term.cwd}>{term.cwd}</span>
     <span class="sp"></span>
-    <button type="button" class="b" onclick={() => killTerm()} disabled={!term.alive} title="Interrompre : arrête le shell (Ctrl+C)">
+    <button type="button" class="b" onclick={() => killTerm(term)} disabled={!term.alive} title="Interrompre : arrête le shell (Ctrl+C)">
       Interrompre
     </button>
-    <button type="button" class="b" onclick={() => clearTerm()} title="Effacer (Ctrl+L)">Effacer</button>
+    <button type="button" class="b" onclick={() => clearTerm(term)} title="Effacer (Ctrl+L)">Effacer</button>
   </div>
 
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->

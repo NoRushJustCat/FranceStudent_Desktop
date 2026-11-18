@@ -1,6 +1,7 @@
 <script>
   import ContextRing from './ContextRing.svelte';
   import PermMode from './PermMode.svelte';
+  import AgentMenu from './AgentMenu.svelte';
   import { getUserInstructions, updateUserInstructions } from './instructions.js';
   let {
     input = $bindable(''),
@@ -23,7 +24,8 @@
     onmodechange = () => {},
     onchoosefolder = () => {},
     onsend = () => {},
-    onstop = () => {}
+    onstop = () => {},
+    oncompact = () => {}
   } = $props();
 
   // Niveau de raisonnement GPT : réglage du compte (PATCH /user/instructions, champ `gptReasoning`).
@@ -524,24 +526,7 @@
       </div>
 
       {#if agents.length > 0}
-        <div class="select-wrap">
-          <select
-            class="agent-select"
-            value={curAgent ?? agents[0]?.id ?? ''}
-            disabled={busy}
-            onchange={(e) => onagentchange(Number(e.currentTarget.value))}
-            title="Choisir un agent"
-          >
-            {#each agents as a (a.id)}
-              <option value={a.id}>
-                {a.name}{a.modelProvider ? ` (${a.modelProvider})` : ''}
-              </option>
-            {/each}
-          </select>
-          <svg class="select-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <polyline points="6 9 12 15 18 9" />
-          </svg>
-        </div>
+        <AgentMenu {agents} value={curAgent} disabled={busy} onchange={onagentchange} />
       {/if}
 
       {#if isGpt && effort}
@@ -601,11 +586,13 @@
         </div>
       </div>
 
-      <PermMode up />
+      <div class="folder-slot perm-slot" class:show={mode === 'code'} inert={mode !== 'code'}>
+ <div class="folder-clip"><PermMode up /></div>
+      </div>
     </div>
 
     <div class="bar-right">
-      <ContextRing {ctx} {eco} length={input.length} />
+      <ContextRing {ctx} {eco} {busy} {oncompact} length={input.length} />
       {#if busy}
         <button
           type="button"
@@ -642,22 +629,22 @@
     position: relative;
     display: flex;
     flex-direction: column;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 11px 14px 9px;
+    background: var(--panel2);
+    border: 1px solid var(--line2);
+    border-radius: 14px;
+    padding: 12px 14px 10px;
     gap: 8px;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    transition: border-color 0.15s ease;
   }
 
   .composer:focus-within {
-    border-color: var(--accent-line);
-    box-shadow: 0 0 0 2px var(--accent-soft);
+    border-color: color-mix(in srgb, var(--text) 22%, transparent);
+    box-shadow: none;
   }
 
   .composer.dragging {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-glow);
+    box-shadow: none;
   }
 
   .drop-overlay {
@@ -693,10 +680,10 @@
     bottom: calc(100% + 6px);
     z-index: 30;
     background: var(--raised);
-    border: 1px solid var(--accent-line, var(--line2));
+    border: 1px solid var(--line2);
     border-radius: var(--radius-sm);
     padding: 6px 6px 4px;
-    box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.24), 0 14px 36px rgba(0, 0, 0, 0.42);
+    box-shadow: var(--shadow);
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -1066,7 +1053,7 @@
     background: var(--raised);
     border: 1px solid var(--accent-line, var(--line2));
     border-radius: 12px;
-    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+    box-shadow: var(--shadow);
   }
 
   .more-item {
@@ -1118,7 +1105,7 @@
     display: grid;
     place-items: center;
     cursor: pointer;
-    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 32%, transparent);
+    box-shadow: none;
     transition: opacity 0.15s ease, transform 0.1s ease, background 0.15s ease, color 0.15s ease;
   }
 
@@ -1217,6 +1204,14 @@
     display: flex;
     min-width: 0;
     overflow: hidden;
+  }
+  /* Menu des permissions : doit pouvoir déborder une fois déployé (il s'ouvre vers le haut) */
+  .perm-slot.show .folder-clip {
+    animation: perm-overflow 0.26s steps(1, end) forwards;
+  }
+  @keyframes perm-overflow {
+    from { overflow: hidden; }
+    to { overflow: visible; }
   }
   @media (prefers-reduced-motion: reduce) {
     .folder-slot {

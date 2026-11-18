@@ -7,6 +7,7 @@
   import * as api from './lib/api.js';
   import Sidebar from './lib/Sidebar.svelte';
   import BrandLogo from './lib/BrandLogo.svelte';
+  import TitleBar from './lib/TitleBar.svelte';
   import Composer from './lib/Composer.svelte';
   import Message from './lib/Message.svelte';
   import Tool from './lib/Tool.svelte';
@@ -119,6 +120,7 @@
   // ---- état global ----
   let theme = $state(loadInitialTheme());
   let sidebarTab = $state('all');
+  let sidebarCollapsed = $state(false);
   let savedMessages = $state(readLocalSaved());
   let archivedChats = $state([]);
   let notifSettings = $state(loadInitialNotif());
@@ -542,8 +544,27 @@
   }
   const onScroll = () => {
     showJump = !nearBottom();
+    pinned = !showJump;
     scrolled = (box?.scrollTop ?? 0) > 6;
   };
+
+  // Le panneau latéral (fichiers / terminal) change la largeur du chat : on garde le bas collé
+  // pendant la transition au lieu de laisser le texte « sursauter ».
+  let pinned = true;
+  // Les fondus de la barre du haut ne jouent qu'au démarrage : les media queries (panneau ouvert)
+  // les masquent/réaffichent, ce qui relançait l'animation à chaque ouverture.
+  let booted = $state(false);
+  setTimeout(() => (booted = true), 900);
+  function pinBottom(node) {
+    let w = node.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (node.clientWidth === w) return;
+      w = node.clientWidth;
+      if (pinned) node.scrollTop = node.scrollHeight;
+    });
+    ro.observe(node);
+    return { destroy: () => ro.disconnect() };
+  }
 
   function leave() {
     const s = cur;
@@ -561,6 +582,34 @@
     showJump = !nearBottom();
     scrolled = (box?.scrollTop ?? 0) > 6;
   }
+  let navigationHistory = $state([null]);
+  let navigationIndex = $state(0);
+
+  $effect(() => {
+    const uid = viewUid;
+    untrack(() => {
+      if (navigationHistory[navigationIndex] === uid) return;
+      navigationHistory = [...navigationHistory.slice(0, navigationIndex + 1), uid];
+      navigationIndex = navigationHistory.length - 1;
+    });
+  });
+
+  function historyTarget(direction) {
+    for (let i = navigationIndex + direction; i >= 0 && i < navigationHistory.length; i += direction) {
+      const uid = navigationHistory[i];
+      if (uid !== viewUid && (uid === null || sessions.some((s) => s.uid === uid))) return i;
+    }
+    return -1;
+  }
+  const backIndex = $derived(historyTarget(-1));
+  const forwardIndex = $derived(historyTarget(1));
+
+  function navigateHistory(index) {
+    if (index < 0) return;
+    navigationIndex = index;
+    go(navigationHistory[index]);
+  }
+
   function go(uid) {
     if (uid === viewUid) return;
     leave();
@@ -676,8 +725,21 @@
   async function loadSkills(m, w) {
     const n = ++skillSeq;
     try {
-      const r = await api.listSkills(m === 'code' ? w : null);
-      if (n === skillSeq) skills = r;
+      const [local, account] = await Promise.all([
+        api.listSkills(m === 'code' ? w : null).catch(() => []),
+        api.accountSkills().catch(() => [])
+      ]);
+      const accountItems = Array.isArray(account)
+        ? account
+        : ['skills', 'items', 'data', 'results'].map((key) => account?.[key]).find(Array.isArray) ?? [];
+      const merged = new Map(local.map((s) => [s.name, s]));
+      for (const s of accountItems) {
+        const name = String(s?.name ?? s?.title ?? s?.slug ?? '').trim();
+        if (name && !merged.has(name)) {
+          merged.set(name, { name, description: s.description, source: 'compte' });
+        }
+      }
+      if (n === skillSeq) skills = [...merged.values()];
     } catch {
       if (n === skillSeq) skills = [];
     }
@@ -1160,12 +1222,14 @@
   }
   async function compact() {
     const s = cur;
-    if (!s?.chatId || s.busy) return;
+    if (!s?.chatId || s.busy) return false;
     try {
       await api.compactChat(s.chatId);
       await loadCtx(s);
+      return true;
     } catch (e) {
       gerr = String(e);
+      return false;
     }
   }
   function resetTally() {
@@ -1507,6 +1571,8 @@ assistant().text += ev.text;
 
 <svelte:window onkeydown={onWindowKey} />
 
+<TitleBar canGoBack={backIndex >= 0} canGoForward={forwardIndex >= 0} onback={() => navigateHistory(backIndex)} onforward={() => navigateHistory(forwardIndex)} />
+
 {#if settings && !settings.hasKey}
   <main class="login-screen">
     <div class="login-card">
@@ -1532,8 +1598,9 @@ assistant().text += ev.text;
     </div>
   </main>
 {:else}
-<div class="app" class:code={mode === 'code'} class:withdiff={showDiff}>
+<div class="app" class:booted class:code={mode === 'code'} class:withdiff={showDiff} class:sidebar-collapsed={sidebarCollapsed}>
   <Sidebar
+    bind:collapsed={sidebarCollapsed}
     chats={displayedChats}
     {chatsLoaded}
     activeChatId={cur?.chatId ?? null}
@@ -1602,7 +1669,7 @@ assistant().text += ev.text;
     </header>
 
     <div class="stage">
-      <div class="scroll" bind:this={box} onscroll={onScroll}>
+      <div class="scroll" bind:this={box} onscroll={onScroll} use:pinBottom>
         <div class="col">
    {#key viewUid}
      <div class="view">
@@ -1611,7 +1678,7 @@ assistant().text += ev.text;
        {:else if items.length === 0}
          <div class="hero stagger">
     <div class="herologo" aria-hidden="true">
-      <BrandLogo size={64} radius={18} />
+      <BrandLogo size={48} radius={12} />
            </div>
     <h2>{mode === 'code' ? 'Que veux-tu construire ?' : 'France Student Desktop'}</h2>
     <p class="dim">
@@ -1789,6 +1856,7 @@ assistant().text += ev.text;
    onchoosefolder={chooseFolder}
    onsend={send}
           onstop={stop}
+   oncompact={compact}
         />
 
         <div class="help">
@@ -1914,7 +1982,7 @@ assistant().text += ev.text;
   .app {
     display: grid;
     grid-template-columns: 276px minmax(0, 1fr);
-    height: 100vh;
+    height: calc(100vh - var(--titlebar-h, 34px));
     background: var(--bg);
     color: var(--text);
     position: relative;
@@ -1928,9 +1996,7 @@ assistant().text += ev.text;
     min-height: 0;
     min-width: 0;
     position: relative;
-    background:
-      radial-gradient(640px 320px at 50% -60px, var(--accent-soft), transparent 72%),
-      var(--bg);
+    background: var(--bg);
   }
 
   .top {
@@ -1942,15 +2008,15 @@ assistant().text += ev.text;
     gap: 10px;
     padding: 0 18px;
     border-bottom: 1px solid var(--line);
-    background: color-mix(in srgb, var(--panel) 84%, transparent);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    transition: box-shadow 0.16s ease;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: border-color 0.16s ease;
     z-index: 20;
   }
 
   .top.scrolled {
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+    border-bottom-color: var(--line2);
   }
 
   .ttl {
@@ -2014,6 +2080,10 @@ assistant().text += ev.text;
   }
 
   /* diff-compact */
+  .app.booted .top .anim-fade {
+    animation: none;
+  }
+
   .app.withdiff {
   /* diff-resize */
   grid-template-columns: 276px minmax(0, 1fr) max(320px, min(var(--dpw, clamp(320px, 32vw, 460px)), calc(100vw - 616px)));
@@ -2121,7 +2191,7 @@ assistant().text += ev.text;
     top: 0;
     bottom: 0;
     width: 38%;
-    background: linear-gradient(90deg, transparent, var(--accent-brand), var(--accent-cyan), transparent);
+    background: var(--accent);
     animation: fs-sweep 1.25s ease-in-out infinite;
   }
 
@@ -2177,33 +2247,36 @@ assistant().text += ev.text;
     flex-direction: column;
     align-items: center;
     text-align: center;
-    padding: 40px 0 20px;
-    gap: 14px;
+    padding: 56px 0 24px;
+    gap: 10px;
   }
 
   .herologo {
-    width: 64px;
-    height: 64px;
-    border-radius: 18px;
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
     display: grid;
     place-items: center;
     overflow: hidden;
-    box-shadow: 0 12px 32px var(--accent-glow);
+    margin-bottom: 6px;
+    box-shadow: none;
+    outline: none;
   }
 
   .hero h2 {
-    margin: 4px 0 0;
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
+    margin: 0;
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
     color: var(--text);
   }
 
   .hero .dim {
     margin: 0;
-    max-width: 58ch;
+    max-width: 52ch;
     text-wrap: balance;
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.55;
     color: var(--dim);
   }
@@ -2211,9 +2284,9 @@ assistant().text += ev.text;
   .cards {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
+    gap: 8px;
     width: 100%;
-    margin-top: 14px;
+    margin-top: 22px;
   }
 
   .card {
@@ -2221,34 +2294,41 @@ assistant().text += ev.text;
     flex-direction: column;
     justify-content: flex-start;
     text-align: left;
-    padding: 14px 15px;
+    padding: 14px 16px;
     border-radius: var(--radius);
     border: 1px solid var(--line);
-    background: var(--panel);
+    background: transparent;
     color: var(--text);
     cursor: pointer;
-    transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+    box-shadow: none;
+    transition: border-color 0.14s ease, background 0.14s ease;
   }
 
   .card b {
     display: block;
     font-size: 13.5px;
+    font-weight: 500;
     margin-bottom: 4px;
     color: var(--text);
   }
 
   .card span {
     display: block;
-    font-size: 12px;
+    font-size: 12.5px;
     color: var(--dim);
-    line-height: 1.4;
+    line-height: 1.45;
   }
 
   .card:hover {
-    transform: translateY(-2px);
-    background: var(--raised);
-    border-color: var(--accent-line);
-    box-shadow: var(--shadow);
+    background: var(--panel2);
+    border-color: var(--line2);
+    box-shadow: none;
+  }
+
+  @media (max-width: 720px) {
+    .cards {
+      grid-template-columns: 1fr;
+    }
   }
 
   .u {
@@ -2261,9 +2341,9 @@ assistant().text += ev.text;
   .ubub {
     max-width: min(82%, 620px);
     padding: 11px 15px;
-    border-radius: 16px 16px 4px 16px;
-    background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--panel2) 86%, transparent));
-    border: 1px solid var(--accent-line);
+    border-radius: 14px;
+    background: var(--panel2);
+    border: 1px solid var(--line);
     color: var(--text);
     font-size: 14px;
     line-height: 1.55;
@@ -2325,11 +2405,11 @@ assistant().text += ev.text;
     width: 32px;
     height: 32px;
     margin-top: 1px;
-    border-radius: 10px;
+    border-radius: 8px;
     display: grid;
     place-items: center;
     overflow: hidden;
-    box-shadow: 0 4px 14px var(--accent-glow);
+    box-shadow: none;
     user-select: none;
   }
 
@@ -2459,7 +2539,7 @@ assistant().text += ev.text;
   .dockin {
     max-width: 820px;
     margin: 0 auto;
-    padding: 8px 20px 14px;
+    padding: 8px 20px 8px;
   }
 
   .errbar {
@@ -2588,22 +2668,22 @@ assistant().text += ev.text;
   }
 
   .help {
-    margin-top: 7px;
+    margin-top: 5px;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: 4px 6px;
+    gap: 3px 5px;
     text-align: center;
-    font-size: 11.5px;
+    font-size: 10px;
     color: var(--dim);
   }
 
   .help kbd {
     font-family: var(--mono);
-    font-size: 10.5px;
+    font-size: 9px;
     line-height: 1.2;
-    padding: 1px 5px;
+    padding: 1px 3px;
     border-radius: 4px;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -2719,11 +2799,15 @@ assistant().text += ev.text;
   .app {
     grid-template-columns: 276px minmax(0, 1fr) 0px;
     overflow: hidden;
+    overflow: clip; /* non scrollable, même par focus() : évite que la sidebar « glisse » à l'ouverture du panneau */
   }
 
   .app.withdiff {
     grid-template-columns: 276px minmax(0, 1fr) var(--dpcol);
   }
+
+  .app.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 0px; }
+  .app.sidebar-collapsed.withdiff { grid-template-columns: 56px minmax(0, 1fr) var(--dpcol); }
 
   :global(html.dp-drag) .app,
   :global(html.dp-drag) .app.withdiff {

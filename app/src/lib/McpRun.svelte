@@ -330,7 +330,7 @@
     background: var(--panel);
     border: 1px solid var(--line);
     border-top: 2px solid var(--accent);
-    box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow);
     animation: fs-pop var(--t-slow) var(--ease) both;
   }
   header {

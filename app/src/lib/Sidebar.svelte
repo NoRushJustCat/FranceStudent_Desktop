@@ -3,6 +3,7 @@
   import BrandLogo from './BrandLogo.svelte';
 
   let {
+    collapsed = $bindable(false),
     chats = [],
     chatsLoaded = false,
     activeChatId = null,
@@ -178,17 +179,34 @@
   }}
 />
 
-<aside class="sidebar">
+<aside class="sidebar" class:collapsed>
   <header class="brand">
     <div class="brand-left">
-      <BrandLogo class="logo" size={32} radius={8} />
+      {#if collapsed}
+        <button class="logo-toggle" type="button" title="Déplier le menu" aria-label="Déplier le menu" aria-expanded="false" onclick={() => { collapsed = false; }}>
+          <BrandLogo class="rail-logo" size={30} radius={8} />
+          <svg class="reopen-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m4-12 3 4-3 4"/></svg>
+        </button>
+      {:else}<BrandLogo class="rail-logo" size={30} radius={8} />{/if}
       <div class="brand-text">
         <span class="brand-title">France Student</span>
         <span class="brand-badge">Desktop</span>
       </div>
     </div>
+    <button class="collapse-btn" type="button" title={collapsed ? 'Déplier le menu' : 'Replier le menu'} aria-label={collapsed ? 'Déplier le menu' : 'Replier le menu'} aria-expanded={!collapsed} onclick={() => { collapsed = !collapsed; projOpen = false; filterOpen = false; }}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16m6-12-3 4 3 4"/></svg>
+    </button>
   </header>
 
+  {#if collapsed}
+    <button class="rail-btn" title="Conversations" aria-label="Conversations" onclick={() => { collapsed = false; filterTab = 'all'; onproject?.(null); }}>
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/></svg>
+    </button>
+    <button class="rail-btn" title="Projets" aria-label="Projets" onclick={() => { collapsed = false; setTimeout(() => (projOpen = true), 0); }}>
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    </button>
+  {/if}
+  <div class="sidebar-content">
   <div class="top-actions">
     <div class="new-row">
       <button type="button" class="newbtn" onclick={() => onnew?.()}>
@@ -397,7 +415,7 @@
               onclick={() => onopen?.(chat.id)}
               title={chat.title || 'Sans titre'}
             >
-              <span class="chat-title">{truncate((chat.title || 'Sans titre').replace(/\s*\(archivé\)\s*$/i, ''), 24)}</span>
+              <span class="chat-title">{(chat.title || 'Sans titre').replace(/\s*\(archivé\)\s*$/i, '')}</span>
               <span class="archived-meta">Discussion archivée</span>
             </button>
             <div class="row-actions">
@@ -486,7 +504,7 @@
                 aria-hidden="true"
               ></span>
 
-              <span class="pin-slot" aria-hidden="true">
+       <span class="pin-slot" class:empty={!chat.pinned} aria-hidden="true">
                 {#if chat.pinned}
                   <svg class="pin-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Épinglé">
                     <line x1="12" y1="17" x2="12" y2="22" />
@@ -495,7 +513,7 @@
                 {/if}
               </span>
 
-              <span class="chat-title">{truncate(chat.title, 24)}</span>
+              <span class="chat-title">{chat.title || 'Sans titre'}</span>
             </button>
 
             <div class="row-actions">
@@ -566,8 +584,9 @@
     {/if}
   </div>
 
+  </div>
   <footer class="foot">
-    <button type="button" class="foot-btn" onclick={() => onsettings?.('apparence')}>
+    <button type="button" class="foot-btn" title="Paramètres" aria-label="Paramètres" onclick={() => onsettings?.('apparence')}>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <circle cx="12" cy="12" r="3" />
         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
@@ -592,6 +611,22 @@
 </aside>
 
 <style>
+  .sidebar-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .collapse-btn, .rail-btn { display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--dim); cursor: pointer; flex-shrink: 0; }
+  .collapse-btn { width: 26px; height: 26px; }
+  .collapse-btn:hover, .rail-btn:hover { background: var(--hover); color: var(--text); }
+  .rail-btn { width: 36px; height: 36px; margin: 4px auto; }
+  :global(.rail-logo) { width: 30px; height: 30px; object-fit: contain; }
+  .sidebar.collapsed .brand { height: 76px; padding: 10px 0 6px; flex-direction: column; gap: 4px; border-bottom: 0; }
+  .logo-toggle { position: relative; display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
+  .reopen-icon { position: absolute; opacity: 0; }
+  .logo-toggle:hover, .logo-toggle:focus-visible { background: var(--hover); }
+  .logo-toggle:hover :global(.rail-logo), .logo-toggle:focus-visible :global(.rail-logo) { opacity: 0; }
+  .logo-toggle:hover .reopen-icon, .logo-toggle:focus-visible .reopen-icon { opacity: 1; }
+  .sidebar.collapsed .brand { height: var(--topbar-h, 52px); padding: 8px 0; }
+  .sidebar.collapsed .collapse-btn, .sidebar.collapsed .brand-text, .sidebar.collapsed .sidebar-content, .sidebar.collapsed .foot-btn span, .sidebar.collapsed .eco-pill { display: none; }
+  .sidebar.collapsed .foot { margin-top: auto; padding: 10px 0; justify-content: center; }
+  .sidebar.collapsed .foot-btn { width: 36px; height: 36px; padding: 0; justify-content: center; }
   .sidebar {
     display: flex;
     flex-direction: column;
@@ -626,7 +661,7 @@
   .brand-left :global(.logo) {
     flex-shrink: 0;
     border-radius: 8px;
-    box-shadow: 0 2px 8px var(--accent-glow);
+    box-shadow: none;
   }
 
   .brand-text {
@@ -666,19 +701,21 @@
     gap: 8px;
     width: 100%;
     padding: 9px 12px;
-    border: 1px solid var(--accent-line);
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
-    background: var(--accent);
-    color: var(--on-accent, #ffffff);
+    background: var(--text);
+    color: var(--bg);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     cursor: pointer;
-    box-shadow: 0 2px 10px var(--accent-glow);
+    box-shadow: none;
     transition: filter 0.15s ease, transform 0.1s ease, background 0.18s ease, color 0.18s ease;
   }
 
   .newbtn:hover {
-    filter: brightness(1.08);
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent-text);
   }
 
   .newbtn:active {
@@ -890,7 +927,7 @@
     border: 1px solid var(--line2);
     border-radius: 12px;
     background: var(--raised);
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow);
   }
 
   .filter-item {
@@ -916,20 +953,20 @@
   }
 
   .filter-item.active {
-    background: var(--accent-soft);
-    color: var(--accent-text);
-    font-weight: 600;
+    background: var(--hover);
+    color: var(--text);
+    font-weight: 500;
   }
 
   .tab-count {
     font-size: 10px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.1;
-    padding: 1px 5px;
+    padding: 1px 6px;
     border-radius: 999px;
-    background: var(--accent-soft);
-    border: 1px solid var(--accent-line);
-    color: var(--accent-text);
+    background: var(--hover);
+    border: 1px solid var(--line);
+    color: var(--dim);
   }
 
   .empty-title {
@@ -1056,8 +1093,8 @@
   }
 
   .chat-row.active {
-    background: var(--accent-soft);
-    border-color: var(--accent-line);
+    background: var(--hover);
+    border-color: transparent;
   }
 
   .chat-main {
@@ -1066,13 +1103,14 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 5px 6px 5px 8px;
+    padding: 6px 6px 6px 8px;
     border: none;
     background: transparent;
-    color: var(--text);
+    color: var(--dim);
     text-align: left;
+    justify-content: flex-start;
     cursor: pointer;
-    font-size: 12.5px;
+    font-size: 13px;
   }
 
   .chat-main:hover:not(:disabled) {
@@ -1080,9 +1118,13 @@
     border-color: transparent;
   }
 
+  .chat-row:hover .chat-main,
   .chat-row.active .chat-main {
-    color: var(--accent-text);
-    font-weight: 600;
+    color: var(--text);
+  }
+
+  .chat-row.active .chat-main {
+    font-weight: 500;
   }
 
   .archived-row {
@@ -1126,9 +1168,15 @@
     background: transparent;
   }
 
+  /* Pas d'espace réservé quand il n'y a ni indicateur ni épingle : titres collés à gauche */
+  .ind:not(.busy):not(.wait):not(.unread),
+  .pin-slot.empty {
+    display: none;
+  }
+
   .ind.busy {
     background: var(--state-running, var(--warn));
-    box-shadow: 0 0 6px var(--accent-glow);
+    box-shadow: none;
     animation: pulse 1.2s ease-in-out infinite;
   }
 
@@ -1166,6 +1214,7 @@
   .chat-title {
     flex: 1;
     min-width: 0;
+    text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

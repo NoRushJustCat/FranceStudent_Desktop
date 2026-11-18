@@ -80,6 +80,7 @@
     style:bottom={pos.bottom != null ? pos.bottom + 'px' : null}
     style:left={pos.left + 'px'}
   >
+    <div class="pm-heading">Autorisations <span>Mode d’accès</span></div>
     {#each MODES as m (m.id)}
       <button
         class="pm-item"
@@ -89,7 +90,7 @@
         aria-checked={m.id === perm.mode}
         onclick={() => pick(m.id)}
       >
-        <span class="pm-name">{m.label}</span>
+        <span class="pm-name">{m.label}<span class="pm-check" aria-hidden="true">{m.id === perm.mode ? '✓' : ''}</span></span>
         <span class="pm-desc">{m.desc}</span>
       </button>
     {/each}
@@ -145,21 +146,36 @@
   .pm-menu {
     position: fixed;
     z-index: 1000;
-    width: 300px;
-    padding: 4px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
+    width: min(300px, calc(100vw - 16px));
+    max-height: 75vh;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid var(--line2);
+    border-radius: 14px;
     background: var(--panel);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 16px 48px #0005;
   }
+  .pm-heading {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 8px 7px;
+    margin-bottom: 3px;
+    border-bottom: 1px solid var(--line);
+    color: var(--dim);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .pm-heading span { color: var(--faint); font-weight: 400; }
+  .pm-check { color: var(--accent-text); }
+  .pm-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .pm-item {
     display: flex;
     flex-direction: column;
     gap: 2px;
     width: 100%;
-    padding: 8px 10px;
-    border: 0;
-    border-radius: 6px;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
     background: transparent;
     color: var(--text);
     font: inherit;
@@ -171,17 +187,22 @@
   }
   .pm-item.sel {
     background: var(--accent-soft);
+    border-color: var(--accent-line);
   }
   .pm-item.danger .pm-name {
     color: var(--danger);
   }
   .pm-name {
-    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    font-size: 12px;
     font-weight: 600;
   }
   .pm-desc {
-    font-size: 11.5px;
-    line-height: 1.35;
+    font-size: 10.5px;
+    line-height: 1.3;
     color: var(--faint);
   }
 </style>

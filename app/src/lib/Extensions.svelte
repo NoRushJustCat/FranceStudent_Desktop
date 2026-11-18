@@ -253,6 +253,7 @@
       await accountSkillUpdate(accEditId, obj);
       view = 'list';
       await loadAccount();
+      onchange?.();
       flash(true, 'Skill du compte mis à jour.');
     } catch (e) {
       flash(false, err(e) + ' (endpoint supposé : PATCH /skills/{id})');
@@ -269,6 +270,7 @@
     try {
       await accountSkillDelete(id);
       await loadAccount();
+      onchange?.();
       flash(true, 'Skill du compte retiré.');
     } catch (e) {
       flash(false, err(e) + ' (endpoint supposé : DELETE /skills/{id})');
@@ -884,7 +886,7 @@
     border-left: 1px solid var(--xt-line);
     border-top: 2px solid var(--xt-acc);
     font-size: 13px;
-    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.35);
+    box-shadow: none;
   }
   .xt.embedded {
     position: static;

@@ -29,6 +29,8 @@ export const pickFolder = () => invoke('pick_folder');
 
 export const listAgents = () => invoke('list_agents');
 export const getUsage = () => invoke('get_usage');
+export const getTokenUsage = (days = 343) => invoke('get_token_usage', { days });
+export const getProfile = () => invoke('get_profile');
 export const listChats = (limit = 40, cursor = null) => invoke('list_chats', { limit, cursor });
 export const listProjects = () => invoke('list_projects');
 export const listProjectChats = (projectId, limit = 40) => invoke('list_project_chats', { projectId, limit });
