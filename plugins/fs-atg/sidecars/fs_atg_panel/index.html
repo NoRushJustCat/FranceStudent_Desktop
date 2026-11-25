@@ -87,8 +87,10 @@
     /* Dynamic Island / visionOS Floating Bottom Dock Navigation */
     .tabs {
       position: fixed;
-      left: 12px;
-      right: 12px;
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+      width: min(720px, calc(100% - 24px));
       bottom: 10px;
       z-index: 120;
       display: grid;
@@ -154,8 +156,10 @@
     }
     .tabs.has-liquid-pill {
       position: fixed;
-      left: 12px;
-      right: 12px;
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+      width: min(720px, calc(100% - 24px));
       bottom: 10px;
       isolation: isolate;
     }
@@ -617,10 +621,12 @@
     }
     .spotlight-box textarea::placeholder { color: var(--fs-faint); }
     .spotlight-bar {
-      display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;
-      padding: 6px 8px 7px;
+      display: flex; align-items: center; gap: 5px 4px; flex-wrap: wrap;
+      padding: 6px 8px 7px; min-width: 0;
       border-top: 1px solid rgba(255, 255, 255, 0.05);
     }
+    .spotlight-bar .spacer { display: none; }
+    .spotlight-bar .cmd-pill { flex-shrink: 0; }
     .spotlight-bar .cmd-pill:not(.mic-btn) { padding: 3px 7px; font-size: 10px; }
     .slash-trigger {
       width: 26px; height: 26px; border-radius: var(--fs-pill); border: 0;
@@ -1274,6 +1280,63 @@
     .toast { font-size: 10.5px; font-weight: 500; color: var(--fs-ok); }
     .toast.err { color: #FF6961; }
     .foot-note { font-size: 10px; color: var(--fs-faint); text-align: center; margin: 12px 0 4px; }
+
+    /* Responsive Fit: Ultra-Narrow Sidebar (260px) -> Wide Desktop Window (1400px+) */
+    .view { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }
+    .card, .warnbox, .spotlight-box, .model-card, .hist-item { max-width: 100%; }
+    .btn-send { margin-left: auto; flex-shrink: 0; white-space: nowrap; }
+    .ws-line { max-width: 100%; }
+    .hero-top, .hero-sub-row, .hero-controls .ctl-row, .perm-top, .sec-head,
+    .mc-id-row, .mc-policy-row, .mc-meta, .warnbox, .auth-progress,
+    .cloud-card, .hub-row, .vision-strip, .stage-head, .hist-row-det {
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+    .sec-head { gap: 4px 8px; }
+    .sec-title { flex-wrap: wrap; min-width: 0; }
+    .hist-row { min-width: 0; }
+    .hist-title { flex-wrap: wrap; row-gap: 3px; }
+    .hist-title-txt { flex: 1 1 110px; min-width: 0; }
+    .seg, .seg-3, .seg-4, .trig-seg, .policy-seg { max-width: 100%; }
+    .canvas-modal { max-width: 960px; margin: 0 auto; }
+
+    @media (max-width: 400px) {
+      .btn-send kbd { display: none; }
+      .spotlight-bar .cmd-pill:not(.mic-btn) { padding: 3px 6px; font-size: 9.5px; }
+      .slash-trigger, .cmd-pill.mic-btn { width: 24px; height: 24px; }
+      .btn-send { padding: 4px 10px; min-height: 26px; font-size: 11px; }
+    }
+
+    @media (max-width: 360px) {
+      body { padding: 9px 9px calc(86px + env(safe-area-inset-bottom, 0px)); }
+      .card, .composer-card { padding: 10px; }
+      .tabs, .tabs.has-liquid-pill { width: calc(100% - 18px); bottom: 8px; padding: 3px; }
+      .tab-btn { font-size: 10.5px; padding: 6.5px 4px; gap: 3px; }
+      .tab-badge { font-size: 8.5px; padding: 0 4px; line-height: 14px; }
+      .seg.seg-compact button { padding: 4px 8px; font-size: 10px; }
+      #permSeg button, #reasoningSeg button {
+        flex-direction: column;
+        gap: 2px;
+        padding: 5px 3px;
+        font-size: 9.5px;
+        line-height: 1.15;
+      }
+      #settingsProfileSeg button { padding: 4px 3px; font-size: 9.5px; }
+      .policy-btn { padding: 3px 7px; font-size: 9.5px; }
+    }
+
+    @media (max-width: 340px) {
+      .triggers-grid, .grid-2, .studio-grid, .probe-grid, .metric-grid, .arena-vs {
+        grid-template-columns: 1fr;
+      }
+      .toolbar { flex-wrap: wrap; }
+      .toolbar input { flex: 1 1 160px; min-width: 0; }
+    }
+
+    @media (max-width: 300px) {
+      .tab-btn .ico { display: none; }
+      .pct-val { font-size: 24px; }
+    }
   </style>
 </head>
 <body>
