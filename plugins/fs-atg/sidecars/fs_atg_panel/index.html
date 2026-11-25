@@ -824,8 +824,8 @@
     }
     .hist-item:hover { background: rgba(255, 255, 255, 0.035); }
     .hist-row { display: flex; align-items: center; gap: 9px; }
-    .st-ico { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; }
-    .st-ico svg { display: block; }
+    .st-ico { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; padding: 0; margin: 0; line-height: 0; box-sizing: border-box; flex-shrink: 0; }
+    .st-ico svg { display: block; width: 12px; height: 12px; margin: 0; flex-shrink: 0; }
     .st-ico.done { background: rgba(48, 209, 88, 0.16); color: var(--fs-ok); }
     .st-ico.error { background: rgba(255, 69, 58, 0.16); color: var(--fs-bad); }
     .st-ico.cancelled { background: rgba(255, 255, 255, 0.08); color: var(--fs-muted); }
@@ -3138,10 +3138,18 @@
       pollTimer = setTimeout(poll, S.active?.length ? 800 : 4000);
     }
 
+    let initialUiMtime = null;
     async function poll() {
       const seq = settingsSaveSeq;
       try {
         const nextState = await api('/api/state');
+        if (nextState?.uiMtime) {
+          if (initialUiMtime === null) initialUiMtime = nextState.uiMtime;
+          else if (nextState.uiMtime !== initialUiMtime) {
+            location.reload();
+            return;
+          }
+        }
         const localPol = loadLocalPolicies();
         const serverPol = (nextState.modelPolicies && typeof nextState.modelPolicies === 'object' && !Array.isArray(nextState.modelPolicies))
           ? nextState.modelPolicies

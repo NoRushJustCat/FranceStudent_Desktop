@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SidecarApp, Response } from 'sidecar_sdk';
@@ -703,6 +703,7 @@ app.api('/api/state', async () => {
   const permMode = PERMISSION_MODES.includes(state.permissionMode) ? state.permissionMode : 'acceptEdits';
   const useClientTools = state.useClientTools !== false;
   return {
+    uiMtime: (() => { try { return Math.round(statSync(join(__dirname, 'index.html')).mtimeMs); } catch { return 0; } })(),
     hasKey: credential.configured === true,
     credential,
     authLogin: getBrowserLoginStatus(),
