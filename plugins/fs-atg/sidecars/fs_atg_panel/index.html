@@ -834,6 +834,7 @@
     .st-badge.done { background: rgba(48, 209, 88, 0.14); color: var(--fs-ok); }
     .st-badge.needs_approval { background: rgba(255, 159, 10, 0.16); color: var(--fs-warn); }
     .st-badge.blocked, .st-badge.error { background: rgba(255, 69, 58, 0.14); color: #FF8A80; }
+    .st-badge.waiting, .st-badge.running { background: rgba(10, 132, 255, 0.14); color: #7CC0FF; }
     .st-badge.cancelled, .st-badge.other { background: rgba(255, 255, 255, 0.08); color: var(--fs-muted); }
     .hist-approval { margin-top: 8px; padding: 9px 11px; border-radius: var(--fs-r-sm); background: rgba(255, 159, 10, 0.10); border: 1px solid rgba(255, 159, 10, 0.28); display: flex; flex-direction: column; gap: 6px; }
     .hist-approval.blocked { background: rgba(255, 69, 58, 0.08); border-color: rgba(255, 69, 58, 0.25); }
@@ -842,6 +843,9 @@
     .hist-approval-sub { font-size: 10.5px; color: var(--fs-muted); line-height: 1.4; }
     .hist-approval-actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .st-ico.needs_approval { background: rgba(255, 159, 10, 0.18); color: var(--fs-warn); box-shadow: inset 0 0 0 1px rgba(255, 159, 10, 0.35); }
+    .st-ico.waiting { background: rgba(10, 132, 255, 0.14); color: var(--fs-accent); }
+    .st-ico.running { background: rgba(10, 132, 255, 0.18); color: #7CC0FF; }
+    .st-ico.running svg { animation: fsSpin 1s linear infinite; }
     .st-ico.other { background: rgba(255, 255, 255, 0.08); color: var(--fs-muted); }
     .hist-sub.approval { color: var(--fs-warn); }
     .hist-sub.blocked { color: #FF8A80; }
@@ -2266,7 +2270,10 @@
 
     const ICO_CHECK = '<svg class="ico ico-sm" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>';
     const ICO_X = '<svg class="ico ico-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-    const ICO_PAUSE = '<svg class="ico ico-sm" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+    const ICO_PAUSE = '<svg class="ico ico-sm" viewBox="0 0 24 24"><line x1="9" y1="5" x2="9" y2="19"/><line x1="15" y1="5" x2="15" y2="19"/></svg>';
+    const ICO_STOP = '<svg class="ico ico-sm" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
+    const ICO_CLOCK = '<svg class="ico ico-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>';
+    const ICO_SPIN = '<svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 1-6.36 2.64"/></svg>';
     const ICO_BAN = '<svg class="ico ico-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><line x1="5.64" y1="5.64" x2="18.36" y2="18.36"/></svg>';
     const ICO_ASK = '<svg class="ico ico-sm" viewBox="0 0 24 24"><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
 
@@ -2362,8 +2369,10 @@
       if (isBlockedJob(j)) return { key: 'blocked', label: 'Bloqué (Non)', ico: ICO_BAN };
       if (j.status === 'done') return { key: 'done', label: 'Terminé', ico: ICO_CHECK };
       if (j.status === 'error') return { key: 'error', label: 'Erreur', ico: ICO_X };
-      if (j.status === 'cancelled') return { key: 'cancelled', label: 'Annulé', ico: ICO_PAUSE };
-      return { key: 'other', label: String(j.status || 'En cours'), ico: ICO_PAUSE };
+      if (j.status === 'cancelled') return { key: 'cancelled', label: 'Annulé', ico: ICO_STOP };
+      if (j.status === 'waiting') return { key: 'waiting', label: 'En attente', ico: ICO_CLOCK };
+      if (j.status === 'running') return { key: 'running', label: 'En cours', ico: ICO_SPIN };
+      return { key: 'other', label: String(j.status || 'En pause'), ico: ICO_PAUSE };
     }
     function cleanErrorLine(err) {
       const first = String(err || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || 'échec';
