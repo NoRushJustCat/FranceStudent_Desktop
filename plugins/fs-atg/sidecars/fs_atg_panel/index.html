@@ -1337,6 +1337,21 @@
       .tab-btn .ico { display: none; }
       .pct-val { font-size: 24px; }
     }
+
+    /* Essential / Minimal UI Mode (toggleable in Settings) */
+    body.ui-essential .cutoff-presets,
+    body.ui-essential .hero-sub-row,
+    body.ui-essential .tier-row,
+    body.ui-essential .triggers-grid,
+    body.ui-essential .reasoning-box,
+    body.ui-essential .foot-note,
+    body.ui-essential #fsNativeFold,
+    body.ui-essential .studio-grid,
+    body.ui-essential #mcpToolsQuickOut,
+    body.ui-essential #compactSessionBtn,
+    body.ui-essential .adv-essential-opt {
+      display: none !important;
+    }
   </style>
 </head>
 <body>
@@ -1722,19 +1737,26 @@
           </div>
         </div>
         <div class="mac-group">
-          <div class="toggle-row">
+          <div class="toggle-row" id="compactUiRow">
+            <div>
+              <span style="display:block;font-weight:600">Interface épurée (l’essentiel uniquement)</span>
+              <span style="display:block;font-size:10px;color:var(--fs-muted)">Masque les options secondaires sur Accueil et dans Réglages</span>
+            </div>
+            <label class="switch"><input type="checkbox" id="compactUiInput" disabled /><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row adv-essential-opt">
             <span>Conserver la session de chat (compaction auto)</span>
             <label class="switch"><input type="checkbox" id="reuseChatInput" disabled /><span class="slider"></span></label>
           </div>
-          <div class="toggle-row">
+          <div class="toggle-row adv-essential-opt">
             <span>Outils client natifs (écriture/lecture autonome)</span>
             <label class="switch"><input type="checkbox" id="useClientToolsInput" disabled /><span class="slider"></span></label>
           </div>
-          <div class="toggle-row">
+          <div class="toggle-row adv-essential-opt">
             <span>Routage intelligent (Web → léger, Canvas → équilibré)</span>
             <label class="switch"><input type="checkbox" id="smartRoutingInput" disabled /><span class="slider"></span></label>
           </div>
-          <div class="toggle-row">
+          <div class="toggle-row adv-essential-opt">
             <span>Résumé de raisonnement</span>
             <label class="switch"><input type="checkbox" id="showReasoningInput" disabled /><span class="slider"></span></label>
           </div>
@@ -2985,9 +3007,14 @@
       return $(containerId)?.querySelector('button.on')?.dataset?.val || fallback;
     }
 
+    function applyCompactUi(enabled) {
+      document.body.classList.toggle('ui-essential', Boolean(enabled));
+      requestAnimationFrame(() => refreshAllLiquidPills(document, false));
+    }
+
     function syncSettingsForm() {
       const configIds = [
-        'cutoffInput', 'maxParallelInput', 'showReasoningInput', 'reuseChatInput', 'useClientToolsInput', 'computerUseInput', 'deepThinkingInput', 'canvasEnabledInput', 'smartRoutingInput',
+        'cutoffInput', 'maxParallelInput', 'compactUiInput', 'showReasoningInput', 'reuseChatInput', 'useClientToolsInput', 'computerUseInput', 'deepThinkingInput', 'canvasEnabledInput', 'smartRoutingInput',
         'prepromptInput', 'savePrepromptBtn', 'memNoteInput', 'addMemNoteBtn', 'clearMemBtn',
         'contextCompactInput', 'tierLightInput', 'tierMediumInput',
         'tierHeavyInput', 'allowedInput', 'blockedInput', 'useAllBtn', 'saveEssentialBtn', 'saveSettingsBtn'
@@ -3002,6 +3029,8 @@
       }
       $('cutoffInput').value = S.cutoff ?? 15;
       $('maxParallelInput').value = S.maxParallel ?? 3;
+      if ($('compactUiInput')) $('compactUiInput').checked = Boolean(S.compactUi);
+      applyCompactUi(S.compactUi);
       $('showReasoningInput').checked = S.showReasoning === true;
       $('reuseChatInput').checked = S.reuseChat === true;
       $('useClientToolsInput').checked = S.useClientTools !== false;
@@ -3143,6 +3172,8 @@
       $('qtxt').textContent = metaParts.join(' · ') || 'Quota France Student';
 
       syncProfilePills(false);
+      if ($('compactUiInput')) $('compactUiInput').checked = Boolean(S.compactUi);
+      applyCompactUi(S.compactUi);
       if ($('canvasEnabledInput')) $('canvasEnabledInput').checked = (S.canvasMode || 'on') !== 'off';
       updateExtMcpCount();
       renderVisionLiveBanner();
@@ -3910,6 +3941,7 @@
         await api('/api/settings', {
           routingProfile: normalizeUiProfile(S.routingProfile),
           cutoffPercent: Number($('cutoffInput').value),
+          compactUi: $('compactUiInput') ? $('compactUiInput').checked : false,
           reuseChat: $('reuseChatInput').checked,
           showReasoning: $('showReasoningInput').checked,
           useClientTools: $('useClientToolsInput').checked,
@@ -3918,17 +3950,19 @@
           canvasEnabled: $('canvasEnabledInput') ? $('canvasEnabledInput').checked : true,
           smartRouting: $('smartRoutingInput') ? $('smartRoutingInput').checked : true,
         });
+        applyCompactUi($('compactUiInput')?.checked);
         updateExtMcpCount();
         flash('Réglages enregistrés', 'essentialToast');
         await poll();
       } catch (e) { flash(e.message, 'essentialToast', true); }
     };
-    function bindInstantToggle(inputId, stateKey, label) {
+    function bindInstantToggle(inputId, stateKey, label, onApply = null) {
       const el = $(inputId);
       if (!el) return;
       el.onchange = async () => {
         const val = el.checked;
         S[stateKey] = val;
+        if (onApply) onApply(val);
         flash(`${label} ${val ? 'activé' : 'désactivé'}`, 'essentialToast');
         try {
           await pushSettingPatch({ [stateKey]: val });
@@ -3936,10 +3970,12 @@
         } catch (e) {
           S[stateKey] = !val;
           el.checked = !val;
+          if (onApply) onApply(!val);
           flash(e.message, 'essentialToast', true);
         }
       };
     }
+    bindInstantToggle('compactUiInput', 'compactUi', 'Interface épurée', applyCompactUi);
     bindInstantToggle('reuseChatInput', 'reuseChat', 'Session persistante');
     bindInstantToggle('useClientToolsInput', 'useClientTools', 'Outils client natifs');
     bindInstantToggle('smartRoutingInput', 'smartRouting', 'Routage intelligent');

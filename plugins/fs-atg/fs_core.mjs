@@ -548,6 +548,7 @@ export const DEFAULT_STATE = {
   canvasMode: 'on',
   imageGenMode: 'auto',
   smartRouting: true,
+  compactUi: false,
   reuseChat: true,
   contextCompactPercent: 80,
   // Minimal does not inject a project map or the content of files.

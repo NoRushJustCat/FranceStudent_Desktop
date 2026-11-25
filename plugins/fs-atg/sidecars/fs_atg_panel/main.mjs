@@ -727,6 +727,7 @@ app.api('/api/state', async () => {
     canvasMode: normalizeTriggerMode(state.canvasMode ?? 'on', 'on'),
     imageGenMode: normalizeTriggerMode(state.imageGenMode ?? 'auto', 'auto'),
     smartRouting: state.smartRouting !== false,
+    compactUi: Boolean(state.compactUi),
     lastWorkspaceRoot: wsRoot || null,
     undoEntries: wsRoot ? listUndoEntries(wsRoot, 15) : [],
     projectMemory: getProjectMemory(wsRoot),
@@ -907,6 +908,9 @@ app.api('/api/settings', (data) => {
   }
   if (typeof data.smartRouting === 'boolean') {
     state.smartRouting = data.smartRouting;
+  }
+  if (typeof data.compactUi === 'boolean') {
+    state.compactUi = data.compactUi;
   }
   if (typeof data.autoDelegate === 'boolean' || PERMISSION_MODES.includes(data.permissionMode)) {
     syncAgentsRule(state.autoDelegate !== false, state.permissionMode);
