@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Échecs 2D - France Student</title>
+  <style>
+:root {
+  --bg: #0b1120;
+  --bg-2: #111a2f;
+  --panel: #151f38;
+  --line: #24304d;
+  --text: #e6ebf7;
+  --muted: #8b97b5;
+  --accent: #5b8cff;
+  --accent-2: #7aa2ff;
+  --light: #8fa3c7;
+  --dark: #3b4d78;
+  --sel: rgba(91, 140, 255, 0.55);
+  --hint: rgba(80, 220, 160, 0.85);
+  --cap: rgba(255, 90, 110, 0.85);
+  --board-size: min(92vw, 78vh, 640px);
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  background:
+    radial-gradient(1200px 600px at 50% -10%, #16224200 0%, transparent 60%),
+    radial-gradient(900px 500px at 50% 110%, #1a2a5233 0%, transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+#status,
+.status {
+  color: var(--muted);
+  font-size: 0.95rem;
+  text-align: center;
+  min-height: 1.4em;
+}
+
+/* ---------- Plateau ---------- */
+#board {
+  width: var(--board-size);
+  height: var(--board-size);
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  border: 3px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-2);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+.sq {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--board-size) / 8 * 0.74);
+  line-height: 1;
+  cursor: pointer;
+  transition: filter 0.15s ease, background-color 0.15s ease;
+}
+
+.sq.light {
+  background: var(--light);
+}
+
+.sq.dark {
+  background: var(--dark);
+}
+
+.sq:hover {
+  filter: brightness(1.12);
+}
+
+/* Pieces (texte unicode ou images) */
+.sq img,
+.sq svg {
+  width: 86%;
+  height: 86%;
+  pointer-events: none;
+}
+
+.sq .piece {
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+/* Case selectionnee */
+.sq.sel {
+  background: var(--sel);
+  box-shadow: inset 0 0 0 3px var(--accent-2);
+}
+
+.sq.sel.light,
+.sq.sel.dark {
+  background-image: linear-gradient(var(--sel), var(--sel));
+}
+
+/* Coup possible */
+.sq.hint::after {
+  content: "";
+  position: absolute;
+  width: 28%;
+  height: 28%;
+  border-radius: 50%;
+  background: var(--hint);
+  box-shadow: 0 0 10px var(--hint);
+  pointer-events: none;
+}
+
+/* Capture possible */
+.sq.cap {
+  box-shadow: inset 0 0 0 4px var(--cap);
+}
+
+.sq.cap::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, transparent 55%, rgba(255, 90, 110, 0.35) 100%);
+  pointer-events: none;
+}
+
+/* ---------- Boutons ---------- */
+button,
+.btn {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, var(--panel), var(--bg-2));
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+button:hover,
+.btn:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 14px rgba(91, 140, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+button:active,
+.btn:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+button:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+button:disabled,
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+button.primary,
+.btn.primary {
+  background: linear-gradient(180deg, var(--accent-2), var(--accent));
+  border-color: transparent;
+  color: #0b1120;
+}
+
+button.primary:hover,
+.btn.primary:hover {
+  box-shadow: 0 6px 18px rgba(91, 140, 255, 0.45);
+}
+
+.controls,
+#controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  width: var(--board-size);
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 600px) {
+  body {
+    padding: 10px;
+    gap: 12px;
+  }
+
+  #board {
+    border-width: 2px;
+    border-radius: 8px;
+  }
+
+  button,
+  .btn {
+    padding: 9px 14px;
+    font-size: 0.9rem;
+    flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 380px) {
+  :root {
+    --board-size: 96vw;
+  }
+}
+
+@media (min-width: 1000px) {
+  :root {
+    --board-size: min(78vh, 680px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="toolbar">
+    <div id="status" role="status">Aux blancs de jouer.</div>
+    <button id="resetBtn" type="button">Recommencer</button>
+  </div>
+
+  <div id="board" role="group" aria-label="Échiquier"></div>
+
+  <section id="captured" aria-labelledby="capturedTitle">
+    <h2 id="capturedTitle">Pièces capturées</h2>
+    <div class="captured-row">Par les blancs : <span id="capturedByWhite">Aucune</span></div>
+    <div class="captured-row">Par les noirs : <span id="capturedByBlack">Aucune</span></div>
+  </section>
+</div>
+  <script>
+(() => {
+  const boardEl = document.getElementById('board');
+  const statusEl = document.getElementById('status');
+  const resetBtn = document.getElementById('resetBtn');
+  const capturedEl = document.getElementById('captured');
+
+  const GLYPH = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
+  const TEXT_MODE = '\uFE0E'; // force le rendu texte (évite les emojis)
+  const VALUE = { Q: 9, R: 5, B: 3, N: 3, P: 1, K: 0 };
+  const KNIGHT = [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]];
+  const KING = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+  const ROOK_DIRS = [[-1,0],[1,0],[0,-1],[0,1]];
+  const BISHOP_DIRS = [[-1,-1],[-1,1],[1,-1],[1,1]];
+
+  let board, turn, selected, moves, castling, epTarget, captured, over, lastMove, statusText;
+
+  const inB = (r, c) => r >= 0 && r < 8 && c >= 0 && c < 8;
+  const opp = (c) => (c === 'w' ? 'b' : 'w');
+  const name = (c) => (c === 'w' ? 'Blancs' : 'Noirs');
+
+  function initialBoard() {
+    const back = ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R'];
+    const b = Array.from({ length: 8 }, () => Array(8).fill(null));
+    for (let c = 0; c < 8; c++) {
+      b[0][c] = { t: back[c], c: 'b' };
+      b[1][c] = { t: 'P', c: 'b' };
+      b[6][c] = { t: 'P', c: 'w' };
+      b[7][c] = { t: back[c], c: 'w' };
+    }
+    return b;
+  }
+
+  function findKing(b, color) {
+    for (let r = 0; r < 8; r++)
+      for (let c = 0; c < 8; c++)
+        if (b[r][c] && b[r][c].t === 'K' && b[r][c].c === color) return { r, c };
+    return null;
+  }
+
+  // La case (r,c) est-elle attaquée par la couleur "by" ?
+  function attacked(b, r, c, by) {
+    const pr = by === 'w' ? r + 1 : r - 1;
+    for (const dc of [-1, 1]) {
+      if (inB(pr, c + dc)) {
+        const p = b[pr][c + dc];
+        if (p && p.c === by && p.t === 'P') return true;
+      }
+    }
+    for (const [dr, dc] of KNIGHT) {
+      const rr = r + dr, cc = c + dc;
+      if (inB(rr, cc)) {
+        const p = b[rr][cc];
+        if (p && p.c === by && p.t === 'N') return true;
+      }
+    }
+    for (const [dr, dc] of KING) {
+      const rr = r + dr, cc = c + dc;
+      if (inB(rr, cc)) {
+        const p = b[rr][cc];
+        if (p && p.c === by && p.t === 'K') return true;
+      }
+    }
+    const slide = (dirs, types) => {
+      for (const [dr, dc] of dirs) {
+        let rr = r + dr, cc = c + dc;
+        while (inB(rr, cc)) {
+          const p = b[rr][cc];
+          if (p) {
+            if (p.c === by && types.includes(p.t)) return true;
+            break;
+          }
+          rr += dr; cc += dc;
+        }
+      }
+      return false;
+    };
+    return slide(ROOK_DIRS, ['R', 'Q']) || slide(BISHOP_DIRS, ['B', 'Q']);
+  }
+
+  // Coups pseudo-légaux (sans vérifier l'échec du propre roi)
+  function pseudo(b, r, c, cast, ep) {
+    const p = b[r][c];
+    const out = [];
+    const add = (rr, cc, extra) => out.push({ r: rr, c: cc, ...extra });
+
+    if (p.t === 'P') {
+      const dir = p.c === 'w' ? -1 : 1;
+      const start = p.c === 'w' ? 6 : 1;
+      if (inB(r + dir, c) && !b[r + dir][c]) {
+        add(r + dir, c);
+        if (r === start && !b[r + 2 * dir][c]) add(r + 2 * dir, c, { double: true });
+      }
+      for (const dc of [-1, 1]) {
+        const rr = r + dir, cc = c + dc;
+        if (!inB(rr, cc)) continue;
+        const t = b[rr][cc];
+        if (t && t.c !== p.c) add(rr, cc);
+        else if (!t && ep && ep.r === rr && ep.c === cc) add(rr, cc, { ep: true });
+      }
+    } else if (p.t === 'N' || p.t === 'K') {
+      for (const [dr, dc] of p.t === 'N' ? KNIGHT : KING) {
+        const rr = r + dr, cc = c + dc;
+        if (inB(rr, cc) && (!b[rr][cc] || b[rr][cc].c !== p.c)) add(rr, cc);
+      }
+      if (p.t === 'K') {
+        const home = p.c === 'w' ? 7 : 0;
+        const en = opp(p.c);
+        if (r === home && c === 4 && !attacked(b, home, 4, en)) {
+          const rookAt = (col) => b[home][col] && b[home][col].t === 'R' && b[home][col].c === p.c;
+          if (cast[p.c + 'K'] && rookAt(7) && !b[home][5] && !b[home][6] &&
+              !attacked(b, home, 5, en) && !attacked(b, home, 6, en)) add(home, 6, { castle: 'K' });
+          if (cast[p.c + 'Q'] && rookAt(0) && !b[home][1] && !b[home][2] && !b[home][3] &&
+              !attacked(b, home, 3, en) && !attacked(b, home, 2, en)) add(home, 2, { castle: 'Q' });
+        }
+      }
+    } else {
+      const dirs = p.t === 'R' ? ROOK_DIRS : p.t === 'B' ? BISHOP_DIRS : ROOK_DIRS.concat(BISHOP_DIRS);
+      for (const [dr, dc] of dirs) {
+        let rr = r + dr, cc = c + dc;
+        while (inB(rr, cc)) {
+          const t = b[rr][cc];
+          if (!t) add(rr, cc);
+          else {
+            if (t.c !== p.c) add(rr, cc);
+            break;
+          }
+          rr += dr; cc += dc;
+        }
+      }
+    }
+    return out;
+  }
+
+  // Applique un coup (modifie le plateau passé en paramètre)
+  function apply(b, from, m) {
+    const p = b[from.r][from.c];
+    b[from.r][from.c] = null;
+    if (m.ep) b[from.r][m.c] = null;
+    if (m.castle) {
+      const h = from.r;
+      if (m.castle === 'K') { b[h][5] = b[h][7]; b[h][7] = null; }
+      else { b[h][3] = b[h][0]; b[h][0] = null; }
+    }
+    // Promotion automatique en Dame
+    b[m.r][m.c] = p.t === 'P' && (m.r === 0 || m.r === 7) ? { t: 'Q', c: p.c } : p;
+  }
+
+  // Coups légaux : on retire ceux qui laissent son propre roi en échec
+  function legal(b, r, c, cast, ep) {
+    const p = b[r][c];
+    return pseudo(b, r, c, cast, ep).filter((m) => {
+      const copy = b.map((row) => row.slice());
+      apply(copy, { r, c }, m);
+      const k = findKing(copy, p.c);
+      return !attacked(copy, k.r, k.c, opp(p.c));
+    });
+  }
+
+  function hasAnyMove(color) {
+    for (let r = 0; r < 8; r++)
+      for (let c = 0; c < 8; c++)
+        if (board[r][c] && board[r][c].c === color && legal(board, r, c, castling, epTarget).length) return true;
+    return false;
+  }
+
+  function insufficientMaterial() {
+    const rest = [];
+    for (const row of board) for (const p of row) if (p && p.t !== 'K') rest.push(p);
+    return rest.length === 0 || (rest.length === 1 && (rest[0].t === 'B' || rest[0].t === 'N'));
+  }
+
+  function revoke(r, c) {
+    if (r === 7 && c === 0) castling.wQ = false;
+    if (r === 7 && c === 7) castling.wK = false;
+    if (r === 0 && c === 0) castling.bQ = false;
+    if (r === 0 && c === 7) castling.bK = false;
+  }
+
+  function makeMove(from, m) {
+    const p = board[from.r][from.c];
+    const cap = m.ep ? board[from.r][m.c] : board[m.r][m.c];
+    if (cap) captured[p.c].push(cap.t);
+
+    if (p.t === 'K') { castling[p.c + 'K'] = false; castling[p.c + 'Q'] = false; }
+    revoke(from.r, from.c);
+    revoke(m.r, m.c);
+
+    apply(board, from, m);
+    epTarget = m.double ? { r: (from.r + m.r) / 2, c: m.c } : null;
+    lastMove = { from, to: { r: m.r, c: m.c } };
+    turn = opp(turn);
+    selected = null;
+    moves = [];
+    evaluate();
+  }
+
+  function evaluate() {
+    const k = findKing(board, turn);
+    const check = attacked(board, k.r, k.c, opp(turn));
+    const any = hasAnyMove(turn);
+    if (!any && check) {
+      over = true;
+      statusText = `Échec et mat ! Les ${name(opp(turn))} gagnent.`;
+    } else if (!any) {
+      over = true;
+      statusText = 'Pat : match nul.';
+    } else if (insufficientMaterial()) {
+      over = true;
+      statusText = 'Match nul : matériel insuffisant.';
+    } else {
+      statusText = `Tour des ${name(turn)}` + (check ? ' : Échec !' : '');
+    }
+  }
+
+  function render() {
+    boardEl.innerHTML = '';
+    Object.assign(boardEl.style, {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(8, 1fr)',
+      width: 'min(92vw, 512px)',
+      aspectRatio: '1 / 1',
+      border: '2px solid #333',
+      userSelect: 'none'
+    });
+
+    const kingPos = findKing(board, turn);
+    const inCheck = kingPos && attacked(board, kingPos.r, kingPos.c, opp(turn));
+
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const sq = document.createElement('div');
+        sq.dataset.r = r;
+        sq.dataset.c = c;
+        const light = (r + c) % 2 === 0;
+        let bg = light ? '#f0d9b5' : '#b58863';
+
+        if (lastMove && ((lastMove.from.r === r && lastMove.from.c === c) || (lastMove.to.r === r && lastMove.to.c === c)))
+          bg = light ? '#f7ec8b' : '#d9c24f';
+        if (inCheck && kingPos.r === r && kingPos.c === c) bg = '#e86a5e';
+        if (selected && selected.r === r && selected.c === c) bg = '#7fc97f';
+
+        const target = moves.find((m) => m.r === r && m.c === c);
+        const p = board[r][c];
+
+        Object.assign(sq.style, {
+          background: bg,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          position: 'relative',
+          aspectRatio: '1 / 1',
+          fontSize: 'min(9vw, 52px)',
+          lineHeight: '1',
+          cursor: over ? 'default' : 'pointer'
+        });
+
+        if (p) {
+          const span = document.createElement('span');
+          span.textContent = GLYPH[p.t] + TEXT_MODE;
+          span.style.color = p.c === 'w' ? '#ffffff' : '#111111';
+          span.style.textShadow = p.c === 'w'
+            ? '0 0 2px #000, 0 0 2px #000, 0 0 3px #000'
+            : '0 0 2px #fff6, 0 0 1px #fff4';
+          sq.appendChild(span);
+        }
+
+        if (target) {
+          const dot = document.createElement('div');
+          Object.assign(dot.style, {
+            position: 'absolute',
+            pointerEvents: 'none',
+            borderRadius: '50%',
+            ...(p || target.ep
+              ? { inset: '4%', border: '4px solid rgba(200,40,40,0.7)', boxSizing: 'border-box' }
+              : { width: '28%', height: '28%', background: 'rgba(0,0,0,0.28)' })
+          });
+          sq.appendChild(dot);
+        }
+        boardEl.appendChild(sq);
+      }
+    }
+
+    statusEl.textContent = statusText;
+    renderCaptured();
+  }
+
+  function renderCaptured() {
+    const line = (color) => {
+      const list = captured[color].slice().sort((a, b) => VALUE[b] - VALUE[a]);
+      const victim = opp(color);
+      const glyphs = list
+        .map((t) => `<span style="color:${victim === 'w' ? '#fff' : '#111'};text-shadow:${victim === 'w' ? '0 0 2px #000,0 0 2px #000' : 'none'}">${GLYPH[t]}${TEXT_MODE}</span>`)
+        .join('');
+      return `<div style="font-size:24px;min-height:30px"><strong style="font-size:14px">${name(color)} ont pris :</strong> ${glyphs}</div>`;
+    };
+    const score = (color) => captured[color].reduce((s, t) => s + VALUE[t], 0);
+    const diff = score('w') - score('b');
+    const adv = diff === 0 ? 'Matériel égal'
+      : `Avantage matériel : ${diff > 0 ? 'Blancs' : 'Noirs'} (+${Math.abs(diff)})`;
+    capturedEl.innerHTML = line('w') + line('b') + `<div style="font-size:13px;opacity:.8">${adv}</div>`;
+  }
+
+  function onSquare(r, c) {
+    if (over) return;
+    if (selected) {
+      const m = moves.find((mv) => mv.r === r && mv.c === c);
+      if (m) {
+        makeMove(selected, m);
+        render();
+        return;
+      }
+    }
+    const p = board[r][c];
+    if (p && p.c === turn) {
+      selected = { r, c };
+      moves = legal(board, r, c, castling, epTarget);
+    } else {
+      selected = null;
+      moves = [];
+    }
+    render();
+  }
+
+  function init() {
+    board = initialBoard();
+    turn = 'w';
+    selected = null;
+    moves = [];
+    castling = { wK: true, wQ: true, bK: true, bQ: true };
+    epTarget = null;
+    captured = { w: [], b: [] };
+    over = false;
+    lastMove = null;
+    statusText = 'Tour des Blancs';
+    render();
+  }
+
+  boardEl.addEventListener('click', (e) => {
+    const sq = e.target.closest('[data-r]');
+    if (sq) onSquare(+sq.dataset.r, +sq.dataset.c);
+  });
+  resetBtn.addEventListener('click', init);
+
+  init();
+})();
+  </script>
+</body>
+</html>

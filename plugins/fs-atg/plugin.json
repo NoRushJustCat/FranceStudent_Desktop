@@ -1,0 +1,15 @@
+{
+  "name": "fs-atg",
+  "displayName": "France Student [ATG]",
+  "description": "Orchestrateur France Student v2.6 ultra-épuré pour Antigravity : délégation intelligente (Chat, Code + /undo, Web Search, Canvas Live, tri automatique des modèles fort → faible, mémoire projet FRST.md/FRSTCLI.md, compaction serveur) + 2 extensions MCP ciblées : Computer Use et Raisonnement approfondi (Sequential Thinking).",
+  "version": "2.6.0",
+  "logo": "assets/logo.png",
+  "suggestedPrompts": [
+    "Utilise /fs pour créer ou modifier directement ce module avec France Student",
+    "Utilise /max pour résoudre ce problème complexe avec raisonnement Maximum",
+    "Utilise /think pour structurer un raisonnement approfondi étape par étape",
+    "Utilise /canvas pour créer un artifact interactif HTML/SVG/Mermaid en aperçu live",
+    "Utilise /computer pour capturer l'écran, lister les fenêtres ou piloter le bureau",
+    "Utilise /plan pour obtenir un plan détaillé sans modifier le code"
+  ]
+}

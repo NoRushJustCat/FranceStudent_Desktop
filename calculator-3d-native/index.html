@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculatrice 3D (Native Antigravity)</title>
+  <style>
+    :root {
+      --bg: #070b14;
+      --card: #0f172a;
+      --edge: #1e293b;
+      --blue: #2563eb;
+      --blue-hi: #3b82f6;
+      --amber: #f59e0b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: radial-gradient(circle at 30% 20%, #10244a 0%, #070b14 65%);
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      perspective: 1100px;
+      overflow: hidden;
+    }
+    .scene { padding: 24px; }
+    .calc {
+      width: 340px;
+      padding: 20px;
+      border-radius: 24px;
+      background: linear-gradient(155deg, #16223b 0%, #0b1120 100%);
+      border: 1px solid rgba(255, 255, 255, .12);
+      transform-style: preserve-3d;
+      transform: rotateX(var(--rx, 6deg)) rotateY(var(--ry, -8deg));
+      transition: transform .12s ease-out;
+      box-shadow:
+        -16px 24px 50px rgba(0, 0, 0, .65),
+        0 10px 0 #070b16,
+        inset 0 1px 0 rgba(255, 255, 255, .14);
+    }
+    .screen {
+      background: #050811;
+      border: 1px solid rgba(59, 130, 246, .28);
+      border-radius: 16px;
+      padding: 14px 16px;
+      margin-bottom: 16px;
+      transform: translateZ(18px);
+      box-shadow: inset 0 4px 14px rgba(0, 0, 0, .8);
+      text-align: right;
+    }
+    .hist {
+      min-height: 18px;
+      font-size: 12px;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .val {
+      font-size: 32px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-top: 4px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      transform-style: preserve-3d;
+    }
+    button {
+      height: 54px;
+      border: 0;
+      border-radius: 14px;
+      font-size: 18px;
+      font-weight: 650;
+      color: var(--text);
+      background: linear-gradient(180deg, #1e293b, #111827);
+      cursor: pointer;
+      transform: translateZ(14px);
+      box-shadow: 0 5px 0 #050811, 0 8px 14px rgba(0, 0, 0, .4);
+      transition: transform .08s, box-shadow .08s, filter .12s;
+      user-select: none;
+    }
+    button:hover { filter: brightness(1.14); }
+    button:active, button.down {
+      transform: translateZ(6px) translateY(4px);
+      box-shadow: 0 1px 0 #050811, 0 2px 5px rgba(0, 0, 0, .4);
+    }
+    .op { background: linear-gradient(180deg, #1d4ed8, #1e3a8a); box-shadow: 0 5px 0 #0f1f4a, 0 8px 14px rgba(0, 0, 0, .4); }
+    .eq { background: linear-gradient(180deg, #3b82f6, #2563eb); box-shadow: 0 5px 0 #173688, 0 8px 16px rgba(37, 99, 235, .35); }
+    .fn { background: linear-gradient(180deg, #334155, #1e293b); color: #fcd34d; }
+    .zero { grid-column: span 2; }
+  </style>
+</head>
+<body>
+  <div class="scene">
+    <div class="calc" id="calc">
+      <div class="screen">
+        <div class="hist" id="hist"></div>
+        <div class="val" id="val">0</div>
+      </div>
+      <div class="grid" id="grid">
+        <button class="fn" data-act="ac">AC</button>
+        <button class="fn" data-act="del">DEL</button>
+        <button class="fn" data-op="%">%</button>
+        <button class="op" data-op="/">÷</button>
+        <button data-num="7">7</button>
+        <button data-num="8">8</button>
+        <button data-num="9">9</button>
+        <button class="op" data-op="*">×</button>
+        <button data-num="4">4</button>
+        <button data-num="5">5</button>
+        <button data-num="6">6</button>
+        <button class="op" data-op="-">−</button>
+        <button data-num="1">1</button>
+        <button data-num="2">2</button>
+        <button data-num="3">3</button>
+        <button class="op" data-op="+">+</button>
+        <button class="zero" data-num="0">0</button>
+        <button data-num=".">.</button>
+        <button class="eq" data-act="eq">=</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const calc = document.getElementById('calc');
+    const valEl = document.getElementById('val');
+    const histEl = document.getElementById('hist');
+    let cur = '0', prev = null, op = null, fresh = false;
+
+    const round = (n) => Math.round(n * 1e10) / 1e10;
+    const render = () => {
+      valEl.textContent = cur;
+      histEl.textContent = prev !== null && op ? `${prev} ${op}` : '';
+    };
+    const inputNum = (d) => {
+      if (fresh) { cur = d === '.' ? '0.' : d; fresh = false; return render(); }
+      if (d === '.' && cur.includes('.')) return;
+      cur = cur === '0' && d !== '.' ? d : cur + d;
+      render();
+    };
+    const compute = (a, b, o) => {
+      if (o === '+') return round(a + b);
+      if (o === '-') return round(a - b);
+      if (o === '*') return round(a * b);
+      if (o === '/') return b === 0 ? 'Erreur' : round(a / b);
+      if (o === '%') return round((a * b) / 100);
+      return b;
+    };
+    const chooseOp = (nextOp) => {
+      if (nextOp === '%' && prev === null) { cur = String(round(Number(cur) / 100)); return render(); }
+      if (prev !== null && op && !fresh) {
+        const res = compute(Number(prev), Number(cur), op);
+        cur = String(res);
+        prev = res === 'Erreur' ? null : res;
+      } else {
+        prev = Number(cur);
+      }
+      op = nextOp;
+      fresh = true;
+      render();
+    };
+    const equals = () => {
+      if (prev === null || !op) return;
+      const a = Number(prev), b = Number(cur);
+      const res = compute(a, b, op);
+      histEl.textContent = `${a} ${op} ${b} =`;
+      cur = String(res);
+      valEl.textContent = cur;
+      prev = null; op = null; fresh = true;
+    };
+
+    document.getElementById('grid').addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      if (btn.dataset.num) inputNum(btn.dataset.num);
+      else if (btn.dataset.op) chooseOp(btn.dataset.op);
+      else if (btn.dataset.act === 'ac') { cur = '0'; prev = null; op = null; fresh = false; render(); }
+      else if (btn.dataset.act === 'del') { cur = fresh || cur.length <= 1 ? '0' : cur.slice(0, -1); fresh = false; render(); }
+      else if (btn.dataset.act === 'eq') equals();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      const x = (e.clientX / window.innerWidth - 0.5) * 20;
+      const y = (0.5 - e.clientY / window.innerHeight) * 16;
+      calc.style.setProperty('--rx', `${y.toFixed(1)}deg`);
+      calc.style.setProperty('--ry', `${x.toFixed(1)}deg`);
+    });
+    window.addEventListener('keydown', (e) => {
+      if (/^[0-9.]$/.test(e.key)) inputNum(e.key);
+      else if (['+', '-', '*', '/', '%'].includes(e.key)) chooseOp(e.key);
+      else if (e.key === 'Enter' || e.key === '=') { e.preventDefault(); equals(); }
+      else if (e.key === 'Backspace') { cur = cur.length <= 1 ? '0' : cur.slice(0, -1); render(); }
+      else if (e.key === 'Escape') { cur = '0'; prev = null; op = null; fresh = false; render(); }
+    });
+  </script>
+</body>
+</html>

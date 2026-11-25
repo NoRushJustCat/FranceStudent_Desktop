@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skyline Run — 3D Flight</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="scene"></canvas>
+    <div class="vignette"></div>
+
+    <header class="hud top-hud">
+      <div class="brand"><span class="brand-mark">✦</span><span>SKYLINE <b>RUN</b></span></div>
+      <div class="stat"><span>PORTES</span><strong id="gates">0 / 12</strong></div>
+      <div class="stat"><span>SCORE</span><strong id="score">000000</strong></div>
+      <div class="stat"><span>VITESSE</span><strong><span id="speed">320</span> <small>KT</small></strong></div>
+      <button id="sound-toggle" class="icon-button" aria-label="Activer ou couper le son">♫</button>
+    </header>
+
+    <div class="hud altitude-card"><span>ALTITUDE</span><strong><span id="altitude">1200</span> <small>FT</small></strong></div>
+    <div class="hud heading-card"><span>CAP</span><strong><span id="heading">000</span>°</strong></div>
+
+    <div class="hud crosshair"><i></i><span></span><b></b></div>
+    <div class="hud throttle"><span>THR</span><div class="throttle-bar"><i id="throttle-fill"></i></div></div>
+
+    <div id="start-screen" class="overlay visible">
+      <div class="panel intro-panel">
+        <div class="eyebrow">FLIGHT SIMULATION / 01</div>
+        <h1>SKYLINE<br /><em>RUN</em></h1>
+        <p>Traversez les anneaux lumineux, gardez le contrôle et établissez le meilleur score.</p>
+        <button id="start-button" class="primary-button">DÉCOLLER <span>→</span></button>
+        <div class="controls-hint"><kbd>W</kbd><kbd>S</kbd> tangage <kbd>A</kbd><kbd>D</kbd> roulis <kbd>Q</kbd><kbd>E</kbd> lacet <kbd>⇧</kbd><kbd>⇩</kbd> vitesse</div>
+      </div>
+    </div>
+
+    <div id="game-over" class="overlay">
+      <div class="panel result-panel">
+        <div class="eyebrow">VOL TERMINÉ</div>
+        <h2 id="result-title">MISSION ACCOMPLIE</h2>
+        <div class="result-score"><span>SCORE FINAL</span><strong id="final-score">000000</strong></div>
+        <p id="result-message">Tous les anneaux ont été traversés.</p>
+        <button id="restart-button" class="primary-button">REJOUER <span>↻</span></button>
+      </div>
+    </div>
+
+    <div class="bottom-tip">SOURIS POUR REGARDER <span>•</span> CLAVIER POUR PILOTER <span>•</span> PASSEZ AU CENTRE DES ANNEAUX</div>
+  </div>
+  <script type="importmap">
+    {"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"}}
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+:root { --cyan:#7de8ff; --orange:#ffb15e; --ink:#eaf8ff; --muted:#9bb5c8; --glass:rgba(8,22,38,.6); }
+* { box-sizing:border-box; }
+html, body { margin:0; width:100%; height:100%; overflow:hidden; background:#050b16; color:var(--ink); font-family:'Space Grotesk',sans-serif; }
+#game-wrap, #scene { width:100%; height:100%; display:block; }
+#game-wrap { position:relative; overflow:hidden; }
+.vignette { position:absolute; inset:0; pointer-events:none; background:radial-gradient(circle at center, transparent 35%, rgba(2,6,15,.2) 74%, rgba(1,3,9,.75)); }
+.hud { position:absolute; z-index:2; color:var(--ink); text-shadow:0 1px 12px rgba(125,232,255,.2); }
+.top-hud { top:28px; left:34px; right:34px; display:flex; align-items:center; gap:38px; }
+.brand { display:flex; align-items:center; gap:10px; margin-right:auto; letter-spacing:.12em; font-size:13px; font-weight:700; }
+.brand b { color:var(--cyan); font-weight:700; }
+.brand-mark { display:grid; place-items:center; width:28px; height:28px; color:#071725; background:var(--cyan); clip-path:polygon(50% 0,61% 38%,100% 50%,61% 62%,50% 100%,39% 62%,0 50%,39% 38%); }
+.stat { min-width:90px; border-left:1px solid rgba(160,218,238,.26); padding-left:16px; }
+.stat span, .altitude-card span, .heading-card span, .throttle span { display:block; color:var(--muted); font-size:9px; letter-spacing:.17em; font-weight:600; }
+.stat strong, .altitude-card strong, .heading-card strong { display:block; margin-top:3px; font-family:'Barlow Condensed'; font-size:24px; letter-spacing:.04em; }
+small { font-family:'Space Grotesk'; font-size:9px; color:var(--muted); letter-spacing:.1em; }
+.icon-button { width:34px; height:34px; border:1px solid rgba(160,218,238,.35); border-radius:50%; background:rgba(10,30,48,.55); color:var(--cyan); cursor:pointer; font-size:17px; }
+.altitude-card, .heading-card { top:112px; padding:12px 16px; border:1px solid rgba(154,215,238,.2); border-left:2px solid var(--cyan); background:linear-gradient(90deg, rgba(12,38,57,.62), rgba(7,19,34,.12)); }
+.altitude-card { left:34px; } .heading-card { right:34px; border-left:0; border-right:2px solid var(--orange); text-align:right; }
+.crosshair { left:50%; top:50%; width:42px; height:42px; transform:translate(-50%,-50%); opacity:.7; }
+.crosshair:before,.crosshair:after,.crosshair i:before,.crosshair i:after { content:''; position:absolute; background:var(--cyan); box-shadow:0 0 7px var(--cyan); }
+.crosshair:before,.crosshair:after { top:20px; width:42px; height:1px; }.crosshair:before { left:-21px; }.crosshair:after { right:-21px; }
+.crosshair i:before,.crosshair i:after { left:20px; height:42px; width:1px; }.crosshair i:before { top:-21px; }.crosshair i:after { bottom:-21px; }
+.crosshair span { position:absolute; inset:15px; border:1px solid var(--cyan); border-radius:50%; }.crosshair b { position:absolute; left:20px; top:20px; width:3px; height:3px; background:var(--orange); border-radius:50%; }
+.throttle { left:34px; bottom:52px; display:flex; align-items:center; gap:12px; }.throttle-bar { width:110px; height:4px; background:rgba(176,215,228,.2); transform:skew(-25deg); }.throttle-bar i { display:block; height:100%; width:55%; background:var(--orange); box-shadow:0 0 10px var(--orange); }
+.bottom-tip { position:absolute; z-index:2; bottom:27px; left:50%; transform:translateX(-50%); color:rgba(210,239,247,.55); font-size:9px; letter-spacing:.15em; white-space:nowrap; }.bottom-tip span { color:var(--orange); padding:0 10px; }
+.overlay { position:absolute; z-index:5; inset:0; display:grid; place-items:center; background:rgba(3,9,18,.38); opacity:0; visibility:hidden; transition:.35s ease; backdrop-filter:blur(4px); }.overlay.visible { opacity:1; visibility:visible; }
+.panel { width:min(560px, calc(100% - 36px)); padding:58px 62px; border:1px solid rgba(131,221,246,.3); background:linear-gradient(145deg, rgba(11,31,51,.94), rgba(5,15,28,.9)); box-shadow:0 25px 90px rgba(0,0,0,.5), inset 0 0 60px rgba(55,177,218,.04); clip-path:polygon(0 0, 96% 0, 100% 7%, 100% 100%, 4% 100%, 0 93%); }
+.eyebrow { color:var(--cyan); font-size:10px; letter-spacing:.24em; font-weight:700; }.panel h1,.panel h2 { margin:12px 0 18px; font-family:'Barlow Condensed'; line-height:.78; letter-spacing:.04em; font-size:88px; font-weight:700; }.panel h1 em { color:var(--orange); font-style:normal; }.panel h2 { font-size:54px; line-height:.9; }.panel p { max-width:390px; color:#a9c1cd; line-height:1.7; font-size:13px; }
+.primary-button { margin-top:22px; border:0; padding:15px 22px; color:#061320; background:var(--cyan); font:700 12px 'Space Grotesk'; letter-spacing:.16em; cursor:pointer; transition:.2s; box-shadow:0 0 25px rgba(125,232,255,.2); }.primary-button span { margin-left:28px; font-size:18px; }.primary-button:hover { transform:translateY(-2px); background:#d8f9ff; box-shadow:0 0 35px rgba(125,232,255,.45); }
+.controls-hint { margin-top:30px; color:#87a7b7; font-size:10px; letter-spacing:.08em; line-height:2.6; }.controls-hint kbd { margin:0 4px 0 10px; padding:4px 7px; border:1px solid rgba(160,218,238,.3); color:var(--ink); font:600 10px 'Space Grotesk'; background:rgba(255,255,255,.04); }.controls-hint kbd:first-child { margin-left:0; }
+.result-panel { text-align:center; }.result-panel p { margin:0 auto; }.result-score { margin:28px auto 3px; padding:16px 0; border-top:1px solid rgba(160,218,238,.2); border-bottom:1px solid rgba(160,218,238,.2); }.result-score span { color:var(--muted); font-size:10px; letter-spacing:.2em; }.result-score strong { display:block; margin-top:2px; color:var(--orange); font:700 60px 'Barlow Condensed'; letter-spacing:.05em; }
+@media (max-width:650px) { .top-hud { top:17px; left:17px; right:17px; gap:10px; }.brand { font-size:10px; }.stat { min-width:60px; padding-left:8px; }.stat strong { font-size:18px; }.altitude-card { left:17px; top:82px; }.heading-card { right:17px; top:82px; }.bottom-tip { display:none; }.panel { padding:40px 30px; }.panel h1 { font-size:70px; }.panel h2 { font-size:42px; } }

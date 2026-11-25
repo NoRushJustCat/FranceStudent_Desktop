@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Échecs 2D - Antigravity Natif</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0b1120;
+      color: #e2e8f0;
+      font-family: system-ui, -apple-system, sans-serif;
+      padding: 16px;
+    }
+    .app {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      background: #111827;
+      border: 1px solid #1e293b;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+    }
+    .bar {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .status { font-weight: 700; font-size: 15px; color: #93c5fd; }
+    button {
+      background: #2563eb;
+      color: #fff;
+      border: 0;
+      border-radius: 8px;
+      padding: 7px 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(8, 56px);
+      grid-template-rows: repeat(8, 56px);
+      border: 3px solid #334155;
+      border-radius: 6px;
+      overflow: hidden;
+      user-select: none;
+    }
+    .sq {
+      display: grid;
+      place-items: center;
+      font-size: 36px;
+      cursor: pointer;
+      position: relative;
+    }
+    .sq.light { background: #dbeafe; color: #0f172a; }
+    .sq.dark { background: #3b82f6; color: #0f172a; }
+    .sq.sel { outline: 3px solid #f59e0b; outline-offset: -3px; }
+    .sq.hint::after {
+      content: "";
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: rgba(15, 23, 42, .45);
+      position: absolute;
+    }
+    .sq.cap { box-shadow: inset 0 0 0 4px #ef4444; }
+    .captured { font-size: 13px; color: #94a3b8; min-height: 20px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="bar">
+      <div class="status" id="status">Tour : Blancs</div>
+      <button id="resetBtn">Nouvelle partie</button>
+    </div>
+    <div class="board" id="board"></div>
+    <div class="captured" id="captured"></div>
+  </div>
+  <script>
+    const GLYPH = {
+      wK:'♔', wQ:'♕', wR:'♖', wB:'♗', wN:'♘', wP:'♙',
+      bK:'♚', bQ:'♛', bR:'♜', bB:'♝', bN:'♞', bP:'♟'
+    };
+    const INIT = [
+      ['bR','bN','bB','bQ','bK','bB','bN','bR'],
+      ['bP','bP','bP','bP','bP','bP','bP','bP'],
+      [null,null,null,null,null,null,null,null],
+      [null,null,null,null,null,null,null,null],
+      [null,null,null,null,null,null,null,null],
+      [null,null,null,null,null,null,null,null],
+      ['wP','wP','wP','wP','wP','wP','wP','wP'],
+      ['wR','wN','wB','wQ','wK','wB','wN','wR']
+    ];
+    let grid, turn, sel, legal, caps;
+    const boardEl = document.getElementById('board');
+    const statusEl = document.getElementById('status');
+    const capEl = document.getElementById('captured');
+
+    function reset() {
+      grid = INIT.map(r => r.slice());
+      turn = 'w';
+      sel = null;
+      legal = [];
+      caps = [];
+      draw();
+    }
+
+    function inside(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
+    function colorOf(p) { return p ? p[0] : null; }
+
+    function movesFor(r, c) {
+      const p = grid[r][c];
+      if (!p) return [];
+      const me = p[0], t = p[1], out = [];
+      const pushRay = (dr, dc) => {
+        for (let nr = r + dr, nc = c + dc; inside(nr, nc); nr += dr, nc += dc) {
+          const hit = grid[nr][nc];
+          if (!hit) out.push([nr, nc]);
+          else { if (colorOf(hit) !== me) out.push([nr, nc]); break; }
+        }
+      };
+      if (t === 'P') {
+        const dir = me === 'w' ? -1 : 1;
+        const start = me === 'w' ? 6 : 1;
+        if (inside(r + dir, c) && !grid[r + dir][c]) {
+          out.push([r + dir, c]);
+          if (r === start && !grid[r + 2 * dir][c]) out.push([r + 2 * dir, c]);
+        }
+        for (const dc of [-1, 1]) {
+          const nr = r + dir, nc = c + dc;
+          if (inside(nr, nc) && grid[nr][nc] && colorOf(grid[nr][nc]) !== me) out.push([nr, nc]);
+        }
+      } else if (t === 'N') {
+        for (const [dr, dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]) {
+          const nr = r + dr, nc = c + dc;
+          if (inside(nr, nc) && colorOf(grid[nr][nc]) !== me) out.push([nr, nc]);
+        }
+      } else if (t === 'B') {
+        [[-1,-1],[-1,1],[1,-1],[1,1]].forEach(([a,b]) => pushRay(a,b));
+      } else if (t === 'R') {
+        [[-1,0],[1,0],[0,-1],[0,1]].forEach(([a,b]) => pushRay(a,b));
+      } else if (t === 'Q') {
+        [[-1,-1],[-1,1],[1,-1],[1,1],[-1,0],[1,0],[0,-1],[0,1]].forEach(([a,b]) => pushRay(a,b));
+      } else if (t === 'K') {
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+          if (!dr && !dc) continue;
+          const nr = r + dr, nc = c + dc;
+          if (inside(nr, nc) && colorOf(grid[nr][nc]) !== me) out.push([nr, nc]);
+        }
+      }
+      return out;
+    }
+
+    function clickSq(r, c) {
+      const m = legal.find(([mr, mc]) => mr === r && mc === c);
+      if (sel && m) {
+        const [sr, sc] = sel;
+        if (grid[r][c]) caps.push(GLYPH[grid[r][c]]);
+        grid[r][c] = grid[sr][sc];
+        grid[sr][sc] = null;
+        if (grid[r][c] === 'wP' && r === 0) grid[r][c] = 'wQ';
+        if (grid[r][c] === 'bP' && r === 7) grid[r][c] = 'bQ';
+        turn = turn === 'w' ? 'b' : 'w';
+        sel = null; legal = [];
+        draw();
+        return;
+      }
+      if (grid[r][c] && colorOf(grid[r][c]) === turn) {
+        sel = [r, c];
+        legal = movesFor(r, c);
+      } else {
+        sel = null; legal = [];
+      }
+      draw();
+    }
+
+    function draw() {
+      boardEl.innerHTML = '';
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        const d = document.createElement('div');
+        d.className = 'sq ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
+        if (sel && sel[0] === r && sel[1] === c) d.classList.add('sel');
+        if (legal.some(([mr, mc]) => mr === r && mc === c)) {
+          d.classList.add(grid[r][c] ? 'cap' : 'hint');
+        }
+        d.textContent = grid[r][c] ? GLYPH[grid[r][c]] : '';
+        d.onclick = () => clickSq(r, c);
+        boardEl.appendChild(d);
+      }
+      statusEl.textContent = 'Tour : ' + (turn === 'w' ? 'Blancs' : 'Noirs');
+      capEl.textContent = caps.length ? 'Prises : ' + caps.join(' ') : '';
+    }
+
+    document.getElementById('resetBtn').onclick = reset;
+    reset();
+  </script>
+</body>
+</html>

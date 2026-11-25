@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Calculatrice 3D - France Student (Plan B)</title>
+  <style>
+:root {
+  --bg-1: #050a16;
+  --bg-2: #0b1530;
+  --body-1: #1c2a45;
+  --body-2: #101a2f;
+  --body-edge: #070d1b;
+  --steel-1: #8fa3c0;
+  --steel-2: #5d708f;
+  --key-1: #2b3d5e;
+  --key-2: #1b2842;
+  --key-edge: #0a1224;
+  --key-text: #eaf1ff;
+  --op-1: #3a6ea8;
+  --op-2: #254b7a;
+  --op-edge: #0d2342;
+  --fn-1: #55657f;
+  --fn-2: #3a475e;
+  --fn-edge: #151d2c;
+  --eq-1: #4fb2ff;
+  --eq-2: #1f7fd6;
+  --eq-edge: #0a3d70;
+  --lcd-bg-1: #b9d4c2;
+  --lcd-bg-2: #8fb09e;
+  --lcd-ink: #0c1f19;
+  --lcd-ink-soft: rgba(12, 31, 25, 0.62);
+  --gap: clamp(8px, 2.2vw, 12px);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--key-text);
+  background:
+    radial-gradient(ellipse at 50% 0%, #17306a 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 100%, #0a1a3a 0%, transparent 55%),
+    linear-gradient(160deg, var(--bg-2), var(--bg-1));
+  background-attachment: fixed;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- Scene 3D ---------- */
+.calc-stage {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: clamp(16px, 4vw, 40px);
+  perspective: 1100px;
+  perspective-origin: 50% 40%;
+  overflow: hidden;
+}
+
+.calc-3d {
+  position: relative;
+  width: min(360px, 92vw);
+  padding: clamp(14px, 4vw, 22px);
+  border-radius: 28px;
+  transform-style: preserve-3d;
+  transform: rotateX(14deg) rotateY(-14deg) rotateZ(0.5deg);
+  transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.09), transparent 35%),
+    linear-gradient(160deg, var(--body-1), var(--body-2));
+  border: 1px solid rgba(143, 163, 192, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -2px 6px rgba(0, 0, 0, 0.5),
+    /* epaisseur du boitier */
+    1px 1px 0 var(--steel-2),
+    2px 2px 0 #3f5071,
+    3px 3px 0 #2a3855,
+    4px 4px 0 #1d2842,
+    5px 5px 0 #141d33,
+    6px 6px 0 var(--body-edge),
+    /* ombre portee */
+    18px 26px 40px rgba(0, 0, 0, 0.55),
+    40px 60px 90px rgba(0, 0, 0, 0.45);
+}
+
+.calc-3d:hover,
+.calc-3d:focus-within {
+  transform: rotateX(6deg) rotateY(-6deg) rotateZ(0deg);
+}
+
+/* ombre au sol */
+.calc-3d::before {
+  content: "";
+  position: absolute;
+  inset: 8% 4% -6%;
+  border-radius: 40px;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.7), transparent 70%);
+  filter: blur(26px);
+  transform: translateZ(-90px) translateY(40px);
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* reflet acier sur le haut */
+.calc-3d::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(115deg, rgba(255, 255, 255, 0.12) 0%, transparent 28%, transparent 70%, rgba(143, 163, 192, 0.08) 100%);
+  pointer-events: none;
+  transform: translateZ(1px);
+}
+
+/* ---------- Ecran LCD ---------- */
+.calc-3d .screen,
+.calc-3d .lcd,
+.calc-3d .display-wrap {
+  position: relative;
+  margin-bottom: clamp(14px, 4vw, 20px);
+}
+
+#expr,
+#display {
+  display: block;
+  width: 100%;
+  text-align: right;
+  font-family: "DSEG7 Classic", "Share Tech Mono", "Consolas", "Courier New", ui-monospace, monospace;
+  color: var(--lcd-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+#expr {
+  min-height: 1.6em;
+  padding: 10px 14px 0;
+  font-size: clamp(0.8rem, 3.2vw, 0.95rem);
+  letter-spacing: 0.06em;
+  color: var(--lcd-ink-soft);
+  border-radius: 12px 12px 0 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.035) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, var(--lcd-bg-1), #aecbb8);
+  box-shadow:
+    inset 0 3px 6px rgba(0, 0, 0, 0.35),
+    inset 3px 0 6px rgba(0, 0, 0, 0.2);
+  transform: translateZ(4px);
+}
+
+#display {
+  min-height: 1.4em;
+  padding: 2px 14px 10px;
+  font-size: clamp(1.8rem, 9vw, 2.6rem);
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.04em;
+  text-shadow: 1px 1px 0 rgba(255, 255, 255, 0.25), 2px 2px 3px rgba(12, 31, 25, 0.25);
+  border-radius: 0 0 12px 12px;
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.035) 0 1px, transparent 1px 3px),
+    linear-gradient(180deg, #aecbb8, var(--lcd-bg-2));
+  box-shadow:
+    inset 0 -2px 6px rgba(0, 0, 0, 0.3),
+    inset 3px 0 6px rgba(0, 0, 0, 0.2),
+    0 0 0 3px #0a1222,
+    0 0 0 4px rgba(143, 163, 192, 0.35),
+    0 2px 0 4px #060b17;
+  transform: translateZ(4px);
+}
+
+/* ---------- Grille de touches ---------- */
+.calc-3d .keys,
+.calc-3d .keypad,
+.calc-3d .buttons {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--gap);
+  transform-style: preserve-3d;
+}
+
+/* ---------- Touches ---------- */
+.key {
+  --k1: var(--key-1);
+  --k2: var(--key-2);
+  --kedge: var(--key-edge);
+  --depth: 7px;
+
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
+  display: grid;
+  place-items: center;
+  min-height: clamp(48px, 14vw, 62px);
+  padding: 0;
+  font: inherit;
+  font-size: clamp(1.05rem, 4.6vw, 1.35rem);
+  font-weight: 600;
+  color: var(--key-text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  cursor: pointer;
+  user-select: none;
+  touch-action: manipulation;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 45%),
+    linear-gradient(160deg, var(--k1), var(--k2));
+  transform: translateZ(14px);
+  transform-style: preserve-3d;
+  transition:
+    transform 0.09s ease-out,
+    box-shadow 0.09s ease-out,
+    filter 0.15s ease;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+    0 1px 0 var(--kedge),
+    0 2px 0 var(--kedge),
+    0 3px 0 var(--kedge),
+    0 4px 0 var(--kedge),
+    0 5px 0 var(--kedge),
+    0 var(--depth) 0 var(--kedge),
+    0 calc(var(--depth) + 6px) 12px rgba(0, 0, 0, 0.55);
+}
+
+.key:hover {
+  filter: brightness(1.15);
+  transform: translateZ(18px);
+}
+
+.key:active,
+.key.is-pressed {
+  transform: translateZ(4px) translateY(5px);
+  filter: brightness(0.95);
+  transition-duration: 0.04s;
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.5),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+    0 1px 0 var(--kedge),
+    0 2px 3px rgba(0, 0, 0, 0.5);
+}
+
+.key:focus-visible {
+  outline: 2px solid #8fd0ff;
+  outline-offset: 3px;
+}
+
+/* variantes */
+.key.op,
+.key.operator,
+.key[data-type="op"] {
+  --k1: var(--op-1);
+  --k2: var(--op-2);
+  --kedge: var(--op-edge);
+  font-size: clamp(1.2rem, 5vw, 1.5rem);
+}
+
+.key.fn,
+.key.func,
+.key.clear,
+.key[data-type="fn"] {
+  --k1: var(--fn-1);
+  --k2: var(--fn-2);
+  --kedge: var(--fn-edge);
+  font-size: clamp(0.95rem, 4vw, 1.15rem);
+}
+
+.key.eq,
+.key.equal,
+.key[data-type="eq"] {
+  --k1: var(--eq-1);
+  --k2: var(--eq-2);
+  --kedge: var(--eq-edge);
+  color: #04101f;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.25),
+    0 1px 0 var(--kedge),
+    0 2px 0 var(--kedge),
+    0 3px 0 var(--kedge),
+    0 4px 0 var(--kedge),
+    0 5px 0 var(--kedge),
+    0 var(--depth) 0 var(--kedge),
+    0 calc(var(--depth) + 6px) 14px rgba(0, 0, 0, 0.55),
+    0 0 18px rgba(79, 178, 255, 0.35);
+}
+
+.key.eq:active,
+.key.equal:active,
+.key[data-type="eq"]:active {
+  box-shadow:
+    inset 0 2px 6px rgba(0, 0, 0, 0.4),
+    0 1px 0 var(--kedge),
+    0 2px 3px rgba(0, 0, 0, 0.5),
+    0 0 12px rgba(79, 178, 255, 0.5);
+}
+
+.key.zero,
+.key.wide,
+.key.span-2 {
+  grid-column: span 2;
+}
+
+.key.tall,
+.key.span-v {
+  grid-row: span 2;
+  min-height: auto;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 480px) {
+  .calc-3d {
+    transform: rotateX(8deg) rotateY(-6deg);
+    border-radius: 22px;
+  }
+  .calc-3d:hover,
+  .calc-3d:focus-within {
+    transform: rotateX(3deg) rotateY(-3deg);
+  }
+  .key {
+    --depth: 5px;
+    border-radius: 12px;
+  }
+}
+
+@media (max-width: 340px) {
+  .calc-3d .keys,
+  .calc-3d .keypad,
+  .calc-3d .buttons {
+    gap: 6px;
+  }
+}
+
+@media (max-height: 640px) and (orientation: landscape) {
+  .calc-stage {
+    align-items: start;
+  }
+  .calc-3d {
+    width: min(320px, 70vw);
+    transform: rotateX(4deg) rotateY(-6deg);
+  }
+  .key {
+    min-height: 40px;
+  }
+}
+
+@media (hover: none) {
+  .key:hover {
+    filter: none;
+    transform: translateZ(14px);
+  }
+  .key:active {
+    transform: translateZ(4px) translateY(5px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .calc-3d,
+  .key {
+    transition: none;
+  }
+}
+  </style>
+</head>
+<body>
+<section class="calc-stage" aria-label="Calculatrice scientifique 3D">
+  <div class="calc-3d">
+    <div class="lcd" role="group" aria-label="Écran LCD">
+      <div id="expr" aria-label="Expression"></div>
+      <output id="display" aria-label="Résultat" aria-live="polite" aria-atomic="true">0</output>
+    </div>
+
+    <div class="keypad" role="group" aria-label="Clavier de la calculatrice">
+      <button type="button" class="key" data-val="C" aria-label="Tout effacer">C</button>
+      <button type="button" class="key" data-val="+/-" aria-label="Changer le signe">±</button>
+      <button type="button" class="key" data-val="%" aria-label="Pourcentage">%</button>
+      <button type="button" class="key" data-val="/" aria-label="Diviser">÷</button>
+
+      <button type="button" class="key" data-val="7">7</button>
+      <button type="button" class="key" data-val="8">8</button>
+      <button type="button" class="key" data-val="9">9</button>
+      <button type="button" class="key" data-val="*" aria-label="Multiplier">×</button>
+
+      <button type="button" class="key" data-val="4">4</button>
+      <button type="button" class="key" data-val="5">5</button>
+      <button type="button" class="key" data-val="6">6</button>
+      <button type="button" class="key" data-val="-" aria-label="Soustraire">−</button>
+
+      <button type="button" class="key" data-val="1">1</button>
+      <button type="button" class="key" data-val="2">2</button>
+      <button type="button" class="key" data-val="3">3</button>
+      <button type="button" class="key" data-val="+" aria-label="Additionner">+</button>
+
+      <button type="button" class="key" data-val="0">0</button>
+      <button type="button" class="key" data-val="." aria-label="Point décimal">.</button>
+      <button type="button" class="key" data-val="=" aria-label="Calculer">=</button>
+    </div>
+
+    <div class="tilt-controls" role="group" aria-label="Rotation 3D">
+      <button type="button" id="tiltLeft">Pivoter à gauche</button>
+      <button type="button" id="tiltRight">Pivoter à droite</button>
+      <button type="button" id="tiltReset">Réinitialiser la rotation</button>
+    </div>
+
+    <p>Historique : <span id="history">Aucun calcul</span></p>
+  </div>
+</section>
+  <script>
+(() => {
+  "use strict";
+
+  function init() {
+    // ---------- Éléments ----------
+    const stage = document.querySelector(".calc-stage");
+    const calc3d = document.querySelector(".calc-3d");
+    const exprEl = document.getElementById("expr");
+    const displayEl = document.getElementById("display");
+    const historyEl = document.getElementById("history");
+    const keys = document.querySelectorAll(".key[data-val]");
+
+    // =====================================================
+    //  PARTIE 1 : MOTEUR DE CALCUL (sans eval / Function)
+    // =====================================================
+
+    const MAX_DIGITS = 15;
+    const MAX_HISTORY = 3;
+    const OP_SYMBOLS = { "+": "+", "-": "−", "*": "×", "/": "÷" };
+    const OPERATORS = ["+", "-", "*", "/"];
+
+    const state = {
+      tokens: [],      // ex: ["12", "+", "3", "*"]
+      current: "0",    // saisie courante ("" = on attend un nombre après un opérateur)
+      fresh: false,    // true : le prochain chiffre remplace la valeur courante
+      error: false,
+      doneExpr: "",    // expression du dernier calcul (affichée après "=")
+      history: []
+    };
+
+    function resetState() {
+      state.tokens = [];
+      state.current = "0";
+      state.fresh = false;
+      state.error = false;
+      state.doneExpr = "";
+    }
+
+    // Parseur à descente récursive :
+    //   expr   := term (('+' | '-') term)*
+    //   term   := factor (('*' | '/') factor)*
+    //   factor := ('-' | '+') factor | nombre
+    function evaluate(tokens) {
+      let pos = 0;
+
+      function parseFactor() {
+        const t = tokens[pos++];
+        if (t === undefined) throw new Error("SYNTAX");
+        if (t === "-") return -parseFactor();
+        if (t === "+") return parseFactor();
+        const n = parseFloat(t);
+        if (Number.isNaN(n)) throw new Error("SYNTAX");
+        return n;
+      }
+
+      function parseTerm() {
+        let value = parseFactor();
+        while (tokens[pos] === "*" || tokens[pos] === "/") {
+          const op = tokens[pos++];
+          const right = parseFactor();
+          if (op === "/") {
+            if (right === 0) throw new Error("DIV0");
+            value = value / right;
+          } else {
+            value = value * right;
+          }
+        }
+        return value;
+      }
+
+      function parseExpr() {
+        let value = parseTerm();
+        while (tokens[pos] === "+" || tokens[pos] === "-") {
+          const op = tokens[pos++];
+          const right = parseTerm();
+          value = op === "+" ? value + right : value - right;
+        }
+        return value;
+      }
+
+      const result = parseExpr();
+      if (pos !== tokens.length) throw new Error("SYNTAX");
+      if (!Number.isFinite(result)) throw new Error("OVERFLOW");
+      return result;
+    }
+
+    // Évite les erreurs de flottants (0.1 + 0.2 => 0.3)
+    function formatNumber(n) {
+      const cleaned = parseFloat(n.toPrecision(12));
+      return String(cleaned === 0 ? 0 : cleaned);
+    }
+
+    // Affichage avec séparateur de milliers (purement visuel)
+    function prettify(str) {
+      if (/e/i.test(str)) return str;
+      const negative = str.startsWith("-");
+      const raw = negative ? str.slice(1) : str;
+      const [intPart, decPart] = raw.split(".");
+      const spaced = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, "\u202F");
+      return (negative ? "-" : "") + spaced + (decPart !== undefined ? "." + decPart : "");
+    }
+
+    function exprToString(tokens) {
+      return tokens
+        .map((t) => (OP_SYMBOLS[t] && OPERATORS.includes(t) ? OP_SYMBOLS[t] : prettify(t)))
+        .join(" ");
+    }
+
+    function pushHistory(entry) {
+      state.history.unshift(entry);
+      if (state.history.length > MAX_HISTORY) state.history.pop();
+    }
+
+    // ---------- Rendu ----------
+    function render() {
+      if (state.error) {
+        exprEl && (exprEl.textContent = "");
+        displayEl && (displayEl.textContent = "Erreur");
+      } else {
+        let exprText = "";
+        if (state.tokens.length) {
+          exprText = exprToString(state.tokens);
+        } else if (state.fresh && state.doneExpr) {
+          exprText = state.doneExpr;
+        }
+        let shown = state.current;
+        if (shown === "") {
+          // on attend le 2e opérande : on garde visible le dernier nombre
+          shown = state.tokens[state.tokens.length - 2] || "0";
+        }
+        exprEl && (exprEl.textContent = exprText);
+        displayEl && (displayEl.textContent = prettify(shown));
+      }
+
+      if (historyEl) {
+        historyEl.textContent = "";
+        state.history.forEach((line) => {
+          const div = document.createElement("div");
+          div.textContent = line;
+          historyEl.appendChild(div);
+        });
+      }
+    }
+
+    // ---------- Actions ----------
+    function inputDigit(d) {
+      if (state.fresh) {
+        state.current = "0";
+        state.fresh = false;
+      }
+      if (state.current === "") state.current = "0";
+      const digitsCount = state.current.replace(/[^0-9]/g, "").length;
+      if (digitsCount >= MAX_DIGITS) return;
+      if (state.current === "0") state.current = d;
+      else if (state.current === "-0") state.current = "-" + d;
+      else state.current += d;
+    }
+
+    function inputDot() {
+      if (state.fresh) {
+        state.current = "0";
+        state.fresh = false;
+      }
+      if (state.current === "") state.current = "0";
+      if (!state.current.includes(".")) state.current += ".";
+    }
+
+    function inputOperator(op) {
+      state.doneExpr = "";
+      if (state.current === "") {
+        // opérateur déjà présent : on le remplace
+        state.tokens[state.tokens.length - 1] = op;
+      } else {
+        state.tokens.push(state.current, op);
+        state.current = "";
+      }
+      state.fresh = false;
+    }
+
+    function toggleSign() {
+      if (state.current === "") {
+        state.current = "-0";
+        return;
+      }
+      state.current = state.current.startsWith("-")
+        ? state.current.slice(1)
+        : "-" + state.current;
+    }
+
+    function percent() {
+      if (state.current === "") return;
+      const value = parseFloat(state.current);
+      if (Number.isNaN(value)) return;
+      state.current = formatNumber(value / 100);
+      state.fresh = true;
+    }
+
+    function backspace() {
+      if (state.fresh && state.tokens.length === 0) {
+        // résultat déjà calculé : on ne l'édite pas caractère par caractère
+        if (/e/i.test(state.current)) state.current = "0";
+        state.fresh = false;
+      }
+      if (state.current === "") {
+        // on supprime l'opérateur et on reprend l'édition du nombre précédent
+        state.tokens.pop();
+        state.current = state.tokens.pop() || "0";
+        return;
+      }
+      state.current = state.current.slice(0, -1);
+      if (state.current === "" || state.current === "-") state.current = "0";
+    }
+
+    function equals() {
+      if (state.tokens.length === 0) return; // rien à calculer
+      const tokens = state.tokens.slice();
+      if (state.current !== "") tokens.push(state.current);
+      else tokens.pop(); // opérateur final sans opérande : on l'ignore
+
+      try {
+        const result = formatNumber(evaluate(tokens));
+        const exprText = exprToString(tokens) + " =";
+        pushHistory(exprText + " " + prettify(result));
+        state.doneExpr = exprText;
+        state.tokens = [];
+        state.current = result;
+        state.fresh = true;
+      } catch (e) {
+        state.error = true;
+        state.tokens = [];
+        state.current = "0";
+        state.fresh = false;
+        state.doneExpr = "";
+      }
+    }
+
+    function handle(val) {
+      if (state.error) {
+        resetState();
+        if (val === "C") { render(); return; }
+        if (!/^[0-9.]$/.test(val)) { render(); return; }
+      }
+
+      if (/^[0-9]$/.test(val)) inputDigit(val);
+      else if (val === ".") inputDot();
+      else if (OPERATORS.includes(val)) inputOperator(val);
+      else if (val === "=") equals();
+      else if (val === "C") resetState();
+      else if (val === "+/-") toggleSign();
+      else if (val === "%") percent();
+      else if (val === "BACKSPACE") backspace();
+
+      render();
+    }
+
+    // ---------- Effet visuel .is-pressed ----------
+    const pressTimers = new WeakMap();
+    function flashKey(btn) {
+      if (!btn) return;
+      btn.classList.add("is-pressed");
+      clearTimeout(pressTimers.get(btn));
+      pressTimers.set(btn, setTimeout(() => btn.classList.remove("is-pressed"), 150));
+    }
+    function findKey(val) {
+      for (const k of keys) if (k.dataset.val === val) return k;
+      return null;
+    }
+
+    // ---------- Clics sur les touches ----------
+    keys.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        flashKey(btn);
+        handle(btn.dataset.val);
+      });
+    });
+
+    // ---------- Clavier ----------
+    document.addEventListener("keydown", (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      let val = null;
+      const k = e.key;
+
+      if (/^[0-9]$/.test(k)) val = k;
+      else if (k === "." || k === ",") val = ".";
+      else if (OPERATORS.includes(k)) val = k;
+      else if (k === "%") val = "%";
+      else if (k === "Enter" || k === "=") val = "=";
+      else if (k === "Backspace") val = "BACKSPACE";
+      else if (k === "Escape" || k === "c" || k === "C") val = "C";
+
+      if (val === null) return;
+      e.preventDefault(); // évite le double déclenchement d'un bouton focalisé
+      if (val !== "BACKSPACE") flashKey(findKey(val));
+      handle(val);
+    });
+
+    // =====================================================
+    //  PARTIE 2 : INCLINAISON 3D
+    // =====================================================
+
+    const TILT_STEP = 12;     // degrés par clic sur #tiltLeft / #tiltRight
+    const MOUSE_MAX = 10;     // inclinaison max liée à la souris
+    const LERP = 0.12;        // fluidité (0 à 1)
+
+    if (stage && calc3d) {
+      if (getComputedStyle(stage).perspective === "none") {
+        stage.style.perspective = "1200px";
+      }
+      calc3d.style.transformStyle = "preserve-3d";
+
+      // Lecture de l'angle initial défini en CSS (rotateX puis rotateY), sinon 0
+      let initX = 0;
+      let initY = 0;
+      try {
+        const t = getComputedStyle(calc3d).transform;
+        if (t && t !== "none") {
+          const m = new DOMMatrixReadOnly(t);
+          const clamp = (v) => Math.max(-1, Math.min(1, v));
+          initY = (Math.asin(clamp(m.m13)) * 180) / Math.PI;
+          initX = (Math.atan2(m.m32, m.m22) * 180) / Math.PI;
+          if (!Number.isFinite(initX)) initX = 0;
+          if (!Number.isFinite(initY)) initY = 0;
+        }
+      } catch (err) {
+        initX = 0;
+        initY = 0;
+      }
+
+      let baseX = initX, baseY = initY;   // angle "de base" (boutons)
+      let mouseX = 0, mouseY = 0;         // décalage dû à la souris
+      let curX = initX, curY = initY;     // angle réellement appliqué
+      let rafId = null;
+
+      // On pilote la transition nous-mêmes pour un rendu fluide
+      calc3d.style.transition = "none";
+      calc3d.style.willChange = "transform";
+
+      function applyTransform() {
+        calc3d.style.transform = `rotateX(${curX.toFixed(2)}deg) rotateY(${curY.toFixed(2)}deg)`;
+      }
+
+      function animate() {
+        const targetX = baseX + mouseX;
+        const targetY = baseY + mouseY;
+        curX += (targetX - curX) * LERP;
+        curY += (targetY - curY) * LERP;
+        applyTransform();
+        if (Math.abs(targetX - curX) > 0.02 || Math.abs(targetY - curY) > 0.02) {
+          rafId = requestAnimationFrame(animate);
+        } else {
+          curX = targetX;
+          curY = targetY;
+          applyTransform();
+          rafId = null;
+        }
+      }
+
+      function requestAnimation() {
+        if (rafId === null) rafId = requestAnimationFrame(animate);
+      }
+
+      stage.addEventListener("mousemove", (e) => {
+        const rect = stage.getBoundingClientRect();
+        const px = (e.clientX - rect.left) / rect.width - 0.5;   // -0.5 à 0.5
+        const py = (e.clientY - rect.top) / rect.height - 0.5;
+        mouseY = px * 2 * MOUSE_MAX;
+        mouseX = -py * 2 * MOUSE_MAX;
+        requestAnimation();
+      });
+
+      stage.addEventListener("mouseleave", () => {
+        mouseX = 0;
+        mouseY = 0;
+        requestAnimation();
+      });
+
+      document.getElementById("tiltLeft")?.addEventListener("click", () => {
+        baseY -= TILT_STEP;
+        requestAnimation();
+      });
+
+      document.getElementById("tiltRight")?.addEventListener("click", () => {
+        baseY += TILT_STEP;
+        requestAnimation();
+      });
+
+      document.getElementById("tiltReset")?.addEventListener("click", () => {
+        baseX = initX;
+        baseY = initY;
+        mouseX = 0;
+        mouseY = 0;
+        requestAnimation();
+      });
+
+      applyTransform();
+    }
+
+    // Premier rendu
+    render();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+  </script>
+</body>
+</html>
