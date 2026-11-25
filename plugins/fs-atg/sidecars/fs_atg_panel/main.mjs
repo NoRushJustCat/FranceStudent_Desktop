@@ -674,7 +674,10 @@ function pump() {
 
 const app = new SidecarApp();
 
-app.page('/', () => readFileSync(join(__dirname, 'index.html'), 'utf-8'));
+app.page('/', () => new Response(readFileSync(join(__dirname, 'index.html'), 'utf-8'), {
+  contentType: 'text/html; charset=utf-8',
+  headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+}));
 app.page('/favicon.ico', () => new Response(readFileSync(join(__dirname, 'favicon.ico')), { contentType: 'image/x-icon' }));
 
 app.api('/api/state', async () => {
