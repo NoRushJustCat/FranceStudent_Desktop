@@ -613,6 +613,63 @@ impl Conn {
     }
 }
 
+const MAX_TOOL_DESC_CHARS: usize = 220;
+const MAX_PARAM_DESC_CHARS: usize = 110;
+
+/// Compacte une description MCP (espaces/retours à la ligne multiples + plafond de caractères)
+/// afin d'économiser des tokens de contexte à chaque tour LLM.
+fn compact_description(raw: &str, max_chars: usize) -> String {
+    let mut out = String::with_capacity(raw.len().min(max_chars + 4));
+    let mut prev_ws = false;
+    for ch in raw.trim().chars() {
+        if ch.is_whitespace() {
+            if !prev_ws {
+                out.push(' ');
+                prev_ws = true;
+            }
+        } else {
+            out.push(ch);
+            prev_ws = false;
+        }
+    }
+    if out.chars().count() <= max_chars {
+        return out;
+    }
+    let clipped: String = out.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{}…", clipped.trim_end())
+}
+
+/// Allège un JSON Schema d'outil MCP : retire les métadonnées sans valeur pour le modèle
+/// (`$schema`, `$id`, `$comment`, `title`, `examples`) et compacte les descriptions de paramètres.
+fn compact_schema(val: &Value) -> Value {
+    match val {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (k, v) in map {
+                if matches!(
+                    k.as_str(),
+                    "$schema" | "$id" | "$comment" | "title" | "examples"
+                ) {
+                    continue;
+                }
+                if k == "description" {
+                    if let Some(s) = v.as_str() {
+                        let c = compact_description(s, MAX_PARAM_DESC_CHARS);
+                        if !c.is_empty() {
+                            out.insert(k.clone(), Value::String(c));
+                        }
+                    }
+                    continue;
+                }
+                out.insert(k.clone(), compact_schema(v));
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => Value::Array(arr.iter().map(compact_schema).collect()),
+        other => other.clone(),
+    }
+}
+
 fn parse_tools(list: &Value, out: &mut Vec<McpTool>) {
     let Some(arr) = list.get("tools").and_then(Value::as_array) else {
         return;
@@ -621,17 +678,18 @@ fn parse_tools(list: &Value, out: &mut Vec<McpTool>) {
         let Some(name) = t.get("name").and_then(Value::as_str) else {
             continue;
         };
+        let raw_desc = t
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let raw_schema = t
+            .get("inputSchema")
+            .cloned()
+            .unwrap_or_else(|| json!({"type": "object", "properties": {}}));
         out.push(McpTool {
             name: name.to_string(),
-            description: t
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            input_schema: t
-                .get("inputSchema")
-                .cloned()
-                .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+            description: compact_description(raw_desc, MAX_TOOL_DESC_CHARS),
+            input_schema: compact_schema(&raw_schema),
             read_only: t
                 .pointer("/annotations/readOnlyHint")
                 .and_then(Value::as_bool)
@@ -1045,5 +1103,44 @@ mod tests {
         assert!(c.mcp_servers["c"].is_sse("http://h/events"));
         assert!(!c.mcp_servers["b"].is_sse("http://h/mcp"));
         assert_eq!(c.mcp_servers["b"].endpoint().unwrap().0, "http://h/mcp");
+    }
+
+    #[test]
+    fn compacts_verbose_tool_metadata() {
+        let long_desc = format!("Render video.   \n\n  {}", "x".repeat(400));
+        let payload = json!({
+            "tools": [{
+                "name": "render_video",
+                "description": long_desc,
+                "inputSchema": {
+                    "$schema": "http://json-schema.org/draft-07/schema#",
+                    "title": "RenderVideoArgs",
+                    "type": "object",
+                    "examples": [{"fps": 30}],
+                    "properties": {
+                        "fps": {
+                            "type": "number",
+                            "title": "FPS",
+                            "description": format!("Frames per second {}", "y".repeat(200)),
+                            "enum": [24, 30, 60]
+                        }
+                    },
+                    "required": ["fps"]
+                }
+            }]
+        });
+        let mut out = Vec::new();
+        parse_tools(&payload, &mut out);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].description.chars().count() <= MAX_TOOL_DESC_CHARS);
+        assert!(out[0].description.ends_with('…'));
+        assert!(out[0].input_schema.get("$schema").is_none());
+        assert!(out[0].input_schema.get("title").is_none());
+        assert!(out[0].input_schema.get("examples").is_none());
+        let fps = &out[0].input_schema["properties"]["fps"];
+        assert!(fps.get("title").is_none());
+        assert_eq!(fps["enum"], json!([24, 30, 60]));
+        assert!(fps["description"].as_str().unwrap().chars().count() <= MAX_PARAM_DESC_CHARS);
+        assert_eq!(out[0].input_schema["required"], json!(["fps"]));
     }
 }

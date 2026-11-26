@@ -37,7 +37,7 @@ Il délègue l’exploration, la planification, l’édition atomique de code (`
 - **Computer Use UIA & Vision Live (`Live`)** :
   - Multi-écrans (`screen_info`, `screenshot` avec `screenIndex` / `deviceName`), **Windows UI Automation (`ui_tree` lecture seule, `ui_click` par `name`/`automationId`)**, liste/focus des fenêtres, souris, clavier, presse-papiers.
   - Upload réel via `POST /filesv2` et attachement aux tours `/chats/stream` pour une boucle itérative Antigravity ↔ France Student (`liveComputerMode`).
-- **Outils locaux zéro-dépendance (`fs_fetch`, `fs_doc_read`, `fs_git`)** : lecture web HTML→Markdown protégée SSRF (`web_fetch.mjs`), extraction `.docx`/`.pptx`/`.xlsx`/CSV/HTML native Windows + PDF optionnel (`doc_tools.mjs`), et inspection Git lecture seule (`git_tools.mjs`).
+- **Outils locaux zéro-dépendance (`fs_fetch`, `fs_doc_read`, `fs_git`, `fs_media`)** : lecture web HTML→Markdown protégée SSRF (`web_fetch.mjs`), extraction `.docx`/`.pptx`/`.xlsx`/CSV/HTML native Windows + PDF optionnel (`doc_tools.mjs`), inspection Git lecture seule (`git_tools.mjs`), et outil média unifié (`media_tools.mjs`) pour images natives Windows, export SVG→PNG, montage vidéo FFmpeg et rendu HTML→MP4 **HyperFrames**.
 - **Raisonnement séquentiel (`fs_thinking`)** & **Canvas Live (`fs_canvas`)** : journal de pensée cross-processus (`.fsatg_thinking.json`) et prévisualisation HTML/SVG/Mermaid (une scène 3D reste possible en HTML via une bibliothèque JS).
 - **Authentification robuste** : connexion web via navigateur **Chrome ou Microsoft Edge** en profil persistant (`browser_auth.mjs` via CDP) avec renouvellement automatique de session, migration sécurisée dans le **Gestionnaire d’identification Windows** (`windows_credential_store.ps1`), et clé API manuelle.
 - **Historique étendu (50 tâches)**, télémétrie modèles (tok/s, TTFT, taux de succès, badge `Instable`), et suivi des économies de tokens Antigravity.
@@ -58,6 +58,7 @@ Il délègue l’exploration, la planification, l’édition atomique de code (`
 | `fs_fetch` | Lecture d’URLs publiques HTTP(S) (garde SSRF) et conversion HTML → Markdown |
 | `fs_doc_read` | Lecture de docs Office (`.docx`, `.pptx`, `.xlsx` natifs), CSV, HTML, Markdown et PDF |
 | `fs_git` | Inspection Git lecture seule (`status`, `diff`, `log`, `branch`, `show`) |
+| `fs_media` | Outil média unifié : infos/édition images natives Windows, export SVG→PNG, montage vidéo FFmpeg et rendu HTML→MP4 HyperFrames |
 | `fs_logs` | Consultation des journaux du connecteur |
 | `fs_session` | Gestion et réinitialisation des sessions persistantes par projet |
 | `fs_quota` | Lecture du budget restant, de l’heure de reset et du cooldown global |

@@ -75,6 +75,7 @@ import { THINKING_ACTIONS, executeThinkingAction } from './thinking_tools.mjs';
 import { executeWebFetch } from './web_fetch.mjs';
 import { executeDocRead } from './doc_tools.mjs';
 import { GIT_ACTIONS, executeGitAction } from './git_tools.mjs';
+import { MEDIA_ACTIONS, executeMediaAction } from './media_tools.mjs';
 
 const CLIENT_TOOLS_INSTRUCTIONS = `Utilise directement les outils locaux fournis pour lire et modifier les fichiers demandés, puis termine par un court bilan.`;
 
@@ -1466,6 +1467,83 @@ server.registerTool('fs_git', {
     triggeredCapabilities: { intent: 'git_read' },
   });
   return asCompactText(res);
+});
+
+const MEDIA_ACTION_LABELS = {
+  capabilities: 'Capacités médias locales',
+  image_info: 'Inspection image',
+  image_edit: 'Édition image',
+  svg_export: 'Export SVG / PNG',
+  video_info: 'Inspection vidéo',
+  video_edit: 'Montage vidéo FFmpeg',
+  hyperframes: 'HyperFrames HTML→MP4',
+};
+
+server.registerTool('fs_media', {
+  title: 'Média, Image, SVG, FFmpeg & HyperFrames [ATG]',
+  description: 'Outil média unifié et compact : infos/édition image native Windows (resize/crop/rotate/convert), export SVG→PNG, montage vidéo FFmpeg (clip/convert/frames/9:16/audio) et rendu HTML→MP4 HyperFrames.',
+  inputSchema: {
+    action: z.enum(MEDIA_ACTIONS).default('capabilities').describe('capabilities, image_info, image_edit, svg_export, video_info, video_edit ou hyperframes.'),
+    subAction: z.string().optional().describe('video_edit : clip|convert|frames|reframe_9_16|audio_extract|normalize_audio ; hyperframes : init|render|normalize-audio.'),
+    inputPath: z.string().optional().describe('Fichier source (image ou vidéo).'),
+    path: z.string().optional().describe('Alias de inputPath ou dossier projet HyperFrames.'),
+    outputPath: z.string().optional().describe('Chemin de sortie souhaité.'),
+    projectDir: z.string().optional().describe('Dossier projet pour hyperframes.'),
+    workspaceRoot: z.string().optional().describe('Dossier racine pour chemins relatifs.'),
+    width: z.number().int().min(1).max(8192).optional().describe('Largeur cible en pixels.'),
+    height: z.number().int().min(1).max(8192).optional().describe('Hauteur cible en pixels.'),
+    keepAspect: z.boolean().optional().describe('Conserver le ratio (défaut true).'),
+    rotate: z.number().optional().describe('Rotation image : 90, 180 ou 270.'),
+    crop: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional().describe('Zone de recadrage image.'),
+    format: z.string().optional().describe('Format de sortie (png, jpg, bmp, gif, webp, mp4, webm, mp3, wav).'),
+    quality: z.number().int().min(10).max(100).optional().describe('Qualité JPEG/WebP (10-100, défaut 90).'),
+    svg: z.string().optional().describe('Code SVG complet pour svg_export.'),
+    renderPng: z.boolean().optional().describe('Pour svg_export : rendre aussi un PNG haute résolution.'),
+    start: z.union([z.string(), z.number()]).optional().describe('Début de découpe vidéo (ex: "00:00:05" ou 5).'),
+    duration: z.union([z.string(), z.number()]).optional().describe('Durée de découpe vidéo (en secondes ou HH:MM:SS).'),
+    fps: z.number().optional().describe('Images par seconde (frames ou GIF).'),
+    maxFrames: z.number().int().min(1).max(30).optional().describe('Nombre max de frames PNG extraites (défaut 6).'),
+  },
+}, async (params) => {
+  const st = loadState();
+  const ws = params.workspaceRoot || st.lastWorkspaceRoot || '';
+  const act = params.action || 'capabilities';
+  const label = MEDIA_ACTION_LABELS[act] || act;
+  const targetName = params.outputPath || params.inputPath || params.path || params.projectDir || '';
+  const shortTarget = targetName ? basename(String(targetName)) : '';
+  try {
+    const res = await executeMediaAction(params, {
+      permissionMode: st.permissionMode || 'acceptEdits',
+      mediaToolsEnabled: st.mediaToolsEnabled !== false,
+      workspaceRoot: ws,
+    });
+    const detail = act === 'image_info' || act === 'image_edit'
+      ? `${res.width || '?'}×${res.height || '?'} (${String(res.format || '').toUpperCase()} · ${res.sizeKb ?? '?'} Ko)`
+      : (act === 'svg_export'
+        ? (res.pngPath ? `SVG + PNG (${basename(res.pngPath)})` : `SVG (${Math.round((res.bytes || 0) / 1024)} Ko)`)
+        : (act === 'capabilities'
+          ? `Image native OK · FFmpeg ${res.ffmpeg ? 'OK' : 'absent'}`
+          : (params.subAction ? `${label} (${params.subAction})` : label)));
+    recordToolHistoryEntry({
+      tool: 'fs_media',
+      title: shortTarget ? `${label} — ${shortTarget}` : label,
+      status: res.ok === false ? 'error' : 'done',
+      summary: res.ok === false ? (res.error || 'Indisponible') : detail,
+      response: JSON.stringify(res, null, 2),
+      error: res.ok === false ? res.error : null,
+      triggeredCapabilities: { intent: 'media_tool' },
+    });
+    return asCompactText(res);
+  } catch (err) {
+    recordToolHistoryEntry({
+      tool: 'fs_media',
+      title: shortTarget ? `${label} — ${shortTarget}` : label,
+      status: 'error',
+      error: err?.message || String(err),
+      triggeredCapabilities: { intent: 'media_tool' },
+    });
+    throw err;
+  }
 });
 
 const transport = new StdioServerTransport();

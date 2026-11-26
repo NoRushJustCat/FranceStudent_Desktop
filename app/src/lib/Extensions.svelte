@@ -278,7 +278,127 @@
   }
 
   // ---------- MCP ----------
+  let activeMcpServers = $derived(mcp.servers.filter((s) => s.connected));
+  let activeMcpToolCount = $derived(activeMcpServers.reduce((acc, s) => acc + (s.tools?.length || 0), 0));
+  // Estimation compactée (~55 tokens/outil après allègement des schémas dans mcp.rs).
+  let estMcpTokens = $derived(activeMcpToolCount * 55);
+
   const PRESET_GROUPS = [
+    {
+      title: 'Vidéo, Image, 3D & Audio (HyperFrames & Médias)',
+      items: [
+        {
+          name: 'hyperframes',
+          label: 'HyperFrames (HeyGen)',
+          runtime: 'HTTP · OAuth',
+          desc: 'Création vidéo HTML→MP4, studio timeline et normalisation audio (heygen-com/hyperframes).',
+          kind: 'http',
+          url: 'https://mcp.heygen.com/mcp/hyperframes/',
+          token: '',
+        },
+        {
+          name: 'ffmpeg-skill',
+          label: 'FFmpeg Vidéo local',
+          runtime: 'npx · Zéro clé',
+          desc: 'Montage vidéo/audio local : découpe, recadrage 9:16, sous-titres animés, loudnorm.',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', 'ffmpeg-skill', 'mcp'],
+        },
+        {
+          name: 'kinocut',
+          label: 'Kinocut Vidéo (optimisé)',
+          runtime: 'uvx · Zéro clé',
+          desc: 'Édition vidéo locale + contrôle qualité (filtré via KINOCUT_TOOLS pour économiser le contexte).',
+          kind: 'stdio',
+          command: 'uvx',
+          args: ['--from', 'kinocut', 'kino', '--mcp'],
+          env: 'KINOCUT_TOOLS=core',
+        },
+        {
+          name: 'youtube-transcript',
+          label: 'YouTube Transcript',
+          runtime: 'npx · Zéro clé',
+          desc: 'Extraction directe des sous-titres et transcriptions vidéo YouTube.',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', '@kimtaeyoon83/mcp-server-youtube-transcript'],
+        },
+        {
+          name: 'blender',
+          label: 'Blender 3D',
+          runtime: 'uvx · Zéro clé',
+          desc: 'Création de scènes 3D, matériaux, scripts Python et vérification viewport (mcp-for-blender).',
+          kind: 'stdio',
+          command: 'uvx',
+          args: ['mcp-for-blender'],
+        },
+        {
+          name: 'excalidraw',
+          label: 'Excalidraw',
+          runtime: 'HTTP · Zéro clé',
+          desc: 'Diagrammes d’architecture et wireframes interactifs (serveur officiel Excalidraw).',
+          kind: 'http',
+          url: 'https://mcp.excalidraw.com',
+          token: '',
+        },
+        {
+          name: 'mermaid',
+          label: 'Mermaid SVG/PNG',
+          runtime: 'npx · Zéro clé',
+          desc: 'Génération et export SVG/PNG haute qualité de schémas Mermaid (hustcc/mcp-mermaid).',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', 'mcp-mermaid'],
+        },
+        {
+          name: 'figma',
+          label: 'Figma Design',
+          runtime: 'npx · Clé API',
+          desc: 'Extraction de maquettes, layouts et styles Figma pour coder des UI fidèles (Framelink).',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', 'figma-developer-mcp', '--stdio'],
+          env: 'FIGMA_API_KEY=',
+        },
+        {
+          name: 'comfyui',
+          label: 'ComfyUI local',
+          runtime: 'npx · Local',
+          desc: 'Pilotage de workflows ComfyUI locaux (génération image, vidéo, audio, gestion modèles).',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', 'comfyui-mcp'],
+        },
+        {
+          name: 'huggingface',
+          label: 'Hugging Face Spaces',
+          runtime: 'HTTP · OAuth/Token',
+          desc: 'Accès officiel aux Spaces Gradio pour génération d’images, vidéos et audio.',
+          kind: 'http',
+          url: 'https://huggingface.co/mcp',
+          token: '',
+        },
+        {
+          name: 'replicate',
+          label: 'Replicate Médias',
+          runtime: 'HTTP · OAuth',
+          desc: 'Exécution de modèles image, vidéo, upscaling et audio via MCP officiel Replicate.',
+          kind: 'http',
+          url: 'https://mcp.replicate.com',
+          token: '',
+        },
+        {
+          name: 'elevenlabs',
+          label: 'ElevenLabs Audio',
+          runtime: 'HTTP · OAuth',
+          desc: 'Synthèse vocale TTS, clonage vocal, effets sonores et transcription (MCP officiel).',
+          kind: 'http',
+          url: 'https://api.elevenlabs.io/v1/mcp',
+          token: '',
+        },
+      ],
+    },
     {
       title: 'Boost IA & Dev',
       items: [
@@ -865,6 +985,14 @@
       </div>
 
       {#if mcp.servers.length > 0}
+        <div class="mcp-opt-bar" class:warn-budget={activeMcpToolCount > 35}>
+          <span>
+            <strong>Contexte MCP optimisé</strong> (schémas allégés) · {activeMcpServers.length}/{mcp.servers.length} connecté{activeMcpServers.length > 1 ? 's' : ''} · {activeMcpToolCount} outil{activeMcpToolCount > 1 ? 's' : ''} (~{estMcpTokens} tok/tour)
+          </span>
+          {#if activeMcpToolCount > 35}
+            <span class="mcp-opt-tip">Beaucoup d’outils actifs : déconnecte les serveurs inutilisés pour garder un contexte rapide et économe.</span>
+          {/if}
+        </div>
         <h3>Serveurs ({mcp.servers.length})</h3>
       {/if}
 
@@ -873,7 +1001,7 @@
           <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="9 18 15 12 9 6" />
           </svg>
-          Catalogue de modèles MCP vérifiés (Boost IA &amp; Apps)
+          Catalogue de modèles MCP vérifiés (Vidéo/Image, Boost IA &amp; Apps)
         </summary>
         {#each PRESET_GROUPS as group (group.title)}
           <div class="preset-group">
@@ -1544,6 +1672,30 @@
   }
   details[open] > summary.tools-sum .chev {
     transform: rotate(90deg);
+  }
+  .mcp-opt-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 6px 0 10px;
+    padding: 8px 10px;
+    border-radius: 9px;
+    background: var(--xt-card);
+    border: 1px solid var(--xt-line);
+    font-size: 11.5px;
+    color: var(--xt-mut);
+  }
+  .mcp-opt-bar strong {
+    color: var(--xt-txt);
+    font-weight: 600;
+  }
+  .mcp-opt-bar.warn-budget {
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.08);
+  }
+  .mcp-opt-tip {
+    color: #f59e0b;
+    font-size: 11px;
   }
   .presets-fold {
     margin: 6px 0 12px;

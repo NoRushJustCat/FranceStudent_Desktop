@@ -1951,6 +1951,16 @@
               <span class="slider"></span>
             </label>
           </div>
+          <div class="toggle-row">
+            <div>
+              <span style="display:block;font-weight:600">Média &amp; Vidéo</span>
+              <span style="display:block;font-size:10px;color:var(--fs-muted)">Images natives, SVG→PNG, FFmpeg &amp; HyperFrames via <code>fs_media</code></span>
+            </div>
+            <label class="switch" title="Activer ou désactiver Média & Vidéo (fs_media)">
+              <input type="checkbox" id="mediaToolsInput" disabled />
+              <span class="slider"></span>
+            </label>
+          </div>
         </div>
         <div class="screen-picker-row" id="screenPickerWrap" hidden>
           <span style="font-size:10.5px;font-weight:500;color:var(--fs-muted)">Écran actif</span>
@@ -2557,6 +2567,7 @@
       fs_fetch: 'Lecture Web',
       fs_doc_read: 'Lecture document',
       fs_git: 'Inspection Git',
+      fs_media: 'Média & Vidéo',
       fs_undo: 'Annulation (/undo)',
     };
     function modelLabel(id) {
@@ -2843,6 +2854,7 @@
           trig?.intent === 'sequential_thinking' ? '<span class="cap-chip">Réflexion</span>' : '',
           trig?.intent === 'doc_read' ? '<span class="cap-chip">Doc</span>' : '',
           trig?.intent === 'git_read' ? '<span class="cap-chip">Git</span>' : '',
+          trig?.intent === 'media_tool' ? '<span class="cap-chip">Média</span>' : '',
           fwCount ? `<span class="hchip">${fwCount} fichier(s)</span>` : '',
           cmdCount ? `<span class="hchip">${cmdCount} cmd</span>` : '',
         ].filter(Boolean).join('');
@@ -3129,8 +3141,9 @@
       const c = $('computerUseInput')?.checked !== false ? 1 : 0;
       const t = $('deepThinkingInput')?.checked !== false ? 1 : 0;
       const v = $('canvasEnabledInput')?.checked !== false ? 1 : 0;
-      const tot = c + t + v;
-      if ($('extMcpCountTag')) $('extMcpCountTag').textContent = `${tot} / 3 active${tot > 1 ? 's' : ''}`;
+      const m = $('mediaToolsInput')?.checked !== false ? 1 : 0;
+      const tot = c + t + v + m;
+      if ($('extMcpCountTag')) $('extMcpCountTag').textContent = `${tot} / 4 active${tot > 1 ? 's' : ''}`;
     }
 
     function syncProfilePills(animate = false) {
@@ -3164,7 +3177,7 @@
 
     function syncSettingsForm() {
       const configIds = [
-        'cutoffInput', 'maxParallelInput', 'compactUiInput', 'liquidGlassInput', 'showReasoningInput', 'reuseChatInput', 'useClientToolsInput', 'computerUseInput', 'deepThinkingInput', 'canvasEnabledInput', 'smartRoutingInput', 'opusEconomyGuardInput',
+        'cutoffInput', 'maxParallelInput', 'compactUiInput', 'liquidGlassInput', 'showReasoningInput', 'reuseChatInput', 'useClientToolsInput', 'computerUseInput', 'deepThinkingInput', 'canvasEnabledInput', 'mediaToolsInput', 'smartRoutingInput', 'opusEconomyGuardInput',
         'prepromptInput', 'savePrepromptBtn', 'memNoteInput', 'addMemNoteBtn', 'clearMemBtn',
         'contextCompactInput', 'tierLightInput', 'tierMediumInput',
         'tierHeavyInput', 'allowedInput', 'blockedInput', 'useAllBtn', 'saveEssentialBtn', 'saveSettingsBtn'
@@ -3189,6 +3202,7 @@
       if ($('computerUseInput')) $('computerUseInput').checked = S.computerUseEnabled !== false;
       if ($('deepThinkingInput')) $('deepThinkingInput').checked = S.deepThinkingEnabled !== false;
       if ($('canvasEnabledInput')) $('canvasEnabledInput').checked = (S.canvasMode || 'on') !== 'off';
+      if ($('mediaToolsInput')) $('mediaToolsInput').checked = S.mediaToolsEnabled !== false;
       if ($('smartRoutingInput')) $('smartRoutingInput').checked = S.smartRouting !== false;
       if ($('opusEconomyGuardInput')) $('opusEconomyGuardInput').checked = S.opusEconomyGuard !== false;
       updateExtMcpCount();
@@ -3330,6 +3344,7 @@
       if ($('liquidGlassInput')) $('liquidGlassInput').checked = S.liquidGlass !== false;
       applyLiquidGlass(S.liquidGlass !== false);
       if ($('canvasEnabledInput')) $('canvasEnabledInput').checked = (S.canvasMode || 'on') !== 'off';
+      if ($('mediaToolsInput')) $('mediaToolsInput').checked = S.mediaToolsEnabled !== false;
       if ($('opusEconomyGuardInput')) $('opusEconomyGuardInput').checked = S.opusEconomyGuard !== false;
       updateExtMcpCount();
       renderVisionLiveBanner();
@@ -4105,6 +4120,7 @@
           computerUseEnabled: $('computerUseInput') ? $('computerUseInput').checked : true,
           deepThinkingEnabled: $('deepThinkingInput') ? $('deepThinkingInput').checked : true,
           canvasEnabled: $('canvasEnabledInput') ? $('canvasEnabledInput').checked : true,
+          mediaToolsEnabled: $('mediaToolsInput') ? $('mediaToolsInput').checked : true,
           smartRouting: $('smartRoutingInput') ? $('smartRoutingInput').checked : true,
           opusEconomyGuard: $('opusEconomyGuardInput') ? $('opusEconomyGuardInput').checked : true,
         });
@@ -4178,6 +4194,18 @@
           await pushSettingPatch({ canvasMode: nextMode });
           void poll();
         } catch (e) { S.canvasMode = prevMode; $('canvasEnabledInput').checked = prevMode !== 'off'; updateExtMcpCount(); $('mcpToolsQuickOut').textContent = `Erreur : ${e.message}`; }
+      };
+    }
+    if ($('mediaToolsInput')) {
+      $('mediaToolsInput').onchange = async () => {
+        const val = $('mediaToolsInput').checked;
+        S.mediaToolsEnabled = val;
+        updateExtMcpCount();
+        $('mcpToolsQuickOut').textContent = val ? 'Média & Vidéo (fs_media) activé.' : 'Média & Vidéo (fs_media) désactivé.';
+        try {
+          await pushSettingPatch({ mediaToolsEnabled: val });
+          void poll();
+        } catch (e) { S.mediaToolsEnabled = !val; $('mediaToolsInput').checked = !val; updateExtMcpCount(); $('mcpToolsQuickOut').textContent = `Erreur : ${e.message}`; }
       };
     }
 

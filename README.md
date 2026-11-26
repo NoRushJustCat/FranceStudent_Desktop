@@ -17,7 +17,7 @@
     <img src="https://img.shields.io/badge/FS%20Code-v0.1.0-0A84FF?style=flat-square" alt="FS Code v0.1.0" />
     <img src="https://img.shields.io/badge/Plugin%20fs--atg-v2.6.0-30D158?style=flat-square" alt="fs-atg v2.6.0" />
     <img src="https://img.shields.io/badge/Tauri%202-Rust%20%2B%20Svelte%205-FF9F0A?style=flat-square" alt="Tauri 2" />
-    <img src="https://img.shields.io/badge/MCP-17%20Outils-64D2FF?style=flat-square" alt="MCP 17 Outils" />
+    <img src="https://img.shields.io/badge/MCP-18%20Outils-64D2FF?style=flat-square" alt="MCP 18 Outils" />
     <img src="https://img.shields.io/badge/Licence-Apache%202.0-8E8E93?style=flat-square" alt="Apache 2.0" />
   </p>
 </div>
@@ -88,7 +88,7 @@ flowchart LR
   FS --> CR["Crates Rust : fs-api, fs-agent, fs-tools, fs-store"]
   CR --> API["API France Student"]
 
-  AG --> ATG["fs-atg : 17 outils MCP + panneau"]
+  AG --> ATG["fs-atg : 18 outils MCP + panneau"]
   AG --> BR["fs_bridge.mjs (127.0.0.1:52000)"]
   ATG --> API
   BR --> API
@@ -113,7 +113,7 @@ Workspace Cargo (`Cargo.toml` : `members = ["crates/*", "app/src-tauri"]`, versi
 
 - **Agent et garde-fous** : `agent.rs`, `jobguard.rs`, `perm.rs`, `changelog.rs` (une ligne JSON par action dans `changes.jsonl`).
 - **Connexion** : `login.rs`, flux web Auth.js sur `ia.francestudent.org`, session conservée dans `session.json`, ou jeton manuel via `keyring`.
-- **Terminal et extensions** : `term.rs`, `mcp.rs`, `mcp_ctx.rs`, `ext.rs`, `skills.rs`, `plugins.rs`. `Extensions.svelte` intègre un catalogue de modèles MCP vérifiés regroupés en **Boost IA & Dev** (`Playwright`, `Context7`, `Fichiers`, `Mémoire`, `Sequential Thinking`, `MarkItDown`, `Windows UIA`, `Serena LSP`, `Fetch`, `Git`) et **Apps essentielles** (`GitHub officiel`, `Google Calendar`, `Gmail + Calendar + Drive`, `Mail IMAP/SMTP`).
+- **Terminal et extensions** : `term.rs`, `mcp.rs` (compactage automatique des descriptions et JSON Schemas MCP pour économiser les tokens de contexte), `mcp_ctx.rs`, `ext.rs`, `skills.rs`, `plugins.rs`. `Extensions.svelte` intègre un compteur de budget contexte MCP et un catalogue vérifié regroupé en **Vidéo, Image, 3D & Audio** (`HyperFrames`, `FFmpeg Vidéo local`, `Kinocut` filtré, `YouTube Transcript`, `Blender 3D`, `Excalidraw`, `Mermaid SVG/PNG`, `Figma`, `ComfyUI`, `Hugging Face Spaces`, `Replicate`, `ElevenLabs`), **Boost IA & Dev** (`Playwright`, `Context7`, `Fichiers`, `Mémoire`, `Sequential Thinking`, `MarkItDown`, `Windows UIA`, `Serena LSP`, `Fetch`, `Git`) et **Apps essentielles** (`GitHub officiel`, `Google Calendar`, `Gmail + Calendar + Drive`, `Mail IMAP/SMTP`).
 - **Pont MCP** : `bridge.rs` (`bridge_start`, `bridge_stop`, `bridge_status`, `bridge_confirm_answer`), démarrage auto désactivé par défaut (`auto_start: false`), arrêt propre sur `ExitRequested`, tunnel `cloudflared` récupéré par `app/scripts/fetch-cloudflared.mjs`.
 - **Instructions du compte** : `instructions.rs`.
 
@@ -178,6 +178,7 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 | **Web Fetch** | [`web_fetch.mjs`](plugins/fs-atg/web_fetch.mjs) | Lecture HTTP(S) publique avec garde SSRF et conversion HTML → Markdown (`fs_fetch`) |
 | **Docs Office/PDF** | [`doc_tools.mjs`](plugins/fs-atg/doc_tools.mjs) | Lecture Markdown/CSV/HTML, `.docx`/`.pptx`/`.xlsx` natifs Windows et PDF si extracteur présent (`fs_doc_read`) |
 | **Git lecture seule** | [`git_tools.mjs`](plugins/fs-atg/git_tools.mjs) | Inspection `status`, `diff`, `log`, `branch`, `show` sans shell (`fs_git`) |
+| **Média, Image & Vidéo** | [`media_tools.mjs`](plugins/fs-atg/media_tools.mjs) | Infos & édition image natives Windows (resize/crop/rotate/convert), export SVG→PNG, vidéo FFmpeg et rendu HTML→MP4 **HyperFrames** (`fs_media`) |
 | **Vision Live** | `fs_delegate` (`liveComputerMode`) | Capture envoyée via `POST /filesv2`, France Student analyse et demande l'action suivante, en boucle jusqu'à la fin |
 | **Sequential Thinking** | [`thinking_tools.mjs`](plugins/fs-atg/thinking_tools.mjs) | Étapes numérotées, révisions, branches, persistées dans `.fsatg_thinking.json` |
 | **Canvas Live** | [`canvas_tools.mjs`](plugins/fs-atg/canvas_tools.mjs) | Artifacts **HTML, SVG ou Mermaid** servis sur une URL locale de prévisualisation |
@@ -186,12 +187,12 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 
 ### Panneau latéral
 
-- Rendu **mat par défaut** (surfaces opaques, bordures nettes), dock d'onglets en bas : `Accueil`, `Modèles`, `Réglages`.
-- Dans **Réglages** : mode **Interface épurée**, interrupteur **Effet Liquid Glass** (actif par défaut, verre dépoli et pilule élastique ; désactivable pour un rendu mat épuré), et trois interrupteurs d'extensions (`Computer Use`, `Raisonnement approfondi`, `Canvas Live`).
-- Jauges budget et contexte, bouton **`Live`**, historique de **50 tâches**, télémétrie par modèle (tok/s, TTFT, taux de succès, badge `Instable`).
+- Rendu **Liquid Glass par défaut** (verre dépoli et pilule élastique, basculable en mat épuré), dock d'onglets en bas : `Accueil`, `Modèles`, `Réglages`.
+- Dans **Réglages** : mode **Interface épurée**, interrupteur **Effet Liquid Glass**, et quatre interrupteurs d'extensions (`Computer Use`, `Raisonnement approfondi`, `Canvas Live`, `Média & Vidéo`).
+- Jauges budget et contexte, bouton **`Live`**, historique de **50 tâches** avec titres lisibles par outil, télémétrie par modèle (tok/s, TTFT, taux de succès, badge `Instable`).
 - Connexion via Chrome ou Edge en profil persistant, identifiants migrés dans le Gestionnaire d'identification Windows.
 
-### Les 17 outils MCP
+### Les 18 outils MCP
 
 | Outil | Rôle |
 |---|---|
@@ -205,6 +206,7 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 | `fs_fetch` | Récupération HTTP(S) publique SSRF-safe + conversion HTML → Markdown |
 | `fs_doc_read` | Lecture de docs Office (`.docx`, `.pptx`, `.xlsx` natifs Windows), CSV, HTML, Markdown et PDF |
 | `fs_git` | Inspection Git lecture seule (`status`, `diff`, `log`, `branch`, `show`) |
+| `fs_media` | Outil média unifié : infos/édition images natives Windows, export SVG→PNG, vidéo FFmpeg et rendu HTML→MP4 HyperFrames |
 | `fs_logs` | Journal du connecteur, filtrable par gravité et par job |
 | `fs_session` | État, compactage ou renouvellement de la session (`/compact`, `/new`) |
 | `fs_quota` | Quota restant, heure de reset, seuil du coupe-circuit |

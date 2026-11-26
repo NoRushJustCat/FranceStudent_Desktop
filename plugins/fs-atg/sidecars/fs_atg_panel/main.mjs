@@ -729,6 +729,7 @@ app.api('/api/state', async () => {
     liveComputerMode: Boolean(state.liveComputerMode),
     canvasEnabled: state.canvasMode !== 'off',
     deepThinkingEnabled: state.deepThinkingEnabled !== false,
+    mediaToolsEnabled: state.mediaToolsEnabled !== false,
     thinkingSummary: getThinkingSnapshot(),
     webSearchMode: normalizeTriggerMode(state.webSearchMode ?? (state.enableWebSearch === false ? 'off' : 'auto'), 'auto'),
     canvasMode: normalizeTriggerMode(state.canvasMode ?? 'on', 'on'),
@@ -918,6 +919,9 @@ app.api('/api/settings', (data) => {
   }
   if (typeof data.smartRouting === 'boolean') {
     state.smartRouting = data.smartRouting;
+  }
+  if (typeof data.mediaToolsEnabled === 'boolean') {
+    state.mediaToolsEnabled = data.mediaToolsEnabled;
   }
   if (typeof data.opusEconomyGuard === 'boolean') {
     state.opusEconomyGuard = data.opusEconomyGuard;
