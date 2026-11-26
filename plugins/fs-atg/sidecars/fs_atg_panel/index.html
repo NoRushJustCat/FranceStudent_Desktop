@@ -1438,7 +1438,7 @@
     }
   </style>
 </head>
-<body>
+<body class="ui-liquid-glass">
 
   <!-- TAB 1: ACCUEIL -->
   <div id="tab-dash" class="view">
@@ -1831,7 +1831,7 @@
           <div class="toggle-row" id="liquidGlassRow">
             <div>
               <span style="display:block;font-weight:600">Effet Liquid Glass (transparence & flou)</span>
-              <span style="display:block;font-size:10px;color:var(--fs-muted)">Verre dépoli et pilule élastique ; désactivé = rendu IDE mat épuré</span>
+              <span style="display:block;font-size:10px;color:var(--fs-muted)">Verre dépoli et pilule élastique (actif par défaut ; désactivé = rendu IDE mat épuré)</span>
             </div>
             <label class="switch"><input type="checkbox" id="liquidGlassInput" disabled /><span class="slider"></span></label>
           </div>
@@ -2550,11 +2550,42 @@
       const fromErr = String(j.error || '').match(/Mod[èe]le\s*«\s*([^»]+?)\s*»/);
       return j.model || j.explicitModel || (fromErr ? fromErr[1] : '');
     }
+    const LOCAL_TOOL_LABELS = {
+      fs_computer: 'Contrôle bureau',
+      fs_canvas: 'Live Canvas',
+      fs_thinking: 'Raisonnement',
+      fs_fetch: 'Lecture Web',
+      fs_doc_read: 'Lecture document',
+      fs_git: 'Inspection Git',
+      fs_undo: 'Annulation (/undo)',
+    };
     function modelLabel(id) {
+      const raw = String(id || '').trim();
+      if (LOCAL_TOOL_LABELS[raw]) return LOCAL_TOOL_LABELS[raw];
       const s = shortModel(id);
       if (!s) return '';
       const cat = (S.modelCatalog || []).find((m) => m.id === id || shortModel(m.id) === s);
       return cat?.name || s;
+    }
+    function formatHistoryTitle(raw) {
+      let t = String(raw || '').replace(/^\[ATG\]\s*/, '').trim();
+      t = t.replace(/^Computer Use\s*:\s*screen_info$/i, 'Détection des écrans');
+      t = t.replace(/^Computer Use\s*:\s*ui_tree$/i, 'Inspection d’interface');
+      t = t.replace(/^Computer Use\s*:\s*ui_click$/i, 'Clic interface');
+      t = t.replace(/^Computer Use\s*:\s*screenshot$/i, 'Capture d’écran');
+      t = t.replace(/^Computer Use\s*:\s*windows$/i, 'Fenêtres ouvertes');
+      t = t.replace(/^Computer Use\s*:\s*(.+)$/i, 'Contrôle bureau — $1');
+      t = t.replace(/^\/canvas\s*:\s*(.+)$/i, 'Canvas — $1');
+      t = t.replace(/^\/think\s*#?(\d+)$/i, 'Réflexion — Étape #$1');
+      t = t.replace(/^\/undo\s*:\s*(.+)$/i, (_, p) => `Fichier restauré — ${p.split(/[\\/]/).pop() || p}`);
+      t = t.replace(/^Doc\s*:\s*(.+)$/i, (_, p) => `Document — ${p.split(/[\\/]/).pop() || p}`);
+      t = t.replace(/^Fetch\s*:\s*(.+)$/i, 'Page web — $1');
+      t = t.replace(/^Git\s+status$/i, 'Git — État du dépôt');
+      t = t.replace(/^Git\s+diff$/i, 'Git — Différences');
+      t = t.replace(/^Git\s+log$/i, 'Git — Historique commits');
+      t = t.replace(/^Git\s+branch$/i, 'Git — Branches');
+      t = t.replace(/^Git\s+show$/i, 'Git — Détail commit');
+      return t;
     }
     function histStatusInfo(j) {
       if (j.status === 'needs_approval') return { key: 'needs_approval', label: 'À demander', ico: ICO_ASK };
@@ -2789,11 +2820,12 @@
 
       $('history').innerHTML = '<div class="hist-list">' + visible.map((j) => {
         const jId = j.jobId || j.id || '';
-        const title = esc(String(j.title || '').replace(/^\[ATG\]\s*/, ''));
+        const title = esc(formatHistoryTitle(j.title || ''));
         const stInfo = histStatusInfo(j);
  const ico = stInfo.ico;
         const icoClass = stInfo.key;
         const realModel = jobRealModel(j);
+        const isLocalTool = Boolean(LOCAL_TOOL_LABELS[String(realModel || '').trim()]);
         const respText = stInfo.key === 'needs_approval' ? '' : (stInfo.key === 'blocked' ? (j.response || '') : (j.response || j.summary || j.error || ''));
         const codeExtract = extractCopyableCode(j);
         const filesArr = Array.isArray(j.filesWritten) ? j.filesWritten : [];
@@ -2807,6 +2839,10 @@
           trig?.webSearch ? '<span class="cap-chip">Web</span>' : '',
           hasCanvas ? '<span class="cap-chip canvas">Canvas</span>' : '',
           trig?.imageGen ? '<span class="cap-chip">Image</span>' : '',
+          trig?.intent === 'computer_use' ? '<span class="cap-chip">Bureau</span>' : '',
+          trig?.intent === 'sequential_thinking' ? '<span class="cap-chip">Réflexion</span>' : '',
+          trig?.intent === 'doc_read' ? '<span class="cap-chip">Doc</span>' : '',
+          trig?.intent === 'git_read' ? '<span class="cap-chip">Git</span>' : '',
           fwCount ? `<span class="hchip">${fwCount} fichier(s)</span>` : '',
           cmdCount ? `<span class="hchip">${cmdCount} cmd</span>` : '',
         ].filter(Boolean).join('');
@@ -2815,7 +2851,9 @@
    : stInfo.key === 'blocked' ? 'Désactivé (Non) — jamais utilisé'
           : stInfo.key === 'error' ? cleanErrorLine(j.error)
           : stInfo.key === 'cancelled' ? 'annulé'
-          : (stInfo.key === 'done' && respText ? `${fmtNum(respText.length)} car.` : stInfo.label.toLowerCase());
+          : (stInfo.key === 'done' && isLocalTool && j.summary
+            ? String(j.summary).slice(0, 90)
+            : (stInfo.key === 'done' && respText ? `${fmtNum(respText.length)} car.` : stInfo.label.toLowerCase()));
  const subClass = stInfo.key === 'needs_approval' ? ' approval' : (stInfo.key === 'blocked' ? ' blocked' : (stInfo.key === 'error' ? ' err' : ''));
         const sub = [
    modelLabel(realModel) || (['blocked', 'needs_approval'].includes(stInfo.key) ? 'Modèle inconnu' : 'Auto'),
@@ -3143,8 +3181,8 @@
       $('maxParallelInput').value = S.maxParallel ?? 3;
       if ($('compactUiInput')) $('compactUiInput').checked = Boolean(S.compactUi);
       applyCompactUi(S.compactUi);
-      if ($('liquidGlassInput')) $('liquidGlassInput').checked = Boolean(S.liquidGlass);
-      applyLiquidGlass(S.liquidGlass);
+      if ($('liquidGlassInput')) $('liquidGlassInput').checked = S.liquidGlass !== false;
+      applyLiquidGlass(S.liquidGlass !== false);
       $('showReasoningInput').checked = S.showReasoning === true;
       $('reuseChatInput').checked = S.reuseChat === true;
       $('useClientToolsInput').checked = S.useClientTools !== false;
@@ -3289,8 +3327,8 @@
       syncProfilePills(false);
       if ($('compactUiInput')) $('compactUiInput').checked = Boolean(S.compactUi);
       applyCompactUi(S.compactUi);
-      if ($('liquidGlassInput')) $('liquidGlassInput').checked = Boolean(S.liquidGlass);
-      applyLiquidGlass(S.liquidGlass);
+      if ($('liquidGlassInput')) $('liquidGlassInput').checked = S.liquidGlass !== false;
+      applyLiquidGlass(S.liquidGlass !== false);
       if ($('canvasEnabledInput')) $('canvasEnabledInput').checked = (S.canvasMode || 'on') !== 'off';
       if ($('opusEconomyGuardInput')) $('opusEconomyGuardInput').checked = S.opusEconomyGuard !== false;
       updateExtMcpCount();
@@ -4060,7 +4098,7 @@
           routingProfile: normalizeUiProfile(S.routingProfile),
           cutoffPercent: Number($('cutoffInput').value),
           compactUi: $('compactUiInput') ? $('compactUiInput').checked : false,
-          liquidGlass: $('liquidGlassInput') ? $('liquidGlassInput').checked : false,
+          liquidGlass: $('liquidGlassInput') ? $('liquidGlassInput').checked : true,
           reuseChat: $('reuseChatInput').checked,
           showReasoning: $('showReasoningInput').checked,
           useClientTools: $('useClientToolsInput').checked,

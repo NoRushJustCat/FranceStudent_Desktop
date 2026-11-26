@@ -187,7 +187,7 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 ### Panneau latéral
 
 - Rendu **mat par défaut** (surfaces opaques, bordures nettes), dock d'onglets en bas : `Accueil`, `Modèles`, `Réglages`.
-- Dans **Réglages** : mode **Interface épurée**, interrupteur **Effet Liquid Glass** (désactivé par défaut, réactive le verre dépoli et la pilule élastique), et trois interrupteurs d'extensions (`Computer Use`, `Raisonnement approfondi`, `Canvas Live`).
+- Dans **Réglages** : mode **Interface épurée**, interrupteur **Effet Liquid Glass** (actif par défaut, verre dépoli et pilule élastique ; désactivable pour un rendu mat épuré), et trois interrupteurs d'extensions (`Computer Use`, `Raisonnement approfondi`, `Canvas Live`).
 - Jauges budget et contexte, bouton **`Live`**, historique de **50 tâches**, télémétrie par modèle (tok/s, TTFT, taux de succès, badge `Instable`).
 - Connexion via Chrome ou Edge en profil persistant, identifiants migrés dans le Gestionnaire d'identification Windows.
 

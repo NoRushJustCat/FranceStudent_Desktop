@@ -1,6 +1,6 @@
 # France Student [ATG] (`fs-atg` v2.6.0)
 
-Orchestrateur **France Student** complet pour **Antigravity** (Serveur MCP + Sidecar HTML/Node.js à rendu IDE mat épuré par défaut, avec option *Liquid Glass*).
+Orchestrateur **France Student** complet pour **Antigravity** (Serveur MCP + Sidecar HTML/Node.js à rendu *Liquid Glass* par défaut, avec option mat épuré).
 
 Il délègue l’exploration, la planification, l’édition atomique de code (`/undo`), le raisonnement approfondi, la création d’artifacts Canvas, le pilotage bureau Windows (*Computer Use* + boucle Vision Live) et les recherches web directement aux modèles France Student afin d’économiser le quota Antigravity.
 
@@ -14,8 +14,8 @@ Il délègue l’exploration, la planification, l’édition atomique de code (`
 
 ## Nouveautés majeures (v2.6.0)
 
-- **Dock bas & indicateur glissant épuré (+ option Liquid Glass)** : rendu IDE mat épuré par défaut (surfaces opaques, bordures nettes), avec un interrupteur **Effet Liquid Glass** dans **Réglages** pour réactiver le verre dépoli (`backdrop-filter: blur`) et la pilule élastique à tout moment.
-- **Interface épurée** : en plus de l’option Liquid Glass (désactivée par défaut), l’interrupteur **Interface épurée** des **Réglages** masque les éléments secondaires pour ne garder que l’essentiel.
+- **Dock bas & Effet Liquid Glass par défaut (+ option mat épuré)** : verre dépoli (`backdrop-filter: blur`) et pilule élastique actifs par défaut, avec un interrupteur **Effet Liquid Glass** dans **Réglages** pour basculer vers un rendu IDE mat épuré à tout moment.
+- **Interface épurée** : l’interrupteur **Interface épurée** des **Réglages** masque les éléments secondaires pour ne garder que l’essentiel.
 - **Routage intelligent par spécialité (même en mode `MAX` / `Fort`) & Économie Opus** : `fs_core.mjs` classe `gpt-6.2-sol` / `gpt-6.1-sol` / `gpt-6-sol` / `gpt-6.1-terra` en `medium` (équilibré) et répartit chaque demande selon ses points forts :
   - **Recherche simple, Q/R, résumé, typo, doc courte** → léger (`gpt-6-luna` / `claude-haiku-5-5`, effort `standard`) — jamais Opus ;
   - **Backend, SQL, scripts, tests, debug standard** → `gpt-6.2-sol` ;

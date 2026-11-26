@@ -599,7 +599,7 @@ export const DEFAULT_STATE = {
   opusEconomyGuard: true,
   specialtyRouting: true,
   compactUi: false,
-  liquidGlass: false,
+  liquidGlass: true,
   reuseChat: true,
   contextCompactPercent: 80,
   // Minimal does not inject a project map or the content of files.

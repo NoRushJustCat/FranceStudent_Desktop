@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -396,6 +396,74 @@ function mcpCompactView(j, verbose = false) {
     ...(j.antigravitySavings?.totalTokensSavedEst ? { savedAgTokensEst: j.antigravitySavings.totalTokensSavedEst } : {}),
   };
 }
+
+function formatComputerHistoryMeta(params, res) {
+  const act = String(params?.action || '');
+  switch (act) {
+    case 'screenshot': {
+      const idx = (res?.screenIndex ?? params?.screenIndex ?? 0) + 1;
+      return {
+        title: `Capture d’écran (Écran ${idx})`,
+        summary: `${res?.width || '?'}×${res?.height || '?'} · ${Math.round((res?.bytes || 0) / 1024)} Ko`,
+      };
+    }
+    case 'screen_info':
+      return {
+        title: `Détection des écrans (${res?.screens?.length ?? 0})`,
+        summary: `${res?.screens?.length ?? 0} écran(s) · curseur (${res?.cursor?.x ?? 0}, ${res?.cursor?.y ?? 0})`,
+      };
+    case 'windows':
+      return {
+        title: `Fenêtres ouvertes (${res?.count ?? 0})`,
+        summary: `${res?.count ?? 0} fenêtre(s) active(s)`,
+      };
+    case 'ui_tree': {
+      const win = String(res?.windowTitle || '').trim();
+      return {
+        title: win ? `Inspection d’interface — ${win.slice(0, 34)}` : 'Inspection d’interface',
+        summary: `${res?.count ?? 0} contrôle(s) détecté(s)`,
+      };
+    }
+    case 'ui_click': {
+      const lbl = res?.matched?.name || res?.clicked || params?.name || params?.automationId || 'contrôle';
+      return {
+        title: `Clic interface — ${String(lbl).slice(0, 38)}`,
+        summary: res?.x != null ? `Position (${res.x}, ${res.y})` : 'Clic UIA exécuté',
+      };
+    }
+    case 'click':
+      return { title: `Clic souris (${params?.x ?? '?'}, ${params?.y ?? '?'})`, summary: 'Clic gauche' };
+    case 'double_click':
+      return { title: `Double-clic (${params?.x ?? '?'}, ${params?.y ?? '?'})`, summary: 'Double-clic gauche' };
+    case 'right_click':
+      return { title: `Clic droit (${params?.x ?? '?'}, ${params?.y ?? '?'})`, summary: 'Menu contextuel' };
+    case 'type':
+      return { title: 'Saisie clavier', summary: `${String(params?.text || '').length} caractère(s)` };
+    case 'key':
+    case 'hotkey': {
+      const combo = params?.key || params?.keys || 'touche';
+      return { title: `Raccourci clavier — ${combo}`, summary: `Touche ${combo}` };
+    }
+    case 'scroll':
+      return { title: 'Défilement écran', summary: `Delta ${params?.deltaY ?? 0}` };
+    case 'focus_window':
+      return { title: `Focus fenêtre — ${String(params?.title || 'fenêtre').slice(0, 36)}`, summary: 'Mise au premier plan' };
+    case 'clipboard_get':
+      return { title: 'Lecture presse-papiers', summary: `${String(res?.text || '').length} car.` };
+    case 'clipboard_set':
+      return { title: 'Copie presse-papiers', summary: `${String(params?.text || '').length} car.` };
+    default:
+      return { title: `Contrôle bureau — ${act || 'action'}`, summary: `Action ${act}` };
+  }
+}
+
+const GIT_ACTION_LABELS = {
+  status: 'État du dépôt',
+  diff: 'Différences',
+  log: 'Historique commits',
+  branch: 'Branches',
+  show: 'Détail commit',
+};
 
 function recordToolHistoryEntry({
   tool,
@@ -1132,8 +1200,8 @@ server.registerTool('fs_undo', {
     logEvent('info', 'mcp', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
     recordToolHistoryEntry({
       tool: 'fs_undo',
-      title: `/undo : ${res.undone.rel}`,
-      summary: `Restauré ${res.undone.rel} (${res.undone.action}).`,
+      title: `Fichier restauré — ${basename(String(res.undone.rel || '')) || res.undone.rel}`,
+      summary: `Restauré ${res.undone.rel} (${res.undone.action})`,
       response: JSON.stringify(res, null, 2),
     });
   }
@@ -1220,44 +1288,35 @@ server.registerTool('fs_computer', {
       permissionMode: st.permissionMode || 'acceptEdits',
       computerUseEnabled: st.computerUseEnabled !== false,
     });
-    const detail = effective.action === 'screenshot'
-      ? `Capture ${res.width}x${res.height} (${res.deviceName || 'écran ' + (res.screenIndex ?? 0)})`
-      : (effective.action === 'ui_tree'
-        ? `Arbre UIA (${res.count ?? 0} contrôles · ${res.windowTitle || 'fenêtre'})`
-        : (effective.action === 'ui_click'
-          ? `Clic UIA ${res.matched?.name || effective.name || effective.automationId || ''}`
-          : (effective.action === 'windows'
-            ? `${res.count ?? 0} fenêtre(s) détectée(s)`
-            : (effective.action === 'screen_info'
-              ? `${res.screens?.length ?? 0} écran(s) · curseur (${res.cursor?.x}, ${res.cursor?.y})`
-              : `Action ${effective.action}`))));
+    const meta = formatComputerHistoryMeta(effective, res);
     const { dataUrl: _dropUrl, ...metaForHist } = (res && typeof res === 'object') ? res : { res };
     recordToolHistoryEntry({
       tool: 'fs_computer',
-      title: `Computer Use : ${effective.action}`,
-      summary: detail,
+      title: meta.title,
+      summary: meta.summary,
       response: JSON.stringify(metaForHist, null, 2),
       triggeredCapabilities: { intent: 'computer_use' },
     });
     if (effective.action === 'screenshot' && res?.dataUrl) {
-      const { dataUrl, ...meta } = res;
+      const { dataUrl, ...shotMeta } = res;
       const base64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
       return {
         content: [
-          { type: 'text', text: JSON.stringify(meta) },
+          { type: 'text', text: JSON.stringify(shotMeta) },
           { type: 'image', data: base64, mimeType: 'image/png' },
         ],
       };
     }
     if (res && typeof res === 'object' && 'dataUrl' in res) {
-      const { dataUrl, ...meta } = res;
-      return asCompactText({ ...meta, note: 'Image trop lourde pour être renvoyée inline : utilise le fichier "path".' });
+      const { dataUrl, ...shotMeta } = res;
+      return asCompactText({ ...shotMeta, note: 'Image trop lourde pour être renvoyée inline : utilise le fichier "path".' });
     }
     return asCompactText(res);
   } catch (err) {
+    const meta = formatComputerHistoryMeta(effective, null);
     recordToolHistoryEntry({
       tool: 'fs_computer',
-      title: `Computer Use : ${effective.action}`,
+      title: meta.title,
       status: 'error',
       error: err?.message || String(err),
       triggeredCapabilities: { intent: 'computer_use' },
@@ -1279,10 +1338,11 @@ server.registerTool('fs_canvas', {
 }, async (params) => {
   const res = await executeCanvasAction(params);
   if (params.action === 'create' || params.action === 'update') {
+    const fmt = String(params.type || res?.type || 'html').toUpperCase();
     recordToolHistoryEntry({
       tool: 'fs_canvas',
-      title: `/canvas : ${params.title || params.id || res?.id || 'Artifact'}`,
-      summary: `Artifact ${params.type || 'html'} (${res?.previewUrl || ''})`,
+      title: `Canvas — ${params.title || params.id || res?.id || 'Artifact'}`,
+      summary: `Artifact ${fmt} prêt à prévisualiser`,
       response: params.content || JSON.stringify(res, null, 2),
       triggeredCapabilities: { canvas: true, intent: 'canvas_artifact' },
       canvasPreview: res?.previewUrl ? { id: res.id, type: res.type || params.type || 'html', url: res.previewUrl, title: params.title || '' } : null,
@@ -1311,10 +1371,13 @@ server.registerTool('fs_thinking', {
   const st = loadState();
   const res = await executeThinkingAction(params, { deepThinkingEnabled: st.deepThinkingEnabled !== false });
   if (!params.action || params.action === 'think') {
+    const n = params.thoughtNumber || res?.thoughtNumber || 1;
+    const tot = params.totalThoughts || res?.totalThoughts || '';
+    const snippet = String(params.thought || '').replace(/\s+/g, ' ').trim().slice(0, 48);
     recordToolHistoryEntry({
       tool: 'fs_thinking',
-      title: `/think #${params.thoughtNumber || res?.thoughtNumber || 1}`,
-      summary: String(params.thought || '').slice(0, 180),
+      title: snippet ? `Réflexion #${n} — ${snippet}` : `Réflexion — Étape #${n}`,
+      summary: tot ? `Étape ${n}/${tot}` : `Étape ${n}`,
       response: String(params.thought || JSON.stringify(res, null, 2)),
       triggeredCapabilities: { intent: 'sequential_thinking' },
     });
@@ -1332,11 +1395,12 @@ server.registerTool('fs_fetch', {
     timeoutMs: z.number().int().min(3000).max(30_000).optional().describe('Délai HTTP max en ms (défaut 15000).'),
   },
 }, async (params) => {
+  const urlHost = (() => { try { return new URL(params.url).hostname; } catch { return params.url; } })();
   try {
     const res = await executeWebFetch(params);
     recordToolHistoryEntry({
       tool: 'fs_fetch',
-      title: `Fetch : ${res.title || params.url}`,
+      title: `Page web — ${String(res.title || urlHost).slice(0, 50)}`,
       summary: `HTTP ${res.status} · ${res.totalChars} car.`,
       response: res.content || '',
       triggeredCapabilities: { webSearch: true, intent: 'web_fetch' },
@@ -1345,9 +1409,10 @@ server.registerTool('fs_fetch', {
   } catch (err) {
     recordToolHistoryEntry({
       tool: 'fs_fetch',
-      title: `Fetch : ${params.url}`,
+      title: `Page web — ${String(urlHost).slice(0, 50)}`,
       status: 'error',
       error: err?.message || String(err),
+      triggeredCapabilities: { webSearch: true, intent: 'web_fetch' },
     });
     throw err;
   }
@@ -1364,13 +1429,15 @@ server.registerTool('fs_doc_read', {
 }, async (params) => {
   const ws = params.workspaceRoot || loadState().lastWorkspaceRoot || '';
   const res = await executeDocRead({ ...params, workspaceRoot: ws });
+  const fileName = basename(String(params.path || '')) || params.path;
   recordToolHistoryEntry({
     tool: 'fs_doc_read',
-    title: `Doc : ${params.path}`,
+    title: `Document — ${fileName}`,
     status: res.ok ? 'done' : 'error',
-    summary: res.ok ? `${res.format} (${res.engine}) · ${res.totalChars} car.` : (res.error || 'Échec'),
+    summary: res.ok ? `${String(res.format || '').toUpperCase()} · ${res.totalChars} car.` : (res.error || 'Échec'),
     response: res.ok ? (res.content || '') : '',
     error: res.ok ? null : res.error,
+    triggeredCapabilities: { intent: 'doc_read' },
   });
   return asCompactText(res);
 });
@@ -1389,12 +1456,14 @@ server.registerTool('fs_git', {
   },
 }, async (params) => {
   const ws = params.workspaceRoot || loadState().lastWorkspaceRoot || '';
+  const act = params.action || 'status';
   const res = await executeGitAction({ ...params, workspaceRoot: ws });
   recordToolHistoryEntry({
     tool: 'fs_git',
-    title: `Git ${params.action || 'status'}`,
-    summary: params.action === 'status' ? `${res.branch || ''} (${res.files?.length ?? 0} modifs)` : `Action ${params.action}`,
+    title: `Git — ${GIT_ACTION_LABELS[act] || act}`,
+    summary: act === 'status' ? `${res.branch || 'dépôt'} · ${res.files?.length ?? 0} modif(s)` : (GIT_ACTION_LABELS[act] || act),
     response: JSON.stringify(res, null, 2),
+    triggeredCapabilities: { intent: 'git_read' },
   });
   return asCompactText(res);
 });

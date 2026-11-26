@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SidecarApp, Response } from 'sidecar_sdk';
 import {
@@ -737,7 +737,7 @@ app.api('/api/state', async () => {
     opusEconomyGuard: state.opusEconomyGuard !== false,
     specialtyRouting: state.specialtyRouting !== false,
     compactUi: Boolean(state.compactUi),
-    liquidGlass: Boolean(state.liquidGlass),
+    liquidGlass: state.liquidGlass !== false,
     lastWorkspaceRoot: wsRoot || null,
     undoEntries: wsRoot ? listUndoEntries(wsRoot, 15) : [],
     projectMemory: getProjectMemory(wsRoot),
@@ -1036,16 +1036,25 @@ app.api('/api/computer', async (data) => {
     });
     if (shouldRecord) {
       const { dataUrl: _dropUrl, ...meta } = (res && typeof res === 'object') ? res : { res };
-      const detail = params.action === 'screenshot'
-        ? `Capture ${res.width || '?'}×${res.height || '?'} (${Math.round((res.bytes || 0) / 1024)} Ko)`
-        : (params.action === 'ui_tree'
-          ? `Arbre UIA « ${res.windowTitle || 'fenêtre'} » (${res.count ?? 0} contrôles)`
-          : (params.action === 'ui_click'
-            ? `Clic UIA « ${res.clicked || params.name || params.automationId || '?'} » (${res.x},${res.y})`
-            : `Action ${params.action}`));
+      const act = String(params.action || '');
+      const idx = (res?.screenIndex ?? params?.screenIndex ?? 0) + 1;
+      const prettyTitle = act === 'screenshot'
+        ? `Capture d’écran (Écran ${idx})`
+        : (act === 'ui_tree'
+          ? (res?.windowTitle ? `Inspection d’interface — ${String(res.windowTitle).slice(0, 34)}` : 'Inspection d’interface')
+          : (act === 'ui_click'
+            ? `Clic interface — ${String(res?.clicked || params?.name || params?.automationId || 'contrôle').slice(0, 36)}`
+            : `Contrôle bureau — ${act}`));
+      const detail = act === 'screenshot'
+        ? `${res?.width || '?'}×${res?.height || '?'} · ${Math.round((res?.bytes || 0) / 1024)} Ko`
+        : (act === 'ui_tree'
+          ? `${res?.count ?? 0} contrôle(s) détecté(s)`
+          : (act === 'ui_click'
+            ? `Position (${res?.x ?? '?'}, ${res?.y ?? '?'})`
+            : `Action ${act}`));
       recordPanelToolHistory({
         tool: 'fs_computer',
-        title: `Computer Use : ${params.action}`,
+        title: prettyTitle,
         summary: detail,
         response: JSON.stringify(meta, null, 2),
         triggeredCapabilities: { intent: 'computer_use' },
@@ -1056,7 +1065,7 @@ app.api('/api/computer', async (data) => {
     if (shouldRecord) {
       recordPanelToolHistory({
         tool: 'fs_computer',
-        title: `Computer Use : ${params.action}`,
+        title: `Contrôle bureau — ${params.action}`,
         status: 'error',
         error: err?.message || String(err),
         triggeredCapabilities: { intent: 'computer_use' },
@@ -1072,10 +1081,13 @@ app.api('/api/thinking', async (data) => {
     deepThinkingEnabled: state.deepThinkingEnabled !== false,
   });
   if (!data?.action || data.action === 'think') {
+    const n = data?.thoughtNumber || res?.thoughtNumber || 1;
+    const tot = data?.totalThoughts || res?.totalThoughts || '';
+    const snippet = String(data?.thought || '').replace(/\s+/g, ' ').trim().slice(0, 48);
     recordPanelToolHistory({
       tool: 'fs_thinking',
-      title: `/think #${data?.thoughtNumber || res?.thoughtNumber || 1}`,
-      summary: String(data?.thought || '').slice(0, 180),
+      title: snippet ? `Réflexion #${n} — ${snippet}` : `Réflexion — Étape #${n}`,
+      summary: tot ? `Étape ${n}/${tot}` : `Étape ${n}`,
       response: String(data?.thought || JSON.stringify(res, null, 2)),
       triggeredCapabilities: { intent: 'sequential_thinking' },
     });
@@ -1086,10 +1098,11 @@ app.api('/api/thinking', async (data) => {
 app.api('/api/canvas', async (data) => {
   const res = await executeCanvasAction(data);
   if (data?.action === 'create' || data?.action === 'update') {
+    const fmt = String(data.type || res?.type || 'html').toUpperCase();
     recordPanelToolHistory({
       tool: 'fs_canvas',
-      title: `/canvas : ${data.title || data.id || res?.id || 'Artifact'}`,
-      summary: `Artifact ${data.type || 'html'} (${res?.previewUrl || ''})`,
+      title: `Canvas — ${data.title || data.id || res?.id || 'Artifact'}`,
+      summary: `Artifact ${fmt} prêt à prévisualiser`,
       response: data.content || JSON.stringify(res, null, 2),
       triggeredCapabilities: { canvas: true, intent: 'canvas_artifact' },
       canvasPreview: res?.previewUrl ? { id: res.id, type: res.type || data.type || 'html', url: res.previewUrl, title: data.title || '' } : null,
@@ -1166,7 +1179,7 @@ app.api('/api/config/export', () => {
       reasoningEffort: state.reasoningEffort,
       cutoffPercent: state.cutoffPercent,
       maxParallel: state.maxParallel,
-      liquidGlass: Boolean(state.liquidGlass),
+      liquidGlass: state.liquidGlass !== false,
       tiers: state.tiers,
       allowedModels: state.allowedModels || [],
       blockedModels: state.blockedModels || [],
@@ -1226,8 +1239,8 @@ app.api('/api/undo', (data) => {
     logEvent('info', 'panel', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
     recordPanelToolHistory({
       tool: 'fs_undo',
-      title: `/undo : ${res.undone.rel}`,
-      summary: `Restauré ${res.undone.rel} (${res.undone.action}).`,
+      title: `Fichier restauré — ${basename(String(res.undone.rel || '')) || res.undone.rel}`,
+      summary: `Restauré ${res.undone.rel} (${res.undone.action})`,
       response: JSON.stringify(res, null, 2),
     });
   }
