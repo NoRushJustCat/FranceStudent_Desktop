@@ -1,6 +1,6 @@
 ---
 name: canvas
-description: Créer et prévisualiser en direct des artifacts interactifs HTML/SVG/Mermaid/3D via fs_canvas.
+description: Créer et prévisualiser en direct des artifacts interactifs HTML/SVG/Mermaid via fs_canvas.
 ---
 
 # `/canvas` — Artifacts & Live Canvas (`fs_canvas`)

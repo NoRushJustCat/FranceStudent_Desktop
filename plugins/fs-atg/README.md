@@ -1,24 +1,38 @@
 # France Student [ATG] (`fs-atg` v2.6.0)
 
-Orchestrateur **France Student** complet pour **Antigravity** (MCP Server + panneau latéral Electron/Sidecar style **visionOS / Dynamic Island**).
+Orchestrateur **France Student** complet pour **Antigravity** (Serveur MCP + Sidecar HTML/Node.js à rendu IDE mat épuré par défaut, avec option *Liquid Glass*).
 
 Il délègue l’exploration, la planification, l’édition atomique de code (`/undo`), le raisonnement approfondi, la création d’artifacts Canvas, le pilotage bureau Windows (*Computer Use* + boucle Vision Live) et les recherches web directement aux modèles France Student afin d’économiser le quota Antigravity.
+
+<div align="center">
+  <img src="../../assets/screenshots/fs-atg-home.png" alt="Onglet Accueil" width="260" />
+  <img src="../../assets/screenshots/fs-atg-models.png" alt="Onglet Modèles" width="260" />
+  <img src="../../assets/screenshots/fs-atg-settings.png" alt="Onglet Réglages" width="260" />
+</div>
 
 ---
 
 ## Nouveautés majeures (v2.6.0)
 
-- **Dock flottant bas & animations Liquid Spring Pill** : barre d’onglets (`Accueil`, `Modèles`, `Réglages`), sélecteurs de routage/permissions/raisonnement et politiques modèles animés par une pilule verre dépoli (`backdrop-filter: blur`) avec rebond physique.
+- **Dock bas & indicateur glissant épuré (+ option Liquid Glass)** : rendu IDE mat épuré par défaut (surfaces opaques, bordures nettes), avec un interrupteur **Effet Liquid Glass** dans **Réglages** pour réactiver le verre dépoli (`backdrop-filter: blur`) et la pilule élastique à tout moment.
+- **Interface épurée** : en plus de l’option Liquid Glass (désactivée par défaut), l’interrupteur **Interface épurée** des **Réglages** masque les éléments secondaires pour ne garder que l’essentiel.
+- **Routage intelligent (même en mode MAX / Fort)** : `fs_core.mjs` (`pickModel`) rétrograde le texte simple, les Q/R et les typos vers un modèle léger (`standard`) et le code standard court vers un modèle équilibré (`deep`) ; `heavy` + `max` restent réservés à l'ingénierie complexe, aux profils `security` / `refactor` ou à un palier forcé (`/heavy`, `/model`). `fs_bridge.mjs` applique la même logique sur le dernier tour `User:`, et `agents/france-student.md` impose la règle à l'agent natif.
+- **Agent principal natif Antigravity (`agents/france-student.md`)** : sélectionnable directement comme agent principal dans Antigravity App et `/agents` dans Antigravity CLI (`model: flash` côté enveloppe Antigravity, délégation complète vers France Student). Workflow complet : `fs_delegate` immédiat avec `workspaceRoot` + `contextMode="minimal"`, suivi via `fs_job_status`, pas de relecture des fichiers listés dans `filesWritten`, commandes `/fs`, `/max`, `/plan`, `/patch`, `/eco`, `/undo`, `/remember`, `/quota`, `/canvas`, `/computer`, `/think`, accord explicite avant tout `needs_approval`, et bascule native transparente pendant un cooldown `IA non dispo`.
+- **Bridge local Gemini API & OpenAI (`fs_bridge.mjs`)** : expose France Student sur `http://127.0.0.1:52000` avec appels d’outils natifs (`functionDeclarations` ↔ `functionCall` / `tool_calls`) et respect strict du hors-quota à `0 %`, compatible avec le **`/model` picker natif d’Antigravity CLI** (`customModelsConfig`, via `node fs_bridge.mjs --print-cli-config`) et le **SDK Python Antigravity** (`LocalOpenAIAgentConfig`).
+  > **Limite officielle** : le Model Picker graphique d’Antigravity App n’accepte pas de modèles personnalisés. Les modèles virtuels du bridge (`fs-auto`, `fs-quality`, `fs-max`, `fs-eco`, `fs-hors-quota`) ne sont donc utilisables que dans Antigravity CLI et le SDK Python. Dans l’App, passe par l’agent principal `france-student`.
 - **Contrôle strict par modèle (`Oui` / `À demander` / `Non`)** :
   - `Oui` : sélection automatique autorisée ;
   - `À demander` : bloque l’exécution et retourne `status: "needs_approval"` avec approbation en 1 clic dans le panneau ou `approveModel="..."` ;
   - `Non` : interdiction absolue (`assertModelNotDenied`), même en secours ou en alias explicite.
-- **Mistral hors quota (`Hors quota`)** : les modèles Mistral (`ministral-14b-latest`, `mistral*`, `codestral*`, `devstral*`) passent outre les quotas et la réserve (`cutoffPercent`). En cas de budget à `0 %`, sous réserve, ou sur `429 CHAT_BUDGET_EXHAUSTED`, bascule automatique et instantanée vers Mistral (avec repli propre en mode texte/patch si `clientTools` n’est pas supporté par le endpoint).
+- **Mistral hors quota (`Hors quota`)** : les modèles Mistral (`ministral-14b-latest`, `mistral*`, `codestral*`, `devstral*`, `pixtral*`, `magistral*`) passent outre les quotas locaux et la réserve (`cutoffPercent`). En cas de budget à `0 %`, sous réserve, ou sur `429 CHAT_BUDGET_EXHAUSTED`, bascule automatique vers Mistral (avec repli propre en mode texte/patch si `clientTools` n’est pas supporté par le endpoint).
+  - **Protection stricte à 0 %** : aucune recherche ni repli vers un modèle à quota. Si aucun Mistral n’est autorisé, l’erreur est explicite (pas de tentative silencieuse).
+  - **Isolation de session** : un modèle sans `clientTools` ne réutilise pas le chat persistant du projet ; en cas d’historique d’outils incompatible, nouvel essai sur un chat neuf.
+  - **Filtrage `webSearch`** : si un modèle hors-quota échoue avec la recherche web active, un seul nouvel essai sans recherche web sur ce même modèle.
 - **Computer Use & boucle Vision Live (`Live`)** :
   - Multi-écrans (`screen_info`, `screenshot` avec `screenIndex` / `deviceName`), liste/focus des fenêtres, souris, clavier, presse-papiers.
   - Upload réel via `POST /filesv2` et attachement aux tours `/chats/stream` pour une boucle itérative Antigravity ↔ France Student (`liveComputerMode`).
-- **Raisonnement séquentiel (`fs_thinking`)** & **Canvas Live (`fs_canvas`)** : journal de pensée cross-processus (`.fsatg_thinking.json`) et prévisualisation HTML/SVG/Mermaid/3D.
-- **Authentification robuste** : connexion web navigateur (Playwright) avec renouvellement automatique de session, migration sécurisée dans le **Gestionnaire d’identification Windows** (`windows_credential_store.ps1`), et clé API manuelle.
+- **Raisonnement séquentiel (`fs_thinking`)** & **Canvas Live (`fs_canvas`)** : journal de pensée cross-processus (`.fsatg_thinking.json`) et prévisualisation HTML/SVG/Mermaid (une scène 3D reste possible en HTML via une bibliothèque JS).
+- **Authentification robuste** : connexion web via navigateur **Chrome ou Microsoft Edge** en profil persistant (`browser_auth.mjs` via CDP) avec renouvellement automatique de session, migration sécurisée dans le **Gestionnaire d’identification Windows** (`windows_credential_store.ps1`), et clé API manuelle.
 - **Historique étendu (50 tâches)**, télémétrie modèles (tok/s, TTFT, taux de succès, badge `Instable`), et suivi des économies de tokens Antigravity.
 
 ---
@@ -30,16 +44,16 @@ Il délègue l’exploration, la planification, l’édition atomique de code (`
 | `fs_delegate` | Délègue une tâche avec routage intelligent (`Fort`, `Auto`, `Éco`), outils locaux `/undo`, Plan B et Vision Live |
 | `fs_job_status` | Suivi temps réel d’un job (`waiting`, `running`, `needs_approval`, `done`, `failed`) |
 | `fs_undo` | Annulation atomique de modifications disque |
-| `fs_memory` | Lecture/écriture de la mémoire projet persistante (`FRST.md` / `FRSTCLI.md`) |
-| `fs_canvas` | Création/prévisualisation d’artifacts HTML, SVG, Mermaid, 3D |
+| `fs_memory` | Lecture/écriture de la mémoire projet persistante (dossier `.fsatg_memory/` + lecture `FRST.md` / `FRSTCLI.md`) |
+| `fs_canvas` | Création/prévisualisation d’artifacts HTML, SVG, Mermaid |
 | `fs_computer` | Capture multi-écrans, gestion fenêtres, souris, clavier, presse-papiers |
 | `fs_thinking` | Raisonnement structuré étape par étape avec hypothèses et branches |
 | `fs_logs` | Consultation des journaux du connecteur |
 | `fs_session` | Gestion et réinitialisation des sessions persistantes par projet |
 | `fs_quota` | Lecture du budget restant, de l’heure de reset et du cooldown global |
 | `fs_diagnostics` | Vérification auth, connectivité API, catalogue et télémétrie modèles |
-| `fs_status` | État complet du connecteur et des créneaux de stream |
-| `fs_catalog` | Découverte lecture seule (`/skills`, `/projects`, `/mcp/servers`, `/filesv2`) |
+| `fs_status` | Statut du connecteur sans appel fournisseur : transport MCP, version, mode Auto/Manuel, outils publiés, créneaux de stream, cooldown global et jobs actifs/en file |
+| `fs_catalog` | Découverte lecture seule : `GET /models`, `/metrics/chat-streams` et, selon disponibilité côté compte, `/skills`, `/projects`, `/mcp/servers`, `/filesv2` |
 | `fs_cancel` | Annulation d’un job en cours |
 
 ---
@@ -47,12 +61,10 @@ Il délègue l’exploration, la planification, l’édition atomique de code (`
 ## Installation rapide (Antigravity)
 
 1. Copier ce dossier dans `%USERPROFILE%\.gemini\config\plugins\fs-atg`.
-2. Installer les dépendances Node.js à la racine du plugin et du sidecar :
+2. Installer les dépendances Node.js à la racine du plugin (le sidecar `sidecars/fs_atg_panel` n'a aucune dépendance npm) :
    ```powershell
    cd "$env:USERPROFILE\.gemini\config\plugins\fs-atg"
    npm install
-   cd sidecars\fs_atg_panel
-   npm install
    ```
-3. Adapter `mcp_config.json` avec votre chemin utilisateur (`C:/Users/<USER>/.gemini/config/plugins/fs-atg/mcp_server.mjs`), puis activer le plugin `fs-atg` dans Antigravity.
+3. Remplacer impérativement `C:/Users/<USER>/...` dans `mcp_config.json` par votre chemin utilisateur local (ex. `C:/Users/prenom/.gemini/config/plugins/fs-atg/mcp_server.mjs`), puis activer le plugin `fs-atg` dans Antigravity.
 4. Ouvrir le panneau **France Student [ATG]** et cliquer sur **Connexion navigateur** (ou coller votre clé / jeton).

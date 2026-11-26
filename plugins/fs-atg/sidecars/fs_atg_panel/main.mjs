@@ -110,7 +110,7 @@ const ROUTING_PROFILES = new Set(['auto', 'eco', 'fast', 'quality', 'security', 
 
 function profileState(st, profile) {
   const routingProfile = ROUTING_PROFILES.has(profile) ? profile
-    : (ROUTING_PROFILES.has(st.routingProfile) ? st.routingProfile : 'quality');
+    : (ROUTING_PROFILES.has(st.routingProfile) ? st.routingProfile : 'auto');
   return { ...st, routingProfile };
 }
 
@@ -471,7 +471,7 @@ async function runJob(job) {
 
     logEvent('info', 'panel', 'panel.job.start', `Démarrage job panneau ${job.id} (${route.model}).`, { jobId: job.id, model: route.model, tools: clientTools.length, reasoningEffort: job.reasoningEffort, triggers: job.triggeredCapabilities });
 
-    const usePersistent = job.executionMode !== 'plan' && job.executionMode !== 'dry-run';
+    const usePersistent = job.executionMode !== 'plan' && job.executionMode !== 'dry-run' && modelSupportsClientTools(route.model);
     const chatId = usePersistent ? await preparePanelChat(state) : undefined;
     if (chatId) job.chatId = chatId;
 
@@ -512,6 +512,8 @@ async function runJob(job) {
           model: route.model,
           approvedModel: job.approveModel || null,
           availableModels: ids,
+          quotaBypass: Boolean(route.quotaBypass),
+          quotaRemainingPct: q?.remainingPct ?? null,
           agentMap,
           instructions: panelInstructions(job.executionMode, { useTools: clientTools.length > 0, reasoningEffort: job.reasoningEffort, enableCanvas: Boolean(route.enableCanvas) }) + visionSuffix,
           fallbackInstructions: panelInstructions(job.executionMode, { useTools: false, reasoningEffort: job.reasoningEffort, enableCanvas: Boolean(route.enableCanvas) }) + visionSuffix,
@@ -573,6 +575,8 @@ async function runJob(job) {
             model: route.model,
             approvedModel: job.approveModel || null,
             availableModels: ids,
+            quotaBypass: Boolean(route.quotaBypass),
+            quotaRemainingPct: q?.remainingPct ?? null,
             agentMap,
             instructions: panelInstructions(job.executionMode, { useTools: false, reasoningEffort: job.reasoningEffort, enableCanvas: Boolean(route.enableCanvas) }) + visionSuffix,
             fileIds: visionFileIds,
@@ -714,7 +718,7 @@ app.api('/api/state', async () => {
     cooldown: getGlobalCooldown(state),
     cutoff: state.cutoffPercent,
     mode: state.mode,
-    routingProfile: ROUTING_PROFILES.has(state.routingProfile) ? state.routingProfile : 'quality',
+    routingProfile: ROUTING_PROFILES.has(state.routingProfile) ? state.routingProfile : 'auto',
     permissionMode: permMode,
     useClientTools,
     computerUseEnabled: state.computerUseEnabled !== false,
@@ -728,6 +732,7 @@ app.api('/api/state', async () => {
     imageGenMode: normalizeTriggerMode(state.imageGenMode ?? 'auto', 'auto'),
     smartRouting: state.smartRouting !== false,
     compactUi: Boolean(state.compactUi),
+    liquidGlass: Boolean(state.liquidGlass),
     lastWorkspaceRoot: wsRoot || null,
     undoEntries: wsRoot ? listUndoEntries(wsRoot, 15) : [],
     projectMemory: getProjectMemory(wsRoot),
@@ -912,6 +917,9 @@ app.api('/api/settings', (data) => {
   if (typeof data.compactUi === 'boolean') {
     state.compactUi = data.compactUi;
   }
+  if (typeof data.liquidGlass === 'boolean') {
+    state.liquidGlass = data.liquidGlass;
+  }
   if (typeof data.autoDelegate === 'boolean' || PERMISSION_MODES.includes(data.permissionMode)) {
     syncAgentsRule(state.autoDelegate !== false, state.permissionMode);
     logEvent('info', 'panel', 'settings.policy', `Règles mises à jour : ${state.autoDelegate !== false ? 'Auto' : 'Manuel'} (${state.permissionMode || 'acceptEdits'}).`);
@@ -1052,6 +1060,7 @@ app.api('/api/config/export', () => {
       reasoningEffort: state.reasoningEffort,
       cutoffPercent: state.cutoffPercent,
       maxParallel: state.maxParallel,
+      liquidGlass: Boolean(state.liquidGlass),
       tiers: state.tiers,
       allowedModels: state.allowedModels || [],
       blockedModels: state.blockedModels || [],
@@ -1083,6 +1092,7 @@ app.api('/api/config/import', (data) => {
   if (cfg.reasoningEffort !== undefined) { state.reasoningEffort = normalizeReasoningEffort(cfg.reasoningEffort, state.reasoningEffort || 'deep'); applied.push('reasoningEffort'); }
   if (typeof cfg.cutoffPercent === 'number') { state.cutoffPercent = Math.max(0, Math.min(90, cfg.cutoffPercent)); applied.push('cutoffPercent'); }
   if (typeof cfg.maxParallel === 'number') { state.maxParallel = Math.max(1, Math.min(6, cfg.maxParallel)); applied.push('maxParallel'); }
+  if (typeof cfg.liquidGlass === 'boolean') { state.liquidGlass = cfg.liquidGlass; applied.push('liquidGlass'); }
   const cleanList = (a) => (Array.isArray(a) ? a.map((s) => String(s).trim()).filter(Boolean) : null);
   if (cfg.tiers && typeof cfg.tiers === 'object') {
     state.tiers = {

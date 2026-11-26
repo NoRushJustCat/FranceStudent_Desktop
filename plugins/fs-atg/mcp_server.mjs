@@ -188,7 +188,7 @@ function normalizedDelegation(task, requestedMode, requestedProfile, requestedPe
 }
 
 function profileState(st, profile) {
-  const routingProfile = ROUTING_PROFILES.has(profile) ? profile : (ROUTING_PROFILES.has(st.routingProfile) ? st.routingProfile : 'quality');
+  const routingProfile = ROUTING_PROFILES.has(profile) ? profile : (ROUTING_PROFILES.has(st.routingProfile) ? st.routingProfile : 'auto');
   return { ...st, routingProfile };
 }
 
@@ -500,7 +500,7 @@ async function runJob(job) {
     logEvent('info', 'mcp', 'job.start', `Démarrage job ${job.id} (${route.model}, ${route.reason}).`, {
       jobId: job.id,
       model: route.model,
-      profile: job.routingProfile || 'quality',
+      profile: job.routingProfile || 'auto',
       planB: Boolean(job.planB),
       parts: job.parts?.length || 0,
     });
@@ -564,6 +564,8 @@ async function runJob(job) {
               model: route.model,
               approvedModel: job.approveModel || null,
               availableModels: ids,
+              quotaBypass: Boolean(route.quotaBypass),
+              quotaRemainingPct: q?.remainingPct ?? null,
               agentMap,
               instructions: PLAN_B_PART_INSTRUCTIONS,
               prompt: partPrompt,
@@ -635,8 +637,8 @@ async function runJob(job) {
         : null;
 
       const key = directSessionKey(job);
-      // Only reuse persistent chat per project workspace; standalone prompts without workspaceRoot run isolated so unrelated requests never bleed into each other.
-      const usePersistentChat = !job.planB && Boolean(job.workspaceRoot) && job.executionMode !== 'plan' && job.executionMode !== 'dry-run';
+      // Only reuse persistent chat per project workspace when the selected model supports clientTools; standalone prompts or tool-less models (e.g. Ministral) run isolated so tool history never leaks.
+      const usePersistentChat = !job.planB && Boolean(job.workspaceRoot) && job.executionMode !== 'plan' && job.executionMode !== 'dry-run' && modelSupportsClientTools(route.model);
       const chatId = usePersistentChat ? await prepareDirectChat(st, key) : undefined;
       if (chatId) job.chatId = chatId;
 
@@ -675,6 +677,8 @@ async function runJob(job) {
           model: route.model,
           approvedModel: job.approveModel || null,
           availableModels: ids,
+          quotaBypass: Boolean(route.quotaBypass),
+          quotaRemainingPct: q?.remainingPct ?? null,
           agentMap,
           instructions,
           fallbackInstructions,
@@ -730,6 +734,8 @@ async function runJob(job) {
           model: route.model,
           approvedModel: job.approveModel || null,
           availableModels: ids,
+          quotaBypass: Boolean(route.quotaBypass),
+          quotaRemainingPct: q?.remainingPct ?? null,
           agentMap,
           instructions: route.enableCanvas ? CANVAS_INSTRUCTIONS : PLAN_B_PART_INSTRUCTIONS,
           prompt: freshPrompt,
@@ -848,7 +854,7 @@ const server = new McpServer({ name: 'fs-atg', version: CONNECTOR_VERSION });
 
 server.registerTool('fs_delegate', {
   title: 'Déléguer à France Student [ATG]',
-  description: 'Délègue à France Student : avec workspaceRoot (mode acceptEdits/full), France Student lit/écrit/teste directement sur le PC avec sauvegarde /undo et renvoie un bilan compact (filesWritten, commandsRun). En mode plan ou patch, reste en lecture seule.',
+  description: 'Délègue à France Student : avec workspaceRoot (mode acceptEdits/full), France Student lit/écrit/teste directement sur le PC avec sauvegarde /undo et renvoie un bilan compact (filesWritten, commandsRun). Adapte toujours routingProfile et reasoningEffort à la complexité réelle (même si Antigravity est en MAX) : texte simple/résumé/traduction/Q&A → routingProfile="eco" + reasoningEffort="standard" ; code standard → "auto" + "deep" ; architecture/debug complexe → "quality" + "max".',
   inputSchema: {
     task: z.string().min(3).describe('Consigne claire en phrases normales (commandes possibles : /send, /plan, /patch, /mode, /eco, /fast, /low, /medium, /high).'),
     workspaceRoot: z.string().optional().describe('Chemin absolu du workspace : active les outils locaux selon permissionMode (lecture/écriture/commandes bornées).'),
@@ -860,8 +866,8 @@ server.registerTool('fs_delegate', {
     parentJobId: z.string().optional().describe('Suite d’un job précédent.'),
     executionMode: z.enum(['generate', 'apply', 'plan', 'patch', 'dry-run']).optional().describe('apply/generate autorisent les outils selon permissionMode ; plan/patch/dry-run restent en lecture seule.'),
     permissionMode: z.enum(['plan', 'acceptEdits', 'full']).optional().describe('Surcharge ponctuelle : plan (lecture seule), acceptEdits (lecture + écriture/édition avec /undo), full (+ run_command sécurisé).'),
-    reasoningEffort: z.enum(['standard', 'deep', 'max']).optional().describe('Niveau de raisonnement : standard, deep (approfondi, défaut), ou max (raisonnement maximal + priorité modèles forts).'),
-    routingProfile: z.enum(['auto', 'eco', 'fast', 'quality', 'security', 'refactor']).optional(),
+    reasoningEffort: z.enum(['standard', 'deep', 'max']).optional().describe('standard pour texte simple/question/résumé/typo, deep pour code courant, max uniquement pour architecture ou debug complexe.'),
+    routingProfile: z.enum(['auto', 'eco', 'fast', 'quality', 'security', 'refactor']).optional().describe('eco/fast pour texte simple ou tâche légère, auto par défaut (routage intelligent), quality/security/refactor pour ingénierie lourde.'),
     webSearch: z.enum(['auto', 'on', 'off']).optional().describe('Déclencheur Recherche Web natif France Student : auto (défaut intelligent), on (forcé), off (désactivé).'),
     canvas: z.enum(['auto', 'on', 'off']).optional().describe('Déclencheur Canvas / Artefacts natif France Student (documentToolsEnabled + aperçu live) : auto (défaut intelligent), on, off.'),
     imageGen: z.enum(['auto', 'on', 'off']).optional().describe('Déclencheur génération d’images IA native France Student : auto, on, off.'),

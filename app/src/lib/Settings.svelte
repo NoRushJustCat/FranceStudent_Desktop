@@ -997,8 +997,7 @@
     position: fixed;
     inset: 0;
     z-index: 60;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
+    background: rgba(4, 6, 12, 0.72);
     display: flex;
     align-items: center;
     justify-content: center;

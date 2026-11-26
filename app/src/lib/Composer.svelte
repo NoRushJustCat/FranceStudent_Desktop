@@ -651,8 +651,7 @@
     position: absolute;
     inset: 0;
     z-index: 20;
-    background: color-mix(in srgb, var(--panel) 88%, transparent);
-    backdrop-filter: blur(4px);
+    background: var(--panel);
     border-radius: var(--radius);
     display: flex;
     align-items: center;

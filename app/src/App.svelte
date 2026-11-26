@@ -2008,9 +2008,7 @@ assistant().text += ev.text;
     gap: 10px;
     padding: 0 18px;
     border-bottom: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    background: var(--bg);
     transition: border-color 0.16s ease;
     z-index: 20;
   }
@@ -2531,9 +2529,7 @@ assistant().text += ev.text;
   .dock {
     flex-shrink: 0;
     border-top: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    background: var(--bg);
   }
 
   .dockin {

@@ -947,8 +947,7 @@ pre code {
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: rgba(4, 6, 12, 0.72);
-  backdrop-filter: blur(4px);
+  background: rgba(4, 6, 12, 0.74);
   display: grid;
   place-items: center;
   animation: fs-fade var(--t) both;

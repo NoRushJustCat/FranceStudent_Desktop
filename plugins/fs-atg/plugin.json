@@ -1,7 +1,7 @@
 {
   "name": "fs-atg",
   "displayName": "France Student [ATG]",
-  "description": "Orchestrateur France Student v2.6 ultra-épuré pour Antigravity : délégation intelligente (Chat, Code + /undo, Web Search, Canvas Live, tri automatique des modèles fort → faible, mémoire projet FRST.md/FRSTCLI.md, compaction serveur) + 2 extensions MCP ciblées : Computer Use et Raisonnement approfondi (Sequential Thinking).",
+  "description": "Orchestrateur France Student v2.6 pour Antigravity : agent principal natif « france-student » (App & CLI), délégation directe sur disque avec /undo, Chat, Web Search, Canvas Live, tri des modèles fort → faible, mémoire projet FRST.md/FRSTCLI.md, compaction serveur, protection budget stricte à 0 % (hors-quota Mistral uniquement, aucun repli vers un modèle à quota), bridge local Gemini API / OpenAI (fs_bridge.mjs) pour le /model d'Antigravity CLI et le SDK Python, panneau mat épuré avec option Liquid Glass, + Computer Use et Sequential Thinking.",
   "version": "2.6.0",
   "logo": "assets/logo.png",
   "suggestedPrompts": [
@@ -10,6 +10,7 @@
     "Utilise /think pour structurer un raisonnement approfondi étape par étape",
     "Utilise /canvas pour créer un artifact interactif HTML/SVG/Mermaid en aperçu live",
     "Utilise /computer pour capturer l'écran, lister les fenêtres ou piloter le bureau",
-    "Utilise /plan pour obtenir un plan détaillé sans modifier le code"
+    "Utilise /plan pour obtenir un plan détaillé sans modifier le code",
+    "Utilise /quota pour vérifier le budget restant et le routage hors-quota"
   ]
 }
