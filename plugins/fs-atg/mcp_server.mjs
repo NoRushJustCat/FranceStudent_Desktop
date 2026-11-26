@@ -72,6 +72,9 @@ import {
 import { COMPUTER_ACTIONS, executeComputerAction } from './computer_use.mjs';
 import { executeCanvasAction } from './canvas_tools.mjs';
 import { THINKING_ACTIONS, executeThinkingAction } from './thinking_tools.mjs';
+import { executeWebFetch } from './web_fetch.mjs';
+import { executeDocRead } from './doc_tools.mjs';
+import { GIT_ACTIONS, executeGitAction } from './git_tools.mjs';
 
 const CLIENT_TOOLS_INSTRUCTIONS = `Utilise directement les outils locaux fournis pour lire et modifier les fichiers demandés, puis termine par un court bilan.`;
 
@@ -394,6 +397,44 @@ function mcpCompactView(j, verbose = false) {
   };
 }
 
+function recordToolHistoryEntry({
+  tool,
+  title,
+  task = '',
+  status = 'done',
+  summary = '',
+  response = '',
+  error = null,
+  triggeredCapabilities = null,
+  canvasPreview = null,
+}) {
+  try {
+    const st = loadState();
+    const now = Date.now();
+    const id = randomUUID().slice(0, 8);
+    const entry = {
+      id,
+      jobId: id,
+      title: `${ATG} ${String(title || tool || 'Outil MCP').slice(0, 70)}`,
+      task: String(task || title || tool || ''),
+      status,
+      model: String(tool || 'mcp'),
+      routeReason: `outil MCP (${tool})`,
+      createdAt: now,
+      startedAt: now,
+      endedAt: now,
+      summary: String(summary || '').slice(0, 400),
+      response: String(response || summary || '').slice(0, 20_000),
+      ...(error ? { error: String(error).slice(0, 300) } : {}),
+      thoughts: [],
+      ...(triggeredCapabilities ? { triggeredCapabilities } : {}),
+      ...(canvasPreview ? { canvasPreview } : {}),
+    };
+    st.history = [entry, ...(st.history || [])].slice(0, HISTORY_LIMIT);
+    saveState(st);
+  } catch { /* non-blocking */ }
+}
+
 function finishJob(job, status) {
   job.status = status;
   job.endedAt = Date.now();
@@ -459,11 +500,13 @@ async function runJob(job) {
     const effectiveEffort = normalizeReasoningEffort(job.reasoningEffort || st.reasoningEffort, 'deep');
     st.reasoningEffort = effectiveEffort;
     const preUseTools = Boolean(st.useClientTools !== false && job.workspaceRoot && !job.planB && job.executionMode !== 'patch');
+    const hasImages = Boolean(job.attachScreenshot || job.imagePaths?.length || job.liveComputerMode);
     const route = pickModel(job.rawTask ?? job.task, ids, st, job.explicitModel, {
       approvedModel: job.approveModel || null,
       metaMap,
       workspaceRoot: job.workspaceRoot || '',
       useClientTools: preUseTools,
+      hasImages,
       webSearchMode: job.webSearchMode ?? null,
       canvasMode: job.canvasMode ?? null,
       imageGenMode: job.imageGenMode ?? null,
@@ -482,6 +525,7 @@ async function runJob(job) {
     job.reasoningEffort = route.reasoningEffort ?? effectiveEffort;
     job.triggeredCapabilities = {
       intent: route.intent || 'general',
+      specialty: route.specialty || null,
       webSearch: Boolean(route.enableWebSearch),
       canvas: Boolean(route.enableCanvas),
       imageGen: Boolean(route.enableImageGen),
@@ -854,9 +898,9 @@ const server = new McpServer({ name: 'fs-atg', version: CONNECTOR_VERSION });
 
 server.registerTool('fs_delegate', {
   title: 'Déléguer à France Student [ATG]',
-  description: 'Délègue à France Student : avec workspaceRoot (mode acceptEdits/full), France Student lit/écrit/teste directement sur le PC avec sauvegarde /undo et renvoie un bilan compact (filesWritten, commandsRun). Adapte toujours routingProfile et reasoningEffort à la complexité réelle (même si Antigravity est en MAX) : texte simple/résumé/traduction/Q&A → routingProfile="eco" + reasoningEffort="standard" ; code standard → "auto" + "deep" ; architecture/debug complexe → "quality" + "max".',
+  description: 'Délègue à France Student : avec workspaceRoot (mode acceptEdits/full), France Student lit/écrit/teste directement sur le PC avec sauvegarde /undo et renvoie un bilan compact (filesWritten, commandsRun). Adapte toujours le profil et le modèle à la spécialité (même en MAX, jamais Opus H24) : recherche/exploration/Q&A/doc courte → routingProfile="eco" + reasoningEffort="standard" (GPT Luna / Haiku) ; code standard/backend/tests → "auto" + "deep" (GPT Sol) ; UI/Frontend/Canvas → "auto" + "deep" (Claude Sonnet) ; Vision Live → GPT Terra ; algo difficile → GPT Astra ; architecture multi-fichiers/sécurité critique → "quality" + "max" (Opus réservé).',
   inputSchema: {
-    task: z.string().min(3).describe('Consigne claire en phrases normales (commandes possibles : /send, /plan, /patch, /mode, /eco, /fast, /low, /medium, /high).'),
+    task: z.string().min(3).describe('Consigne claire en phrases normales (commandes possibles : /send, /plan, /patch, /mode, /eco, /fast, /low, /medium, /high, /opus, /sonnet, /gpt, /astra).'),
     workspaceRoot: z.string().optional().describe('Chemin absolu du workspace : active les outils locaux selon permissionMode (lecture/écriture/commandes bornées).'),
     files: z.array(z.string()).optional().describe('Chemins relatifs à joindre si besoin (hors mode outils autonomes).'),
     model: z.string().optional(),
@@ -866,8 +910,8 @@ server.registerTool('fs_delegate', {
     parentJobId: z.string().optional().describe('Suite d’un job précédent.'),
     executionMode: z.enum(['generate', 'apply', 'plan', 'patch', 'dry-run']).optional().describe('apply/generate autorisent les outils selon permissionMode ; plan/patch/dry-run restent en lecture seule.'),
     permissionMode: z.enum(['plan', 'acceptEdits', 'full']).optional().describe('Surcharge ponctuelle : plan (lecture seule), acceptEdits (lecture + écriture/édition avec /undo), full (+ run_command sécurisé).'),
-    reasoningEffort: z.enum(['standard', 'deep', 'max']).optional().describe('standard pour texte simple/question/résumé/typo, deep pour code courant, max uniquement pour architecture ou debug complexe.'),
-    routingProfile: z.enum(['auto', 'eco', 'fast', 'quality', 'security', 'refactor']).optional().describe('eco/fast pour texte simple ou tâche légère, auto par défaut (routage intelligent), quality/security/refactor pour ingénierie lourde.'),
+    reasoningEffort: z.enum(['standard', 'deep', 'max']).optional().describe('standard pour recherche/texte simple/question/résumé/doc courte (jamais Opus), deep pour code courant/UI/backend, max uniquement pour algo complexe ou architecture/sécurité critique.'),
+    routingProfile: z.enum(['auto', 'eco', 'fast', 'quality', 'security', 'refactor']).optional().describe('eco/fast pour recherche/texte simple/tâche légère, auto par défaut (routage par spécialité Claude vs GPT + économie Opus), quality/security/refactor pour chantiers lourds.'),
     webSearch: z.enum(['auto', 'on', 'off']).optional().describe('Déclencheur Recherche Web natif France Student : auto (défaut intelligent), on (forcé), off (désactivé).'),
     canvas: z.enum(['auto', 'on', 'off']).optional().describe('Déclencheur Canvas / Artefacts natif France Student (documentToolsEnabled + aperçu live) : auto (défaut intelligent), on, off.'),
     imageGen: z.enum(['auto', 'on', 'off']).optional().describe('Déclencheur génération d’images IA native France Student : auto, on, off.'),
@@ -1083,8 +1127,16 @@ server.registerTool('fs_undo', {
     const entries = listUndoEntries(ws, 15);
     return asCompactText({ ok: true, workspaceRoot: ws, count: entries.length, entries });
   }
-  const res = undoLastChange(ws, undoId || null);
-  if (res.ok) logEvent('info', 'mcp', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
+  const res = await undoLastChange(ws, undoId || null);
+  if (res.ok) {
+    logEvent('info', 'mcp', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
+    recordToolHistoryEntry({
+      tool: 'fs_undo',
+      title: `/undo : ${res.undone.rel}`,
+      summary: `Restauré ${res.undone.rel} (${res.undone.action}).`,
+      response: JSON.stringify(res, null, 2),
+    });
+  }
   return asCompactText(res);
 });
 
@@ -1127,10 +1179,10 @@ server.registerTool('fs_memory', {
 });
 
 server.registerTool('fs_computer', {
-  title: 'Computer Use — Écran, Fenêtres, Souris & Clavier [ATG]',
-  description: 'Contrôle du bureau Windows (vrai écran de l’utilisateur, multi-écrans) : capture écran PNG renvoyée comme image (screenshot, avec screenIndex/deviceName), infos écrans/curseur (screen_info), liste et focus des fenêtres (windows, focus_window), clic/déplacement/glisser/molette souris (mouse_move, click, double_click, right_click, drag, scroll), frappe clavier et raccourcis (type, key, hotkey), presse-papiers (clipboard_get, clipboard_set). Ne modifie aucun fichier du workspace ; les actions sur le bureau sont bloquées en mode plan.',
+  title: 'Computer Use — Écran, UIA, Fenêtres, Souris & Clavier [ATG]',
+  description: 'Contrôle du bureau Windows (vrai écran de l’utilisateur, multi-écrans) : arbre UI Automation lecture seule (ui_tree, liste les contrôles avec coordonnées exactes) et clic UIA ciblé (ui_click par name/automationId), capture écran PNG renvoyée comme image (screenshot, avec screenIndex/deviceName), infos écrans/curseur (screen_info), liste et focus des fenêtres (windows, focus_window), clic/déplacement/glisser/molette souris (mouse_move, click, double_click, right_click, drag, scroll), frappe clavier et raccourcis (type, key, hotkey), presse-papiers (clipboard_get, clipboard_set). Ne modifie aucun fichier du workspace ; les actions modifiant le bureau sont bloquées en mode plan (ui_tree reste autorisé).',
   inputSchema: {
-    action: z.enum(COMPUTER_ACTIONS).describe('Action Computer Use à exécuter.'),
+    action: z.enum(COMPUTER_ACTIONS).describe('Action Computer Use à exécuter (dont ui_tree et ui_click).'),
     x: z.number().optional().describe('Coordonnée X écran (pixels).'),
     y: z.number().optional().describe('Coordonnée Y écran (pixels).'),
     toX: z.number().optional().describe('Coordonnée X cible pour drag.'),
@@ -1139,9 +1191,14 @@ server.registerTool('fs_computer', {
     text: z.string().optional().describe('Texte à taper (type) ou à copier dans le presse-papiers (clipboard_set).'),
     key: z.string().optional().describe('Touche ou raccourci (ex: Enter, Escape, Tab, Ctrl+C, Alt+Tab).'),
     keys: z.string().optional().describe('Alias de key pour hotkey.'),
-    title: z.string().optional().describe('Filtre titre de fenêtre pour focus_window.'),
-    processName: z.string().optional().describe('Nom de processus pour focus_window.'),
-    pid: z.number().optional().describe('PID de fenêtre pour focus_window.'),
+    title: z.string().optional().describe('Filtre titre de fenêtre pour focus_window, ui_tree ou ui_click.'),
+    processName: z.string().optional().describe('Nom de processus pour focus_window, ui_tree ou ui_click.'),
+    pid: z.number().optional().describe('PID de fenêtre pour focus_window, ui_tree ou ui_click.'),
+    name: z.string().optional().describe('Texte ou sous-chaîne du contrôle ciblé pour ui_click.'),
+    automationId: z.string().optional().describe('AutomationId UIA du contrôle pour ui_click.'),
+    controlType: z.string().optional().describe('Type de contrôle UIA (ex: Button, Edit, TabItem) pour ui_click.'),
+    maxElements: z.number().int().min(5).max(120).optional().describe('Nombre maximal de contrôles UIA retournés pour ui_tree (défaut 50, max 120).'),
+    useInvoke: z.boolean().optional().describe('Utiliser InvokePattern UIA en priorité avant le clic souris pour ui_click (défaut true).'),
     outputPath: z.string().optional().describe('Chemin PNG de sortie pour screenshot (optionnel).'),
     region: z.object({
       x: z.number(),
@@ -1158,25 +1215,55 @@ server.registerTool('fs_computer', {
   if (effective.action === 'screenshot' && effective.screenIndex === undefined && !effective.deviceName && !effective.region) {
     effective.screenIndex = Number(st.selectedScreenIndex ?? 0) || 0;
   }
-  const res = await executeComputerAction(effective, {
-    permissionMode: st.permissionMode || 'acceptEdits',
-    computerUseEnabled: st.computerUseEnabled !== false,
-  });
-  if (effective.action === 'screenshot' && res?.dataUrl) {
-    const { dataUrl, ...meta } = res;
-    const base64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
-    return {
-      content: [
-        { type: 'text', text: JSON.stringify(meta) },
-        { type: 'image', data: base64, mimeType: 'image/png' },
-      ],
-    };
+  try {
+    const res = await executeComputerAction(effective, {
+      permissionMode: st.permissionMode || 'acceptEdits',
+      computerUseEnabled: st.computerUseEnabled !== false,
+    });
+    const detail = effective.action === 'screenshot'
+      ? `Capture ${res.width}x${res.height} (${res.deviceName || 'écran ' + (res.screenIndex ?? 0)})`
+      : (effective.action === 'ui_tree'
+        ? `Arbre UIA (${res.count ?? 0} contrôles · ${res.windowTitle || 'fenêtre'})`
+        : (effective.action === 'ui_click'
+          ? `Clic UIA ${res.matched?.name || effective.name || effective.automationId || ''}`
+          : (effective.action === 'windows'
+            ? `${res.count ?? 0} fenêtre(s) détectée(s)`
+            : (effective.action === 'screen_info'
+              ? `${res.screens?.length ?? 0} écran(s) · curseur (${res.cursor?.x}, ${res.cursor?.y})`
+              : `Action ${effective.action}`))));
+    const { dataUrl: _dropUrl, ...metaForHist } = (res && typeof res === 'object') ? res : { res };
+    recordToolHistoryEntry({
+      tool: 'fs_computer',
+      title: `Computer Use : ${effective.action}`,
+      summary: detail,
+      response: JSON.stringify(metaForHist, null, 2),
+      triggeredCapabilities: { intent: 'computer_use' },
+    });
+    if (effective.action === 'screenshot' && res?.dataUrl) {
+      const { dataUrl, ...meta } = res;
+      const base64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify(meta) },
+          { type: 'image', data: base64, mimeType: 'image/png' },
+        ],
+      };
+    }
+    if (res && typeof res === 'object' && 'dataUrl' in res) {
+      const { dataUrl, ...meta } = res;
+      return asCompactText({ ...meta, note: 'Image trop lourde pour être renvoyée inline : utilise le fichier "path".' });
+    }
+    return asCompactText(res);
+  } catch (err) {
+    recordToolHistoryEntry({
+      tool: 'fs_computer',
+      title: `Computer Use : ${effective.action}`,
+      status: 'error',
+      error: err?.message || String(err),
+      triggeredCapabilities: { intent: 'computer_use' },
+    });
+    throw err;
   }
-  if (res && typeof res === 'object' && 'dataUrl' in res) {
-    const { dataUrl, ...meta } = res;
-    return asCompactText({ ...meta, note: 'Image trop lourde pour être renvoyée inline : utilise le fichier "path".' });
-  }
-  return asCompactText(res);
 });
 
 server.registerTool('fs_canvas', {
@@ -1189,7 +1276,20 @@ server.registerTool('fs_canvas', {
     type: z.enum(['html', 'svg', 'mermaid']).optional().describe('Format de l’artifact (défaut html).'),
     content: z.string().optional().describe('Code source HTML, SVG ou Mermaid de l’artifact.'),
   },
-}, async (params) => asCompactText(await executeCanvasAction(params)));
+}, async (params) => {
+  const res = await executeCanvasAction(params);
+  if (params.action === 'create' || params.action === 'update') {
+    recordToolHistoryEntry({
+      tool: 'fs_canvas',
+      title: `/canvas : ${params.title || params.id || res?.id || 'Artifact'}`,
+      summary: `Artifact ${params.type || 'html'} (${res?.previewUrl || ''})`,
+      response: params.content || JSON.stringify(res, null, 2),
+      triggeredCapabilities: { canvas: true, intent: 'canvas_artifact' },
+      canvasPreview: res?.previewUrl ? { id: res.id, type: res.type || params.type || 'html', url: res.previewUrl, title: params.title || '' } : null,
+    });
+  }
+  return asCompactText(res);
+});
 
 server.registerTool('fs_thinking', {
   title: 'Raisonnement Approfondi — Sequential Thinking (/think) [ATG]',
@@ -1209,7 +1309,94 @@ server.registerTool('fs_thinking', {
   },
 }, async (params) => {
   const st = loadState();
-  return asCompactText(await executeThinkingAction(params, { deepThinkingEnabled: st.deepThinkingEnabled !== false }));
+  const res = await executeThinkingAction(params, { deepThinkingEnabled: st.deepThinkingEnabled !== false });
+  if (!params.action || params.action === 'think') {
+    recordToolHistoryEntry({
+      tool: 'fs_thinking',
+      title: `/think #${params.thoughtNumber || res?.thoughtNumber || 1}`,
+      summary: String(params.thought || '').slice(0, 180),
+      response: String(params.thought || JSON.stringify(res, null, 2)),
+      triggeredCapabilities: { intent: 'sequential_thinking' },
+    });
+  }
+  return asCompactText(res);
+});
+
+server.registerTool('fs_fetch', {
+  title: 'Web Fetch SSRF-safe (HTML → Markdown) [ATG]',
+  description: 'Récupère une URL HTTP(S) publique avec protection SSRF et convertit le HTML en Markdown propre (sans lancer de navigateur).',
+  inputSchema: {
+    url: z.string().min(8).describe('URL http:// ou https:// publique à lire.'),
+    maxChars: z.number().int().min(500).max(80_000).optional().describe('Limite de caractères retournés (défaut 12000).'),
+    raw: z.boolean().optional().describe('True pour retourner le contenu brut sans conversion Markdown.'),
+    timeoutMs: z.number().int().min(3000).max(30_000).optional().describe('Délai HTTP max en ms (défaut 15000).'),
+  },
+}, async (params) => {
+  try {
+    const res = await executeWebFetch(params);
+    recordToolHistoryEntry({
+      tool: 'fs_fetch',
+      title: `Fetch : ${res.title || params.url}`,
+      summary: `HTTP ${res.status} · ${res.totalChars} car.`,
+      response: res.content || '',
+      triggeredCapabilities: { webSearch: true, intent: 'web_fetch' },
+    });
+    return asCompactText(res);
+  } catch (err) {
+    recordToolHistoryEntry({
+      tool: 'fs_fetch',
+      title: `Fetch : ${params.url}`,
+      status: 'error',
+      error: err?.message || String(err),
+    });
+    throw err;
+  }
+});
+
+server.registerTool('fs_doc_read', {
+  title: 'Lecture Documents (Office, Markdown, CSV, PDF) [ATG]',
+  description: 'Lit des documents locaux en Markdown propre : Markdown/Texte/CSV/HTML, .docx/.pptx/.xlsx nativement sur Windows sans dépendance, et .pdf si markitdown/pypdf/pymupdf est disponible.',
+  inputSchema: {
+    path: z.string().min(1).describe('Chemin du fichier (absolu ou relatif à workspaceRoot).'),
+    workspaceRoot: z.string().optional().describe('Dossier racine pour résoudre un chemin relatif.'),
+    maxChars: z.number().int().min(500).max(80_000).optional().describe('Limite de caractères retournés (défaut 16000).'),
+  },
+}, async (params) => {
+  const ws = params.workspaceRoot || loadState().lastWorkspaceRoot || '';
+  const res = await executeDocRead({ ...params, workspaceRoot: ws });
+  recordToolHistoryEntry({
+    tool: 'fs_doc_read',
+    title: `Doc : ${params.path}`,
+    status: res.ok ? 'done' : 'error',
+    summary: res.ok ? `${res.format} (${res.engine}) · ${res.totalChars} car.` : (res.error || 'Échec'),
+    response: res.ok ? (res.content || '') : '',
+    error: res.ok ? null : res.error,
+  });
+  return asCompactText(res);
+});
+
+server.registerTool('fs_git', {
+  title: 'Git Lecture Seule (status, diff, log, branch, show) [ATG]',
+  description: 'Inspecte un dépôt Git local en lecture seule sans permission shell : status, diff, log, branch, show.',
+  inputSchema: {
+    action: z.enum(GIT_ACTIONS).default('status').describe('Action Git lecture seule : status, diff, log, branch ou show.'),
+    workspaceRoot: z.string().optional().describe('Chemin du dépôt Git (défaut : dernier workspace utilisé).'),
+    staged: z.boolean().optional().describe('Pour diff : comparer la zone de staging (--staged).'),
+    limit: z.number().int().min(1).max(50).optional().describe('Pour log : nombre de commits récents (défaut 15).'),
+    ref: z.string().optional().describe('Pour show : révision ou commit à inspecter (défaut HEAD).'),
+    path: z.string().optional().describe('Filtrer diff ou show sur un chemin précis.'),
+    maxChars: z.number().int().min(500).max(80_000).optional().describe('Limite de caractères retournés (défaut 14000).'),
+  },
+}, async (params) => {
+  const ws = params.workspaceRoot || loadState().lastWorkspaceRoot || '';
+  const res = await executeGitAction({ ...params, workspaceRoot: ws });
+  recordToolHistoryEntry({
+    tool: 'fs_git',
+    title: `Git ${params.action || 'status'}`,
+    summary: params.action === 'status' ? `${res.branch || ''} (${res.files?.length ?? 0} modifs)` : `Action ${params.action}`,
+    response: JSON.stringify(res, null, 2),
+  });
+  return asCompactText(res);
 });
 
 const transport = new StdioServerTransport();

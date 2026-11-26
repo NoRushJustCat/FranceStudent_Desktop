@@ -413,11 +413,13 @@ async function runJob(job) {
     state.reasoningEffort = effectiveEffort;
     const wsRoot = job.workspaceRoot || state.lastWorkspaceRoot || '';
     const preUseTools = Boolean(state.useClientTools !== false && wsRoot && job.executionMode !== 'patch');
+    const hasImages = Boolean(job.attachScreenshot || job.imagePaths?.length || job.liveComputerMode);
     const route = pickModel(job.rawTask ?? job.task, ids, state, job.explicitModel, {
       approvedModel: job.approveModel || null,
       metaMap,
       workspaceRoot: wsRoot,
       useClientTools: preUseTools,
+      hasImages,
       webSearchMode: job.webSearchMode ?? null,
       canvasMode: job.canvasMode ?? null,
       imageGenMode: job.imageGenMode ?? null,
@@ -445,6 +447,7 @@ async function runJob(job) {
     job.reasoningEffort = route.reasoningEffort ?? effectiveEffort;
     job.triggeredCapabilities = {
       intent: route.intent || 'general',
+      specialty: route.specialty || null,
       webSearch: Boolean(route.enableWebSearch),
       canvas: Boolean(route.enableCanvas),
       imageGen: Boolean(route.enableImageGen),
@@ -731,6 +734,8 @@ app.api('/api/state', async () => {
     canvasMode: normalizeTriggerMode(state.canvasMode ?? 'on', 'on'),
     imageGenMode: normalizeTriggerMode(state.imageGenMode ?? 'auto', 'auto'),
     smartRouting: state.smartRouting !== false,
+    opusEconomyGuard: state.opusEconomyGuard !== false,
+    specialtyRouting: state.specialtyRouting !== false,
     compactUi: Boolean(state.compactUi),
     liquidGlass: Boolean(state.liquidGlass),
     lastWorkspaceRoot: wsRoot || null,
@@ -914,6 +919,12 @@ app.api('/api/settings', (data) => {
   if (typeof data.smartRouting === 'boolean') {
     state.smartRouting = data.smartRouting;
   }
+  if (typeof data.opusEconomyGuard === 'boolean') {
+    state.opusEconomyGuard = data.opusEconomyGuard;
+  }
+  if (typeof data.specialtyRouting === 'boolean') {
+    state.specialtyRouting = data.specialtyRouting;
+  }
   if (typeof data.compactUi === 'boolean') {
     state.compactUi = data.compactUi;
   }
@@ -971,26 +982,121 @@ app.api('/api/settings', (data) => {
   };
 });
 
+function recordPanelToolHistory({
+  tool,
+  title,
+  status = 'done',
+  summary = '',
+  response = '',
+  error = null,
+  triggeredCapabilities = null,
+  canvasPreview = null,
+}) {
+  try {
+    const st = loadState();
+    const now = Date.now();
+    const id = randomUUID().slice(0, 8);
+    const entry = {
+      id,
+      jobId: id,
+      title: `${ATG} ${String(title || tool || 'Outil').slice(0, 70)}`,
+      task: String(title || tool || ''),
+      status,
+      model: String(tool || 'panel'),
+      routeReason: `panneau (${tool})`,
+      createdAt: now,
+      startedAt: now,
+      endedAt: now,
+      summary: String(summary || '').slice(0, 400),
+      response: String(response || summary || '').slice(0, 20_000),
+      ...(error ? { error: String(error).slice(0, 300) } : {}),
+      thoughts: [],
+      ...(triggeredCapabilities ? { triggeredCapabilities } : {}),
+      ...(canvasPreview ? { canvasPreview } : {}),
+    };
+    st.history = [entry, ...(st.history || [])].slice(0, HISTORY_LIMIT);
+    saveState(st);
+    state = st;
+  } catch { /* non-blocking */ }
+}
+
+const PASSIVE_COMPUTER_ACTIONS = new Set(['screen_info', 'windows']);
+
 app.api('/api/computer', async (data) => {
   state = loadState();
   const params = { ...(data || {}) };
   if (params.action === 'screenshot' && params.screenIndex === undefined && !params.deviceName && !params.region) {
     params.screenIndex = Number(state.selectedScreenIndex ?? 0) || 0;
   }
-  return await executeComputerAction(params, {
-    permissionMode: state.permissionMode || 'acceptEdits',
-    computerUseEnabled: state.computerUseEnabled !== false,
-  });
+  const shouldRecord = Boolean(params.action) && !PASSIVE_COMPUTER_ACTIONS.has(String(params.action));
+  try {
+    const res = await executeComputerAction(params, {
+      permissionMode: state.permissionMode || 'acceptEdits',
+      computerUseEnabled: state.computerUseEnabled !== false,
+    });
+    if (shouldRecord) {
+      const { dataUrl: _dropUrl, ...meta } = (res && typeof res === 'object') ? res : { res };
+      const detail = params.action === 'screenshot'
+        ? `Capture ${res.width || '?'}×${res.height || '?'} (${Math.round((res.bytes || 0) / 1024)} Ko)`
+        : (params.action === 'ui_tree'
+          ? `Arbre UIA « ${res.windowTitle || 'fenêtre'} » (${res.count ?? 0} contrôles)`
+          : (params.action === 'ui_click'
+            ? `Clic UIA « ${res.clicked || params.name || params.automationId || '?'} » (${res.x},${res.y})`
+            : `Action ${params.action}`));
+      recordPanelToolHistory({
+        tool: 'fs_computer',
+        title: `Computer Use : ${params.action}`,
+        summary: detail,
+        response: JSON.stringify(meta, null, 2),
+        triggeredCapabilities: { intent: 'computer_use' },
+      });
+    }
+    return res;
+  } catch (err) {
+    if (shouldRecord) {
+      recordPanelToolHistory({
+        tool: 'fs_computer',
+        title: `Computer Use : ${params.action}`,
+        status: 'error',
+        error: err?.message || String(err),
+        triggeredCapabilities: { intent: 'computer_use' },
+      });
+    }
+    throw err;
+  }
 });
 
 app.api('/api/thinking', async (data) => {
   state = loadState();
-  return await executeThinkingAction(data, {
+  const res = await executeThinkingAction(data, {
     deepThinkingEnabled: state.deepThinkingEnabled !== false,
   });
+  if (!data?.action || data.action === 'think') {
+    recordPanelToolHistory({
+      tool: 'fs_thinking',
+      title: `/think #${data?.thoughtNumber || res?.thoughtNumber || 1}`,
+      summary: String(data?.thought || '').slice(0, 180),
+      response: String(data?.thought || JSON.stringify(res, null, 2)),
+      triggeredCapabilities: { intent: 'sequential_thinking' },
+    });
+  }
+  return res;
 });
 
-app.api('/api/canvas', async (data) => await executeCanvasAction(data));
+app.api('/api/canvas', async (data) => {
+  const res = await executeCanvasAction(data);
+  if (data?.action === 'create' || data?.action === 'update') {
+    recordPanelToolHistory({
+      tool: 'fs_canvas',
+      title: `/canvas : ${data.title || data.id || res?.id || 'Artifact'}`,
+      summary: `Artifact ${data.type || 'html'} (${res?.previewUrl || ''})`,
+      response: data.content || JSON.stringify(res, null, 2),
+      triggeredCapabilities: { canvas: true, intent: 'canvas_artifact' },
+      canvasPreview: res?.previewUrl ? { id: res.id, type: res.type || data.type || 'html', url: res.previewUrl, title: data.title || '' } : null,
+    });
+  }
+  return res;
+});
 
 app.api('/api/fs-personalization', async (data) => {
   state = loadState();
@@ -1116,7 +1222,15 @@ app.api('/api/undo', (data) => {
   const ws = String(data?.workspaceRoot || state.lastWorkspaceRoot || '').trim();
   if (!ws) throw new Error('Aucun workspace actif pour /undo.');
   const res = undoLastChange(ws, data?.undoId || null);
-  if (res.ok) logEvent('info', 'panel', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
+  if (res.ok) {
+    logEvent('info', 'panel', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
+    recordPanelToolHistory({
+      tool: 'fs_undo',
+      title: `/undo : ${res.undone.rel}`,
+      summary: `Restauré ${res.undone.rel} (${res.undone.action}).`,
+      response: JSON.stringify(res, null, 2),
+    });
+  }
   return { ...res, undoEntries: listUndoEntries(ws, 15) };
 });
 

@@ -278,10 +278,145 @@
   }
 
   // ---------- MCP ----------
-  const PRESETS = [
-    { name: 'fichiers', label: 'Fichiers', command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem'] },
-    { name: 'memoire', label: 'Mémoire', command: 'npx', args: ['-y', '@modelcontextprotocol/server-memory'] },
-    { name: 'web', label: 'Web (fetch)', command: 'uvx', args: ['mcp-server-fetch'] },
+  const PRESET_GROUPS = [
+    {
+      title: 'Boost IA & Dev',
+      items: [
+        {
+          name: 'playwright',
+          label: 'Playwright Web',
+          runtime: 'npx',
+          desc: 'Navigation web rapide par arbre d’accessibilité (@playwright/mcp).',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', '@playwright/mcp@latest'],
+        },
+        {
+          name: 'context7',
+          label: 'Context7 Docs',
+          runtime: 'npx',
+          desc: 'Documentation à jour des frameworks & SDK (@upstash/context7-mcp).',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', '@upstash/context7-mcp@latest'],
+        },
+        {
+          name: 'fichiers',
+          label: 'Fichiers locaux',
+          runtime: 'npx',
+          desc: 'Accès fichiers borné aux dossiers autorisés.',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', '@modelcontextprotocol/server-filesystem'],
+        },
+        {
+          name: 'memoire',
+          label: 'Mémoire graphe',
+          runtime: 'npx',
+          desc: 'Graphe de connaissances persistant inter-sessions.',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', '@modelcontextprotocol/server-memory'],
+        },
+        {
+          name: 'thinking',
+          label: 'Sequential Thinking',
+          runtime: 'npx',
+          desc: 'Raisonnement structuré étape par étape officiel MCP.',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', '@modelcontextprotocol/server-sequential-thinking'],
+        },
+        {
+          name: 'markitdown',
+          label: 'MarkItDown PDF/Office',
+          runtime: 'pip',
+          desc: 'Conversion PDF, DOCX, PPTX, XLSX en Markdown (pip install markitdown-mcp).',
+          kind: 'stdio',
+          command: 'markitdown-mcp',
+          args: [],
+        },
+        {
+          name: 'windows-mcp',
+          label: 'Windows UIA',
+          runtime: 'uvx · Py 3.14+',
+          desc: 'Automatisation native Windows UIA & DOM navigateur (CursorTouch/Windows-MCP).',
+          kind: 'stdio',
+          command: 'uvx',
+          args: ['windows-mcp'],
+        },
+        {
+          name: 'serena',
+          label: 'Serena LSP',
+          runtime: 'uvx',
+          desc: 'Navigation symboles & refactoring sémantique multi-langages (oraios/serena).',
+          kind: 'stdio',
+          command: 'uvx',
+          args: ['--from', 'git+https://github.com/oraios/serena', 'serena', 'start-mcp-server'],
+        },
+        {
+          name: 'fetch',
+          label: 'Web Fetch',
+          runtime: 'uvx',
+          desc: 'Récupération HTTP→Markdown officielle (modelcontextprotocol/servers).',
+          kind: 'stdio',
+          command: 'uvx',
+          args: ['mcp-server-fetch'],
+        },
+        {
+          name: 'git',
+          label: 'Git',
+          runtime: 'uvx',
+          desc: 'Inspection & opérations Git officielles (mcp-server-git).',
+          kind: 'stdio',
+          command: 'uvx',
+          args: ['mcp-server-git'],
+        },
+      ],
+    },
+    {
+      title: 'Apps essentielles (Mail, Agenda, GitHub)',
+      items: [
+        {
+          name: 'github',
+          label: 'GitHub officiel',
+          runtime: 'HTTP · OAuth/PAT',
+          desc: 'Dépôts, issues, PRs & Actions via serveur MCP distant GitHub.',
+          kind: 'http',
+          url: 'https://api.githubcopilot.com/mcp/',
+          token: '',
+        },
+        {
+          name: 'google-calendar',
+          label: 'Google Calendar',
+          runtime: 'npx · OAuth',
+          desc: 'Agenda Google Calendar (requiert GOOGLE_OAUTH_CREDENTIALS).',
+          kind: 'stdio',
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', '@cocal/google-calendar-mcp'],
+          env: 'GOOGLE_OAUTH_CREDENTIALS=',
+        },
+        {
+          name: 'google-workspace',
+          label: 'Gmail + Calendar + Drive',
+          runtime: 'uvx · OAuth',
+          desc: 'Suite Google Workspace personnelle (taylorwilsdon/google_workspace_mcp).',
+          kind: 'stdio',
+          command: 'uvx',
+          args: ['workspace-mcp', '--tool-tier', 'core'],
+          env: 'GOOGLE_OAUTH_CLIENT_ID=\nGOOGLE_OAUTH_CLIENT_SECRET=',
+        },
+        {
+          name: 'mail',
+          label: 'Mail IMAP/SMTP',
+          runtime: 'Rust · IMAP/SMTP',
+          desc: 'Boîtes Gmail, Outlook ou universitaires via binaire mail-mcp.',
+          kind: 'stdio',
+          command: 'mail-mcp',
+          args: [],
+        },
+      ],
+    },
   ];
 
   const KINDS = [
@@ -310,9 +445,19 @@
   }
 
   function openServerForm(p = null) {
-    f = { ...emptyForm(), name: p?.name ?? '', command: p?.command ?? '', args: (p?.args ?? []).join('\n') };
+    const kind = p?.kind === 'http' || p?.kind === 'sse' ? p.kind : 'stdio';
+    f = {
+      ...emptyForm(),
+      kind,
+      name: p?.name ?? '',
+      command: kind === 'stdio' ? (p?.command ?? '') : '',
+      args: kind === 'stdio' ? (p?.args ?? []).join('\n') : '',
+      env: kind === 'stdio' ? (p?.env ?? '') : '',
+      url: kind !== 'stdio' ? (p?.url ?? '') : '',
+      token: kind !== 'stdio' ? (p?.token ?? '') : '',
+    };
     view = 'mcp-form';
-    msg = null;
+    msg = p?.desc ? { ok: true, text: `Modèle pré-rempli : ${p.desc}` } : null;
   }
 
   async function editServer(s) {
@@ -719,17 +864,35 @@
         <button type="button" onclick={loadMcp}>Actualiser</button>
       </div>
 
-      {#if mcp.servers.length === 0 && !mcp.error}
-        <h3>Démarrage rapide</h3>
-        <div class="bar">
-          {#each PRESETS as p (p.name)}
-            <button type="button" onclick={() => openServerForm(p)}>{p.label}</button>
-          {/each}
-        </div>
-        <p class="hint">Il faut Node.js (<code>npx</code>) ou uv (<code>uvx</code>) sur ce PC.</p>
-      {:else if mcp.servers.length > 0}
+      {#if mcp.servers.length > 0}
         <h3>Serveurs ({mcp.servers.length})</h3>
       {/if}
+
+      <details class="presets-fold" open={mcp.servers.length === 0}>
+        <summary class="tools-sum">
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="9 18 15 12 9 6" />
+          </svg>
+          Catalogue de modèles MCP vérifiés (Boost IA &amp; Apps)
+        </summary>
+        {#each PRESET_GROUPS as group (group.title)}
+          <div class="preset-group">
+            <h4>{group.title}</h4>
+            <div class="preset-grid">
+              {#each group.items as p (p.name)}
+                <button type="button" class="preset-card" onclick={() => openServerForm(p)}>
+                  <span class="preset-head">
+                    <strong>{p.label}</strong>
+                    <span class="badge">{p.runtime}</span>
+                  </span>
+                  <span class="preset-desc">{p.desc}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/each}
+        <p class="hint">Les modèles <code>npx</code> fonctionnent dès que Node.js est installé ; les autres nécessitent <code>uv</code> (<code>uvx</code>), <code>pip</code> ou le binaire indiqué.</p>
+      </details>
 
       {#each mcp.servers as s (s.name)}
         <section class="card">
@@ -1381,5 +1544,62 @@
   }
   details[open] > summary.tools-sum .chev {
     transform: rotate(90deg);
+  }
+  .presets-fold {
+    margin: 6px 0 12px;
+    padding: 10px 12px;
+    background: var(--xt-card);
+    border: 1px solid var(--xt-line);
+    border-radius: 10px;
+  }
+  .preset-group {
+    margin-top: 10px;
+  }
+  .preset-group h4 {
+    margin: 0 0 7px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--xt-mut);
+  }
+  .preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px;
+  }
+  button.preset-card {
+    height: auto;
+    min-height: 58px;
+    padding: 9px 11px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-start;
+    text-align: left;
+    gap: 4px;
+    background: var(--xt-panel2);
+    border: 1px solid var(--xt-line);
+    border-radius: 9px;
+  }
+  button.preset-card:hover {
+    border-color: var(--xt-acc);
+    background: color-mix(in srgb, var(--xt-acc) 8%, var(--xt-panel2));
+  }
+  .preset-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 12.5px;
+    color: var(--xt-txt);
+  }
+  .preset-desc {
+    font-size: 11.5px;
+    font-weight: 400;
+    line-height: 1.35;
+    color: var(--xt-mut);
+    white-space: normal;
   }
 </style>

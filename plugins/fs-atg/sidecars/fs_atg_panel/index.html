@@ -1844,8 +1844,12 @@
             <label class="switch"><input type="checkbox" id="useClientToolsInput" disabled /><span class="slider"></span></label>
           </div>
           <div class="toggle-row adv-essential-opt">
-            <span>Routage intelligent (texte simple → léger, standard → équilibré, même en Max)</span>
+            <span>Routage intelligent par spécialité (recherche/texte → léger, backend → GPT, UI → Claude, même en Max)</span>
             <label class="switch"><input type="checkbox" id="smartRoutingInput" disabled /><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row adv-essential-opt">
+            <span>Économie Opus (éviter Opus H24 ; réservé aux gros chantiers si budget ≥ 30 %)</span>
+            <label class="switch"><input type="checkbox" id="opusEconomyGuardInput" disabled /><span class="slider"></span></label>
           </div>
           <div class="toggle-row adv-essential-opt">
             <span>Résumé de raisonnement</span>
@@ -3122,7 +3126,7 @@
 
     function syncSettingsForm() {
       const configIds = [
-        'cutoffInput', 'maxParallelInput', 'compactUiInput', 'liquidGlassInput', 'showReasoningInput', 'reuseChatInput', 'useClientToolsInput', 'computerUseInput', 'deepThinkingInput', 'canvasEnabledInput', 'smartRoutingInput',
+        'cutoffInput', 'maxParallelInput', 'compactUiInput', 'liquidGlassInput', 'showReasoningInput', 'reuseChatInput', 'useClientToolsInput', 'computerUseInput', 'deepThinkingInput', 'canvasEnabledInput', 'smartRoutingInput', 'opusEconomyGuardInput',
         'prepromptInput', 'savePrepromptBtn', 'memNoteInput', 'addMemNoteBtn', 'clearMemBtn',
         'contextCompactInput', 'tierLightInput', 'tierMediumInput',
         'tierHeavyInput', 'allowedInput', 'blockedInput', 'useAllBtn', 'saveEssentialBtn', 'saveSettingsBtn'
@@ -3148,6 +3152,7 @@
       if ($('deepThinkingInput')) $('deepThinkingInput').checked = S.deepThinkingEnabled !== false;
       if ($('canvasEnabledInput')) $('canvasEnabledInput').checked = (S.canvasMode || 'on') !== 'off';
       if ($('smartRoutingInput')) $('smartRoutingInput').checked = S.smartRouting !== false;
+      if ($('opusEconomyGuardInput')) $('opusEconomyGuardInput').checked = S.opusEconomyGuard !== false;
       updateExtMcpCount();
       $('prepromptInput').value = S.projectMemory?.preprompt || '';
       $('contextCompactInput').value = S.contextCompactPercent ?? 80;
@@ -3287,6 +3292,7 @@
       if ($('liquidGlassInput')) $('liquidGlassInput').checked = Boolean(S.liquidGlass);
       applyLiquidGlass(S.liquidGlass);
       if ($('canvasEnabledInput')) $('canvasEnabledInput').checked = (S.canvasMode || 'on') !== 'off';
+      if ($('opusEconomyGuardInput')) $('opusEconomyGuardInput').checked = S.opusEconomyGuard !== false;
       updateExtMcpCount();
       renderVisionLiveBanner();
       const sav = S.antigravitySavings;
@@ -3310,7 +3316,7 @@
       document.querySelectorAll('#reasoningSeg button').forEach((b) => b.classList.toggle('on', b.dataset.effort === effort));
       syncLiquidPill($('reasoningSeg'), { animate: false });
       $('reasoningTag').textContent = effort === 'max'
-        ? 'Maximum · Modèles forts'
+        ? 'Maximum · Adaptatif (Opus réservé)'
         : (effort === 'standard' ? 'Standard' : 'Approfondi');
       const wsMode = S.webSearchMode || 'auto';
       const cvMode = S.canvasMode || 'on';
@@ -3950,7 +3956,7 @@
     bindOptimisticSeg('#permSeg', 'perm', 'permissionMode', 'permissionMode', 'Permissions');
     bindOptimisticSeg('#reasoningSeg', 'effort', 'reasoningEffort', 'reasoningEffort', 'Raisonnement', (b) => {
       const eff = b.dataset.effort;
-      $('reasoningTag').textContent = eff === 'max' ? 'Maximum · Modèles forts' : (eff === 'standard' ? 'Standard' : 'Approfondi');
+      $('reasoningTag').textContent = eff === 'max' ? 'Maximum · Adaptatif (Opus réservé)' : (eff === 'standard' ? 'Standard' : 'Approfondi');
     });
     bindOptimisticSeg('#webSearchSeg', 'val', 'webSearchMode', 'webSearchMode', 'Web Search');
     bindOptimisticSeg('#canvasSeg', 'val', 'canvasMode', 'canvasMode', 'Canvas');
@@ -4062,6 +4068,7 @@
           deepThinkingEnabled: $('deepThinkingInput') ? $('deepThinkingInput').checked : true,
           canvasEnabled: $('canvasEnabledInput') ? $('canvasEnabledInput').checked : true,
           smartRouting: $('smartRoutingInput') ? $('smartRoutingInput').checked : true,
+          opusEconomyGuard: $('opusEconomyGuardInput') ? $('opusEconomyGuardInput').checked : true,
         });
         applyCompactUi($('compactUiInput')?.checked);
         applyLiquidGlass($('liquidGlassInput')?.checked);
@@ -4094,6 +4101,7 @@
     bindInstantToggle('reuseChatInput', 'reuseChat', 'Session persistante');
     bindInstantToggle('useClientToolsInput', 'useClientTools', 'Outils client natifs');
     bindInstantToggle('smartRoutingInput', 'smartRouting', 'Routage intelligent');
+    bindInstantToggle('opusEconomyGuardInput', 'opusEconomyGuard', 'Économie Opus');
     bindInstantToggle('showReasoningInput', 'showReasoning', 'Résumé de raisonnement');
     if ($('computerUseInput')) {
       $('computerUseInput').onchange = async () => {

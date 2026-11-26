@@ -111,6 +111,7 @@ export function openAiToolsToClientTools(openAiTools) {
 
 export function geminiRequestToPrompt(body) {
   let instructions = '';
+  let hasImages = false;
   const sys = body?.systemInstruction || body?.system_instruction;
   if (typeof sys === 'string') {
     instructions = sys.trim();
@@ -125,6 +126,9 @@ export function geminiRequestToPrompt(body) {
     const parts = Array.isArray(item?.parts) ? item.parts : [];
     const lines = [];
     for (const p of parts) {
+      if (p?.inlineData || p?.inline_data || p?.fileData || p?.file_data) {
+        hasImages = true;
+      }
       if (typeof p?.text === 'string' && p.text.trim()) {
         if (!p.thought) lines.push(p.text);
       } else if (p?.functionCall || p?.function_call) {
@@ -140,13 +144,17 @@ export function geminiRequestToPrompt(body) {
   const prompt = turns.length === 1 && turns[0].startsWith('User:\n')
     ? turns[0].slice('User:\n'.length)
     : (turns.join('\n\n') || 'Bonjour');
-  return { instructions, prompt };
+  return { instructions, prompt, hasImages };
 }
 
 export function openAiMessagesToPrompt(messages) {
   let instructions = '';
+  let hasImages = false;
   const turns = [];
   for (const msg of Array.isArray(messages) ? messages : []) {
+    if (Array.isArray(msg?.content) && msg.content.some((c) => c?.type === 'image_url' || c?.type === 'input_image')) {
+      hasImages = true;
+    }
     const rawContent = typeof msg?.content === 'string'
       ? msg.content
       : (Array.isArray(msg?.content)
@@ -174,7 +182,7 @@ export function openAiMessagesToPrompt(messages) {
   const prompt = turns.length === 1 && turns[0].startsWith('User:\n')
     ? turns[0].slice('User:\n'.length)
     : (turns.join('\n\n') || 'Bonjour');
-  return { instructions, prompt };
+  return { instructions, prompt, hasImages };
 }
 
 function extractLatestUserTurn(prompt) {
@@ -186,7 +194,7 @@ function extractLatestUserTurn(prompt) {
   return lastIdx >= 0 ? text.slice(lastIdx).trim() : text;
 }
 
-export async function resolveBridgeRoute(requestedModelId, prompt, state, bundle, quota) {
+export async function resolveBridgeRoute(requestedModelId, prompt, state, bundle, quota, { hasImages = false } = {}) {
   const cleanReq = String(requestedModelId || 'fs-auto')
     .replace(/^models\//i, '')
     .replace(/^fs:/i, '')
@@ -199,6 +207,7 @@ export async function resolveBridgeRoute(requestedModelId, prompt, state, bundle
 
   const route = pickModel(rawTask, bundle.ids || [], effectiveState, explicitModel, {
     metaMap: bundle.metaMap,
+    hasImages,
     quotaRemainingPct: quota?.remainingPct ?? null,
     cutoffPercent: state?.cutoffPercent ?? 15,
     webSearchMode: 'off',
@@ -360,8 +369,8 @@ export function createBridgeServer() {
         const body = JSON.parse(raw || '{}');
         const state = loadState();
         const [quota, bundle] = await Promise.all([getFreshQuota(state), getFreshBundle(state)]);
-        const { instructions, prompt } = geminiRequestToPrompt(body);
-        const { route, effectiveState } = await resolveBridgeRoute(requestedModel, prompt, state, bundle, quota);
+        const { instructions, prompt, hasImages } = geminiRequestToPrompt(body);
+        const { route, effectiveState } = await resolveBridgeRoute(requestedModel, prompt, state, bundle, quota, { hasImages });
         const rawClientTools = geminiToolsToClientTools(body.tools);
         const clientTools = modelSupportsClientTools(route.model) ? rawClientTools : [];
 
@@ -476,8 +485,8 @@ export function createBridgeServer() {
         const requestedModel = body.model || 'fs-auto';
         const state = loadState();
         const [quota, bundle] = await Promise.all([getFreshQuota(state), getFreshBundle(state)]);
-        const { instructions, prompt } = openAiMessagesToPrompt(body.messages);
-        const { route, effectiveState } = await resolveBridgeRoute(requestedModel, prompt, state, bundle, quota);
+        const { instructions, prompt, hasImages } = openAiMessagesToPrompt(body.messages);
+        const { route, effectiveState } = await resolveBridgeRoute(requestedModel, prompt, state, bundle, quota, { hasImages });
         const rawClientTools = openAiToolsToClientTools(body.tools);
         const clientTools = modelSupportsClientTools(route.model) ? rawClientTools : [];
         const stream = body.stream !== false;

@@ -17,7 +17,7 @@
     <img src="https://img.shields.io/badge/FS%20Code-v0.1.0-0A84FF?style=flat-square" alt="FS Code v0.1.0" />
     <img src="https://img.shields.io/badge/Plugin%20fs--atg-v2.6.0-30D158?style=flat-square" alt="fs-atg v2.6.0" />
     <img src="https://img.shields.io/badge/Tauri%202-Rust%20%2B%20Svelte%205-FF9F0A?style=flat-square" alt="Tauri 2" />
-    <img src="https://img.shields.io/badge/MCP-14%20Outils-64D2FF?style=flat-square" alt="MCP 14 Outils" />
+    <img src="https://img.shields.io/badge/MCP-17%20Outils-64D2FF?style=flat-square" alt="MCP 17 Outils" />
     <img src="https://img.shields.io/badge/Licence-Apache%202.0-8E8E93?style=flat-square" alt="Apache 2.0" />
   </p>
 </div>
@@ -88,7 +88,7 @@ flowchart LR
   FS --> CR["Crates Rust : fs-api, fs-agent, fs-tools, fs-store"]
   CR --> API["API France Student"]
 
-  AG --> ATG["fs-atg : 14 outils MCP + panneau"]
+  AG --> ATG["fs-atg : 17 outils MCP + panneau"]
   AG --> BR["fs_bridge.mjs (127.0.0.1:52000)"]
   ATG --> API
   BR --> API
@@ -113,7 +113,7 @@ Workspace Cargo (`Cargo.toml` : `members = ["crates/*", "app/src-tauri"]`, versi
 
 - **Agent et garde-fous** : `agent.rs`, `jobguard.rs`, `perm.rs`, `changelog.rs` (une ligne JSON par action dans `changes.jsonl`).
 - **Connexion** : `login.rs`, flux web Auth.js sur `ia.francestudent.org`, session conservée dans `session.json`, ou jeton manuel via `keyring`.
-- **Terminal et extensions** : `term.rs`, `mcp.rs`, `mcp_ctx.rs`, `ext.rs`, `skills.rs`, `plugins.rs`.
+- **Terminal et extensions** : `term.rs`, `mcp.rs`, `mcp_ctx.rs`, `ext.rs`, `skills.rs`, `plugins.rs`. `Extensions.svelte` intègre un catalogue de modèles MCP vérifiés regroupés en **Boost IA & Dev** (`Playwright`, `Context7`, `Fichiers`, `Mémoire`, `Sequential Thinking`, `MarkItDown`, `Windows UIA`, `Serena LSP`, `Fetch`, `Git`) et **Apps essentielles** (`GitHub officiel`, `Google Calendar`, `Gmail + Calendar + Drive`, `Mail IMAP/SMTP`).
 - **Pont MCP** : `bridge.rs` (`bridge_start`, `bridge_stop`, `bridge_status`, `bridge_confirm_answer`), démarrage auto désactivé par défaut (`auto_start: false`), arrêt propre sur `ExitRequested`, tunnel `cloudflared` récupéré par `app/scripts/fetch-cloudflared.mjs`.
 - **Instructions du compte** : `instructions.rs`.
 
@@ -137,9 +137,16 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 
 `fs-atg` confie l'exploration, l'édition de code, le raisonnement, les artifacts visuels et le pilotage du bureau Windows à France Student. Antigravity reste le chef d'orchestre, France Student fait le travail lourd.
 
-### Routage intelligent et contrôle par modèle
+### Routage intelligent par spécialité et économie Opus
 
-- **Le bon modèle pour la bonne tâche, même en `MAX` / `Fort`** : `fs_core.mjs` (`pickModel`) envoie le texte simple, les Q/R et les typos vers un modèle léger (effort `standard`), le code standard court vers un modèle équilibré (effort `deep`). Les paliers forts avec effort `max` restent réservés à l'ingénierie complexe, aux profils `security` / `refactor` ou à un palier forcé (`/heavy`, `/model`). Le réglage `smartRouting` permet de désactiver ce comportement.
+- **Le bon modèle selon la tâche et les forces Claude vs GPT (même en `MAX` / `Fort`)** : `fs_core.mjs` (`pickModel`) classe `gpt-6.2-sol`, `gpt-6.1-sol`, `gpt-6-sol` et `gpt-6.1-terra` en palier **`medium`** (équilibré) et évite d'appeler `claude-opus-5-5` en continu :
+  - **Recherche code/web simple, Q/R, résumé, typo, doc courte** → modèle léger (`gpt-6-luna` / `claude-haiku-5-5`, effort `standard`).
+  - **Backend, scripts, SQL, données, tests, correctifs courants** → OpenAI équilibré (`gpt-6.2-sol`, effort `deep`).
+  - **UI / Frontend / CSS / Canvas / rédaction de documentation** → Anthropic équilibré (`claude-sonnet-5-5`).
+  - **Vision Live / Computer Use** → `gpt-6.1-terra`.
+  - **Algorithmes complexes, concurrence, maths** → OpenAI fort (`gpt-6.2-astra`, effort `max`).
+  - **Architecture multi-fichiers lourde / sécurité critique** → Anthropic fort (`claude-opus-5-5`), uniquement si le budget restant est ≥ 30 % (`opusEconomyGuard`), sinon repli vers `gpt-6.2-astra` (sauf `/opus`, `/heavy` ou `/model`).
+- **Repli borné par palier** (`pickFallbackModel`) : un échec ou refus sur un modèle léger ou équilibré bascule d'abord vers l'autre fournisseur du même palier (`gpt-6.2-sol` ↔ `claude-sonnet-5-5`) et ne saute jamais d'un modèle léger vers Opus.
 - **Règle par modèle** :
   - `Oui` : sélection automatique autorisée.
   - `À demander` : le job passe en `needs_approval`, validation en un clic dans le panneau ou via `approveModel="..."`.
@@ -167,7 +174,10 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 
 | Capacité | Fichier | Ce que ça fait |
 |---|---|---|
-| **Computer Use** | [`computer_use.mjs`](plugins/fs-atg/computer_use.mjs) | Multi-écrans (`screen_info`, `screenshot` avec `screenIndex` / `deviceName`), fenêtres, souris, clavier, presse-papiers |
+| **Computer Use + UIA** | [`computer_use.mjs`](plugins/fs-atg/computer_use.mjs) | Multi-écrans (`screen_info`, `screenshot`), arbre Windows UI Automation (`ui_tree`, `ui_click`), fenêtres, souris, clavier, presse-papiers |
+| **Web Fetch** | [`web_fetch.mjs`](plugins/fs-atg/web_fetch.mjs) | Lecture HTTP(S) publique avec garde SSRF et conversion HTML → Markdown (`fs_fetch`) |
+| **Docs Office/PDF** | [`doc_tools.mjs`](plugins/fs-atg/doc_tools.mjs) | Lecture Markdown/CSV/HTML, `.docx`/`.pptx`/`.xlsx` natifs Windows et PDF si extracteur présent (`fs_doc_read`) |
+| **Git lecture seule** | [`git_tools.mjs`](plugins/fs-atg/git_tools.mjs) | Inspection `status`, `diff`, `log`, `branch`, `show` sans shell (`fs_git`) |
 | **Vision Live** | `fs_delegate` (`liveComputerMode`) | Capture envoyée via `POST /filesv2`, France Student analyse et demande l'action suivante, en boucle jusqu'à la fin |
 | **Sequential Thinking** | [`thinking_tools.mjs`](plugins/fs-atg/thinking_tools.mjs) | Étapes numérotées, révisions, branches, persistées dans `.fsatg_thinking.json` |
 | **Canvas Live** | [`canvas_tools.mjs`](plugins/fs-atg/canvas_tools.mjs) | Artifacts **HTML, SVG ou Mermaid** servis sur une URL locale de prévisualisation |
@@ -181,7 +191,7 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 - Jauges budget et contexte, bouton **`Live`**, historique de **50 tâches**, télémétrie par modèle (tok/s, TTFT, taux de succès, badge `Instable`).
 - Connexion via Chrome ou Edge en profil persistant, identifiants migrés dans le Gestionnaire d'identification Windows.
 
-### Les 14 outils MCP
+### Les 17 outils MCP
 
 | Outil | Rôle |
 |---|---|
@@ -190,8 +200,11 @@ Version **2.6.0**. Guide complet : [`plugins/fs-atg/README.md`](plugins/fs-atg/R
 | `fs_undo` | Liste les sauvegardes ou annule la dernière écriture |
 | `fs_memory` | Notes, faits et pré-prompt du projet (`/remember`) |
 | `fs_canvas` | Artifacts HTML, SVG, Mermaid |
-| `fs_computer` | Pilotage du bureau Windows |
+| `fs_computer` | Pilotage bureau Windows + arbre UI Automation (`ui_tree`, `ui_click`) |
 | `fs_thinking` | Raisonnement pas à pas (`think`, `history`, `status`, `clear`) |
+| `fs_fetch` | Récupération HTTP(S) publique SSRF-safe + conversion HTML → Markdown |
+| `fs_doc_read` | Lecture de docs Office (`.docx`, `.pptx`, `.xlsx` natifs Windows), CSV, HTML, Markdown et PDF |
+| `fs_git` | Inspection Git lecture seule (`status`, `diff`, `log`, `branch`, `show`) |
 | `fs_logs` | Journal du connecteur, filtrable par gravité et par job |
 | `fs_session` | État, compactage ou renouvellement de la session (`/compact`, `/new`) |
 | `fs_quota` | Quota restant, heure de reset, seuil du coupe-circuit |

@@ -32,9 +32,9 @@ export const SESSION_COOKIE_NAMES = Object.freeze(['__Secure-next-auth.session-t
 const TOKEN_REFRESH_MARGIN_MS = 60_000;
 export const RULES_PATH = join(__dirname, 'rules', 'AGENTS.md');
 export const RECENT_MODEL_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
-export const HEAVY_PRIORITY = Object.freeze(['opus', 'ultra', 'gpt-6.2-astra', 'gpt-6.2-sol', 'astra', 'o4', 'o3', 'gpt-6.1-sol', 'gpt-6-sol', 'fable', 'kimi-k3']);
-export const MEDIUM_PRIORITY = Object.freeze(['sonnet', 'gpt-5.6-sol', 'terra', 'plus']);
-export const LIGHT_PRIORITY = Object.freeze(['haiku', 'flash', 'mini', 'gpt-6-luna', 'luna', 'ministral', 'nano']);
+export const HEAVY_PRIORITY = Object.freeze(['gpt-6.2-astra', 'astra', 'opus', 'ultra', 'o4', 'o3', 'fable', 'kimi-k3']);
+export const MEDIUM_PRIORITY = Object.freeze(['gpt-6.2-sol', 'sonnet', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol', 'terra', 'plus']);
+export const LIGHT_PRIORITY = Object.freeze(['gpt-6-luna', 'haiku', 'flash', 'mini', 'luna', 'ministral', 'nano']);
 const TIER_PRIORITY = { heavy: HEAVY_PRIORITY, medium: MEDIUM_PRIORITY, light: LIGHT_PRIORITY };
 export const TRIGGER_MODES = Object.freeze(['auto', 'on', 'off']);
 
@@ -250,6 +250,20 @@ function extractParamBillions(id) {
   return m ? Number(m[1]) : null;
 }
 
+export function detectModelProvider(id, meta = null) {
+  const s = String(id || '').toLowerCase();
+  const rawProv = String(meta?.provider || meta?.owned_by || '').toLowerCase();
+  if (/mistral|ministral|codestral|devstral|pixtral|magistral/i.test(s) || rawProv.includes('mistral')) return 'mistral';
+  if (/claude|opus|sonnet|haiku|fable/i.test(s) || rawProv.includes('anthropic')) return 'anthropic';
+  if (/(?:^|\b)(?:gpt|o1|o3|o4|codex|astra|\bsol\b|terra|luna)/i.test(s) || /\b(?:sol|astra|terra|luna)\b/i.test(s) || rawProv.includes('openai')) return 'openai';
+  if (/gemini/i.test(s) || rawProv.includes('google')) return 'google';
+  return 'other';
+}
+
+export function isExpensiveClaudeModel(id) {
+  return /\b(?:opus|fable)\b/i.test(String(id || ''));
+}
+
 /**
  * Computes a universal power score (higher = stronger) so ANY current or unseen
  * future model is automatically sorted strongest -> weakest across heavy -> medium -> light.
@@ -268,15 +282,14 @@ export function scoreModelPower(id, { meta = null, state = null, telemetry = nul
     else if (/\bo4\b/.test(s)) familyBonus = 385;
     else if (/\bo3\b/.test(s)) familyBonus = 365;
     else if (s.includes('max')) familyBonus = 355;
-    else if (s.includes('sol')) familyBonus = 330;
     else if (s.includes('fable')) familyBonus = 310;
     else if (s.includes('reasoner') || /\br[12]\b/.test(s) || s.includes('thinking')) familyBonus = 300;
     else if (s.includes('pro') || s.includes('large')) familyBonus = 285;
     else if (s.includes('kimi')) familyBonus = 260;
   } else if (tier === 'medium') {
-    if (s.includes('sonnet')) familyBonus = 380;
-    else if (s.includes('sol')) familyBonus = 310;
-    else if (s.includes('terra')) familyBonus = 280;
+    if (s.includes('sonnet')) familyBonus = 360;
+    else if (/\bsol\b/.test(s) || s.includes('sol')) familyBonus = 340;
+    else if (s.includes('terra')) familyBonus = 300;
     else if (s.includes('plus')) familyBonus = 260;
     else if (s.includes('medium') || s.includes('maverick')) familyBonus = 240;
     else if (s.includes('4o') || s.includes('codestral')) familyBonus = 225;
@@ -323,15 +336,47 @@ export function rankModelsBestToWorst(models = [], state = null, { includeAsk = 
   });
 }
 
-function pickTierCandidate(pool, tier, state, metaMap = null) {
+function pickTierCandidate(pool, tier, state, metaMap = null, {
+  preferredProvider = null,
+  preferredPatterns = [],
+  avoidExpensiveClaude = false,
+  preferAllowOverAsk = true,
+} = {}) {
   const tierPool = pool.filter((id) => getModelPolicy(id, state) !== 'deny' && classifyTier(id, state, metaMap?.get?.(id) || null) === tier);
   const ready = tierPool.filter((id) => !isModelOnCooldown(id));
-  const candidates = ready.length ? ready : tierPool;
-  if (!candidates.length) return null;
+  const readyOrTier = ready.length ? ready : tierPool;
+  if (!readyOrTier.length) return null;
+  const allowPool = preferAllowOverAsk ? readyOrTier.filter((id) => getModelPolicy(id, state) === 'allow') : [];
+  const candidates = allowPool.length ? allowPool : readyOrTier;
   const telemetryAll = getModelTelemetry();
+  const useSpecialty = state?.specialtyRouting !== false;
+  const pats = Array.isArray(preferredPatterns) ? preferredPatterns.filter(Boolean) : [];
+  const selectionScore = (id) => {
+    const meta = metaMap?.get?.(id) || null;
+    const low = id.toLowerCase();
+    let score = scoreModelPower(id, { meta, state, telemetry: telemetryAll[id] || null });
+    if (useSpecialty) {
+      for (let i = 0; i < pats.length; i++) {
+        if (low.includes(String(pats[i]).toLowerCase())) {
+          score += Math.max(200, 500 - i * 60);
+          break;
+        }
+      }
+      if (preferredProvider && detectModelProvider(id, meta) === preferredProvider) {
+        score += 250;
+      }
+    }
+    if (avoidExpensiveClaude && isExpensiveClaudeModel(id)) {
+      score -= 900;
+    }
+    if (low.includes('fable')) {
+      score -= 120;
+    }
+    return score;
+  };
   const sorted = [...candidates].sort((a, b) => {
-    const sa = scoreModelPower(a, { meta: metaMap?.get?.(a) || null, state, telemetry: telemetryAll[a] || null });
-    const sb = scoreModelPower(b, { meta: metaMap?.get?.(b) || null, state, telemetry: telemetryAll[b] || null });
+    const sb = selectionScore(b);
+    const sa = selectionScore(a);
     if (sb !== sa) return sb - sa;
     return a.localeCompare(b);
   });
@@ -345,8 +390,11 @@ export const MCP_TOOL_CATALOG = Object.freeze([
   { name: 'fs_undo', label: 'Annuler (/undo)', writesWorkspace: true },
   { name: 'fs_memory', label: 'Mémoire projet', writesWorkspace: false },
   { name: 'fs_canvas', label: 'Canvas Live (/canvas)', writesWorkspace: false },
-  { name: 'fs_computer', label: 'Computer Use (/computer)', writesWorkspace: false },
+  { name: 'fs_computer', label: 'Computer Use + UIA (/computer)', writesWorkspace: false },
   { name: 'fs_thinking', label: 'Raisonnement approfondi (/think)', writesWorkspace: false },
+  { name: 'fs_fetch', label: 'Web Fetch SSRF-safe (Markdown)', writesWorkspace: false },
+  { name: 'fs_doc_read', label: 'Lecture Docs Office/PDF/CSV', writesWorkspace: false },
+  { name: 'fs_git', label: 'Git lecture seule (status/diff/log)', writesWorkspace: false },
   { name: 'fs_logs', label: 'Journal de bord', writesWorkspace: false },
   { name: 'fs_session', label: 'Session', writesWorkspace: false },
   { name: 'fs_quota', label: 'Quota France Student', writesWorkspace: false },
@@ -525,7 +573,7 @@ export function buildReasoningDirective(effort = 'deep', executionMode = 'genera
 }
 
 export const DEFAULT_STATE = {
-  stateVersion: 2,
+  stateVersion: 3,
   apiKey: '',
   // Non-secret change marker used to invalidate an in-process Credential
   // Manager cache when another Antigravity surface stores or removes a key.
@@ -548,6 +596,8 @@ export const DEFAULT_STATE = {
   canvasMode: 'on',
   imageGenMode: 'auto',
   smartRouting: true,
+  opusEconomyGuard: true,
+  specialtyRouting: true,
   compactUi: false,
   liquidGlass: false,
   reuseChat: true,
@@ -561,8 +611,8 @@ export const DEFAULT_STATE = {
   blockedModels: [],
   tiers: {
     light: ['haiku', 'luna', 'mini', 'nano', 'flash', 'ministral', 'lite', 'instant', 'scout'],
-    medium: ['sonnet', 'terra', 'gpt-5.6-sol', 'kimi-k2', 'plus', 'maverick', 'codestral'],
-    heavy: ['opus', 'ultra', 'astra', 'fable', 'gpt-6.2', 'gpt-6-sol', 'gpt-6.1-sol', 'o4', 'o3', 'kimi-k3', 'deepseek-r1', 'deepseek-r2', 'reasoner'],
+    medium: ['sonnet', 'sol', 'terra', 'kimi-k2', 'plus', 'maverick', 'codestral'],
+    heavy: ['opus', 'ultra', 'astra', 'fable', 'o4', 'o3', 'kimi-k3', 'deepseek-r1', 'deepseek-r2', 'reasoner'],
   },
   history: [],
 };
@@ -631,10 +681,31 @@ export function loadState() {
       if (Object.keys(merged.modelPolicies).length > 0 && Object.keys(filePolicies).length === 0) {
         saveModelPoliciesFile(merged.modelPolicies);
       }
-      if (!parsed.stateVersion || Number(parsed.stateVersion) < 2) {
-        merged.stateVersion = 2;
+      const prevVer = Number(parsed.stateVersion || 0);
+      if (prevVer < 3) {
+        merged.stateVersion = 3;
         merged.useClientTools = true;
         merged.permissionMode = PERMISSION_MODES.includes(parsed.permissionMode) ? parsed.permissionMode : 'acceptEdits';
+        merged.opusEconomyGuard = parsed.opusEconomyGuard !== false;
+        merged.specialtyRouting = parsed.specialtyRouting !== false;
+        const legacyHeavyRemoved = new Set(['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.2']);
+        const baseTiers = { ...DEFAULT_STATE.tiers, ...(merged.tiers || {}) };
+        const cleanHeavy = (Array.isArray(baseTiers.heavy) ? baseTiers.heavy : DEFAULT_STATE.tiers.heavy)
+          .filter((kw) => !legacyHeavyRemoved.has(String(kw || '').toLowerCase().trim()));
+        const nextMedium = Array.isArray(baseTiers.medium) ? [...baseTiers.medium] : [...DEFAULT_STATE.tiers.medium];
+        if (!nextMedium.some((kw) => String(kw || '').toLowerCase().trim() === 'sol')) {
+          const idx = nextMedium.indexOf('gpt-5.6-sol');
+          if (idx >= 0) nextMedium.splice(idx, 1, 'sol');
+          else nextMedium.push('sol');
+        }
+        merged.tiers = {
+          light: Array.isArray(baseTiers.light) ? [...baseTiers.light] : [...DEFAULT_STATE.tiers.light],
+          medium: nextMedium,
+          heavy: cleanHeavy,
+        };
+        if (parsed.routingProfile === 'quality') {
+          merged.routingProfile = 'auto';
+        }
         saveState(merged);
       }
       return merged;
@@ -747,7 +818,13 @@ export function syncAgentsRule(autoDelegate = true, permissionMode = null) {
     header,
     '',
     '- **Agent principal natif** : l’agent `france-student` (`agents/france-student.md`) applique ce workflow ; sélectionne-le dans Antigravity App (agent principal) ou via `/agents` dans Antigravity CLI.',
-    '- **Routage intelligent (même si Antigravity est en mode MAX)** : adapte toujours le modèle à la complexité réelle. Pour du **texte simple** (question courte, explication, résumé, traduction, reformulation, typo/commentaire), ne réponds pas avec un modèle MAX et n’envoie pas `reasoningEffort="max"` : délègue à `fs_delegate` (`routingProfile="eco"`, `reasoningEffort="standard"`, `contextMode="minimal"`) ou, si un sous-agent Antigravity est utilisé (`invoke_subagent`), passe `Model="flash_lite"` ou `"flash"` (jamais `"inherit"`). Pour une tâche de code standard, utilise `routingProfile="auto"` + `reasoningEffort="deep"`. Réserve `reasoningEffort="max"` / `routingProfile="quality"` uniquement à l’architecture complexe, la refactorisation multi-fichiers, la sécurité ou le débogage difficile.',
+    '- **Routage intelligent par spécialité (y compris en MAX) & Économie Opus** : adapte toujours le modèle à la complexité et à la spécialité, **jamais Opus H24** :\n' +
+    '  - **Recherche / exploration simple, Q/R, résumé, traduction, typo, petite doc** → léger (`gpt-6-luna` / `claude-haiku-5-5`, `routingProfile="eco"`, `reasoningEffort="standard"` ; ou `invoke_subagent` avec `Model="flash_lite"`/`"flash"`).\n' +
+    '  - **Backend, scripts, SQL, data, tests, debug standard** → équilibré OpenAI (`gpt-6.2-sol`, `routingProfile="auto"`, `reasoningEffort="deep"`).\n' +
+    '  - **UI, CSS, Svelte/React, Canvas, rédaction soignée** → équilibré Anthropic (`claude-sonnet-5-5`, `routingProfile="auto"`, `reasoningEffort="deep"`).\n' +
+    '  - **Vision Live / Computer Use** → `gpt-6.1-terra`.\n' +
+    '  - **Algorithmes complexes, concurrence, maths** → fort OpenAI (`gpt-6.2-astra`, `reasoningEffort="max"`).\n' +
+    '  - **Architecture multi-fichiers lourde / sécurité critique** → fort Anthropic (`claude-opus-5-5`, réservé aux vrais gros chantiers et évité sous 30 % de budget sauf `/opus`).',
     '- **Commandes slash officielles** (Mode Automatique et Mode Manuel) : `/fs` (déléguer, écriture directe `workspaceRoot` + `/undo`), `/max` (`reasoningEffort="max"` + priorité Fort sur tâches complexes), `/patch` (patch ciblé), `/plan` (plan en lecture seule), `/eco` (profil Éco), `/undo` → `fs_undo`, `/remember` → `fs_memory`, `/quota` → `fs_quota` + `fs_diagnostics`, `/canvas` → `fs_canvas`, `/computer` → `fs_computer`, `/think` → `fs_thinking`.',
     '- **Budget 0 % strict** : à 0 % (ou sous la réserve), France Student route uniquement vers les modèles hors-quota Mistral, sans recherche ni repli vers un modèle à quota ; ne force pas d’autre modèle via `model`. Si aucun modèle hors-quota n’est autorisé, informe l’utilisateur au lieu de réessayer.',
     '- **Cooldown `IA non dispo`** : ne rappelle pas `fs_delegate` en boucle ; exécute en natif Antigravity pendant le cooldown (≈ 10 min) en le signalant (et utilise `Model="flash"`/`"flash_lite"` sur `invoke_subagent` pour les tâches simples), puis reviens à `fs_delegate`.',
@@ -761,7 +838,8 @@ export function syncAgentsRule(autoDelegate = true, permissionMode = null) {
     '- **Mistral hors quota** : les modèles Mistral (`ministral*`) passent outre les quotas France Student (utilisables sans limite même à 0 % de budget restant ou sous la réserve, sauf s’ils sont réglés sur « Non »).',
     '- **Plan B** : si Plan A échoue hors `IA non dispo`, relance en `planB: true` avec `parts` (2–4 petits blocs) ; n’exécute nativement qu’en tout dernier recours.',
     '- **Quota & état** : `/quota` → `fs_quota` (quota, cooldown `IA non dispo`) puis `fs_diagnostics` (connexion, modèles) ; `fs_logs` et `fs_session` restent disponibles comme outils. `/usage` mesure Antigravity.',
-    `- **Computer Use (bureau Windows, \`/computer\`)** : \`fs_computer\` pilote le vrai bureau (souris, clavier, fenêtres, presse-papiers). Commence par \`action="screen_info"\` pour lister les écrans, puis \`action="screenshot"\` avec \`screenIndex\` (0 = 1er écran, défaut ${Number(st.selectedScreenIndex ?? 0)}) ou \`deviceName\`. Les actions qui modifient le bureau sont bloquées en mode \`plan\`.`,
+    `- **Computer Use (bureau Windows, \`/computer\`)** : \`fs_computer\` pilote le vrai bureau (souris, clavier, fenêtres, presse-papiers) et expose Windows UI Automation (\`action="ui_tree"\` en lecture seule pour lister boutons/champs avec coordonnées exactes, \`action="ui_click"\` par \`name\`/\`automationId\`). Commence par \`action="screen_info"\` ou \`action="ui_tree"\`, puis \`action="screenshot"\` avec \`screenIndex\` (0 = 1er écran, défaut ${Number(st.selectedScreenIndex ?? 0)}) ou \`deviceName\`. Les actions qui modifient le bureau sont bloquées en mode \`plan\`.`,
+    `- **Outils locaux zéro-dépendance** : \`fs_fetch\` (lecture web Markdown protégée SSRF), \`fs_doc_read\` (Markdown/Texte/CSV/HTML, \`.docx\`/\`.pptx\`/\`.xlsx\` natifs Windows et PDF si extracteur présent) et \`fs_git\` (inspection Git lecture seule : \`status\`, \`diff\`, \`log\`, \`branch\`, \`show\`).`,
     `- **Boucle Vision Live** : pour une tâche visuelle, appelle \`fs_delegate\` avec \`attachScreenshot: true\` (+ \`screenIndex\`) ou \`imagePaths\`, et \`liveComputerMode: true\`${st.liveComputerMode ? ' (actif par défaut dans le panneau)' : ''}. France Student voit la capture et répond par UNE action \`fs_computer\` à exécuter ; exécute-la, puis relance \`fs_delegate\` avec une nouvelle capture. Répète jusqu’à ce que la tâche soit finie (max ~10 tours), et arrête-toi au moindre doute (paiement, suppression, envoi de message).`,
     '',
   ].join('\n');
@@ -1752,7 +1830,15 @@ export function enrichModelsCatalog(ids, metaMap, state, apiModelsRaw = [], { pe
   return rows;
 }
 
-const HEAVY = /(architect|refactor|migration|sécurité|security|concurren|optimi[sz]|algorithm|debug|race condition|performance|plusieurs fichiers|multi[- ]?fichiers|full[\s-]?stack|audit|économie|economie)/i;
+const DOC_TARGET_RE = /(?:\breadme(?:\.md)?\b|\.md\b|markdown|\bskill\.md\b|\bagents\.md\b|\bchangelog\b|documentation|page\s+de\s+pr[ée]sentation|docstrings?|\bcommentaire(?:s)?\b|\btypo(?:s)?\b|orthographe)/i;
+const DOC_REWRITE_RE = /(?:refonte|refais|revoi[st]|r[ée][ée]cri[st]|compl[èe]t|entier|enti[èe]rement|toute\s+la\s+page)/i;
+const CODE_SEARCH_RE = /(?:^(?:recherche|cherche|trouve|localise|liste|inspecte|v[ée]rifie|regarde|lis|explore|scanne|rep[èe]re|o[ùu]\s+(?:est|sont|se\s+trouve)|quels?\s+(?:sont|fichiers?|outils?|endpoints?))\b|\bgrep\b|\bfind\b|dans\s+(?:le\s+)?(?:projet|d[ée]p[ôo]t|repo|codebase)\s+(?:o[ùu]|quels?|lesquels?))/i;
+const WRITE_ACTION_RE = /\b(?:cr[ée]{1,2}|[ée]cri[st]|modifi|ajout|impl[ée]ment|supprim|retir|refactor|corrige|patch)\b/i;
+const HEAVY_ALGO_RE = /(?:race\s+condition|deadlock|interblocage|concurren(?:ce|t)|multi[- ]?thread|memory\s+leak|fuite\s+m[ée]moire|algorithme\s+(?:complexe|avanc[ée]|optimal|de\s+graphe)|programmation\s+dynamique|complexit[ée]\s+asymptotique|preuve\s+math[ée]matique|optimisation\s+(?:m[ée]moire|cpu|requ[êe]te\s+sql|critique|bas\s+niveau)|debug(?:ging)?\s+(?:profond|complexe|critique|bloquant)|bug\s+(?:critique|intermittent|concurren|m[ée]moire))/i;
+const HEAVY_ARCH_RE = /(?:refonte\s+(?:compl[èe]te|globale|d['’]architecture)|architecture\s+(?:compl[èe]te|multi[- ]?(?:couches?|services?|modules?|fichiers?)|distribu[ée]e)|migration\s+(?:compl[èe]te|majeure|de\s+sch[ée]ma|base\s+de\s+donn[ée]es)|refactoris(?:ation|e|er)\s+(?:compl[èe]te|globale|multi[- ]?fichiers?|majeure)|vuln[ée]rabilit[ée]|faille\s+de\s+s[ée]curit[ée]|audit\s+de\s+s[ée]curit[ée]\s+(?:code|auth|crypto|backend)|chiffrement|cryptograph|authentification\s+(?:oauth|jwt|rbac|sso)\s+compl[èe]te)/i;
+const HEAVY = new RegExp(`${HEAVY_ALGO_RE.source}|${HEAVY_ARCH_RE.source}`, 'i');
+const FRONTEND_UI_RE = /(?:\bcss\b|\bscss\b|\bhtml\b|\bsvg\b|\bui\b|\bux\b|frontend|front[- ]?end|svelte|react|vue|tailwind|design|maquette|mise\s+en\s+page|layout|responsive|th[èe]me|palette|animation|glass|composant\s+(?:ui|visuel|svelte|react)|bouton|modale|sidebar|panneau|dashboard|three\.?js|webgl|canvas)/i;
+const BACKEND_DATA_RE = /(?:backend|back[- ]?end|\bsql\b|postgres|sqlite|mysql|mongodb|redis|base\s+de\s+donn[ée]es|endpoint|route\s+api|serveur|node\.?js|rust|cargo|tauri|python|script|cli|regex|parser|algorithme|calcul|donn[ée]es|json|csv|etl|test(?:s)?\s+unitaires?|jest|vitest|pytest|benchmark|\bbug\b|\berreur\b|\bcrash\b|\bfix\b|corrig)/i;
 const CODING_MEDIUM = /(cr[ée]{1,2}|g[ée]n[èe]re|impl[ée]ment|d[ée]velopp|corrig|am[ée]lior|ajout|modifi|composant|interface|script|fonction|classe|endpoint|route|backend|frontend|base de donn|sql|test|build|vid[ée]o|application|\bapi\b|\bapp\b|\bhtml\b|\bcss\b|\bjs\b|\bts\b|\bpy\b)/i;
 const LIGHT = /(renomm|rename|commentaire|comment|docstring|readme|typo|faute|orthographe|grammaire|formate|format|tradui|translate|lint|import|résume|resume|synth[èe]se|reformule|simplifie)/i;
 const SIMPLE_TEXT_RE = /^(?:bonjour|salut|hello|hi|coucou|merci|explique|dis[- ]moi|c['’]est\s+quoi|qu['’]est[- ]ce\s+que|quelle?\s+(?:est|sont)|comment\s+(?:marche|fonctionne|faire)|pourquoi|résume|synth[ée]tise|tradui[st]|reformule|corrige\s+(?:l['’]orthographe|la\s+grammaire|le\s+texte|les\s+fautes)|donne(?:-moi)?\s+(?:un|des)\s+exemples?|liste|énum[èe]re|rédige\s+(?:un\s+)?(?:court|petit|message|mail|email|commit|résumé))/i;
@@ -1762,7 +1848,7 @@ const IMAGE_GEN_RE = /(?:g[ée]n[èe]re(?:r)?\s+(?:une\s+)?image|cr[ée]{1,2}(?:
 
 const AUTO_LIGHT_RE = /(?:haiku|luna|mini(?!stral)|ministral|nano|flash|lite|instant|micro|tiny|small|fast|scout|spark)/i;
 const AUTO_HEAVY_RE = /(?:opus|ultra|astra|fable|pro-max|promax|\bmax\b|\bo4\b|\bo3\b|o1-pro|deepseek-r[12]|\br[12]\b|reasoner|thinking|kimi-k[3-9]|grok-[3-9]|mistral-large|codestral-large|\bpro\b)/i;
-const AUTO_MEDIUM_RE = /(?:sonnet|terra|gpt-5\.6-sol|kimi-k2|\bplus\b|medium|balanced|4o|maverick|codestral|mistral-small)/i;
+const AUTO_MEDIUM_RE = /(?:sonnet|terra|\bsol\b|kimi-k2|\bplus\b|medium|balanced|4o|maverick|codestral|mistral-small)/i;
 
 export function classifyTier(id, state, meta = null) {
   const s = String(id || '').toLowerCase();
@@ -1777,9 +1863,7 @@ export function classifyTier(id, state, meta = null) {
   if (has(tiers.light) || AUTO_LIGHT_RE.test(s) || (paramsB !== null && paramsB <= 20)) return 'light';
 
   // 2. Explicit heavy list or universal flagship patterns (including future gpt-7/claude-6 without light/medium marker).
-  const ver = extractModelVersion(s);
-  const isSolHeavy = s.includes('sol') && !s.includes('5.6') && (ver === 0 || ver >= 6);
-  if (has(tiers.heavy) || AUTO_HEAVY_RE.test(s) || isSolHeavy || (paramsB !== null && paramsB >= 100)) {
+  if (has(tiers.heavy) || AUTO_HEAVY_RE.test(s) || (paramsB !== null && paramsB >= 100)) {
     return 'heavy';
   }
 
@@ -1830,19 +1914,27 @@ export function analyzeTaskIntent(prompt, {
   canvasMode = 'on',
   imageGenMode = 'auto',
   explicitCanvas = false,
+  hasImages = false,
 } = {}) {
   const text = String(prompt ?? '').trim();
   const isWebResearch = WEB_RESEARCH_RE.test(text);
   const isCanvasArtifact = CANVAS_ARTIFACT_RE.test(text);
   const isImageGen = IMAGE_GEN_RE.test(text);
-  const isHeavyCode = HEAVY.test(text) || /\bbug\b/i.test(text) || text.length > 3800;
+  const isDocTarget = DOC_TARGET_RE.test(text);
+  const isCodeSearch = CODE_SEARCH_RE.test(text);
+  const hasWriteAction = WRITE_ACTION_RE.test(text);
+  const isHeavyAlgo = HEAVY_ALGO_RE.test(text);
+  const isHeavyArch = !isDocTarget && (HEAVY_ARCH_RE.test(text) || text.length > 6000);
+  const isHeavyCode = isHeavyAlgo || isHeavyArch;
+  const isFrontendUi = FRONTEND_UI_RE.test(text);
+  const isBackendData = BACKEND_DATA_RE.test(text);
   const isCoding = CODING_MEDIUM.test(text);
-  const isLightTask = LIGHT.test(text) && !isHeavyCode && text.length < 900;
+  const isLightTask = LIGHT.test(text) && !isHeavyCode && text.length < 1100;
   const isTrivialDocOrText = isLightTask && !/(?:nouvelle?\s+(?:fonctionnalit|feature|route|endpoint|composant|page|api|table)|base de donn|sql|backend|frontend|application|full[\s-]?stack)/i.test(text);
   const hasWorkspaceWrite = Boolean(workspaceRoot && useClientTools && executionMode === 'apply');
-  const isSimpleText = !isHeavyCode && !isCanvasArtifact && !isImageGen && text.length < 900 && (
+  const isSimpleText = !isHeavyCode && !isCanvasArtifact && !isImageGen && text.length < 1100 && (
     (SIMPLE_TEXT_RE.test(text) && !hasWorkspaceWrite) ||
-    (!isCoding && !hasWorkspaceWrite && text.length < 600)
+    (!isCoding && !isBackendData && !isFrontendUi && !hasWorkspaceWrite && text.length < 700)
   );
 
   const wsMode = normalizeTriggerMode(webSearchMode, 'auto');
@@ -1851,63 +1943,136 @@ export function analyzeTaskIntent(prompt, {
 
   const enableWebSearch = wsMode === 'on' ? true : (wsMode === 'off' ? false : isWebResearch);
   const isPureWebLookup = isWebResearch && !isCanvasArtifact && !isCoding;
-  const canUseCanvas = explicitCanvas || (!hasWorkspaceWrite && !isSimpleText && executionMode !== 'patch' && executionMode !== 'plan' && !isPureWebLookup);
+  const canUseCanvas = explicitCanvas || (!hasWorkspaceWrite && !isSimpleText && !isCodeSearch && !isDocTarget && executionMode !== 'patch' && executionMode !== 'plan' && !isPureWebLookup);
   const enableCanvas = cvMode === 'off'
     ? false
     : (cvMode === 'on' ? canUseCanvas : Boolean(isCanvasArtifact && canUseCanvas));
   const enableImageGen = igMode === 'on' ? true : (igMode === 'off' ? false : isImageGen);
 
   let intent = 'general';
-  let recommendedTier = null;
-  let recommendedEffort = null;
-  let rationale = '';
+  let recommendedTier = 'medium';
+  let recommendedEffort = 'deep';
+  let specialty = 'gpt_code';
+  let preferredProvider = 'openai';
+  let preferredPatterns = ['gpt-6.2-sol', 'sol', 'sonnet'];
+  let rationale = 'tâche générale → GPT équilibré';
 
   if (isImageGen && !isHeavyCode) {
     intent = 'image_generation';
     recommendedTier = 'light';
     recommendedEffort = 'standard';
-    rationale = 'image IA (modèle léger suffisant + générateur natif)';
+    specialty = 'fast_text';
+    preferredProvider = 'openai';
+    preferredPatterns = ['luna', 'haiku'];
+    rationale = 'image IA → modèle léger + générateur natif';
+  } else if (hasImages) {
+    intent = 'vision_computer';
+    recommendedTier = 'medium';
+    recommendedEffort = 'standard';
+    specialty = 'vision_computer';
+    preferredProvider = 'openai';
+    preferredPatterns = ['terra', 'sonnet', 'sol'];
+    rationale = 'Vision Live / Computer Use → modèle visuel équilibré';
+  } else if (isDocTarget && !isHeavyAlgo && !(isBackendData && /\b(?:sql|endpoint|route\s+api|serveur|rust|tauri|postgres|test(?:s)?\s+unitaires?)\b/i.test(text))) {
+    intent = isLightTask && text.length < 400 ? 'light_edit' : 'doc_edit';
+    const isShortTargetedDoc = text.length < 1500 && !DOC_REWRITE_RE.test(text);
+    recommendedTier = isShortTargetedDoc ? 'light' : 'medium';
+    recommendedEffort = 'standard';
+    specialty = isShortTargetedDoc ? 'docs_light' : 'docs_writing';
+    preferredProvider = 'anthropic';
+    preferredPatterns = isShortTargetedDoc ? ['haiku', 'luna'] : ['sonnet', 'sol', 'terra'];
+    rationale = isShortTargetedDoc ? 'doc/typo/README ciblée → Claude léger' : 'refonte documentation → Claude équilibré';
+  } else if (isCodeSearch && !isHeavyCode && (!hasWorkspaceWrite || executionMode === 'plan' || !hasWriteAction)) {
+    intent = 'code_search';
+    recommendedTier = 'light';
+    recommendedEffort = 'standard';
+    specialty = 'search_triage';
+    preferredProvider = 'openai';
+    preferredPatterns = ['luna', 'haiku'];
+    rationale = 'recherche / inspection code → modèle léger rapide';
   } else if (isWebResearch && !isHeavyCode && !hasWorkspaceWrite) {
     intent = isCanvasArtifact ? 'research_canvas' : 'web_research';
-    recommendedTier = isCanvasArtifact || isCoding || text.length > 900 ? 'medium' : 'light';
-    recommendedEffort = recommendedTier === 'light' ? 'standard' : 'deep';
-    rationale = isCanvasArtifact
-      ? 'recherche web + Canvas (modèle équilibré)'
-      : (recommendedTier === 'light'
-        ? 'recherche web (modèle léger suffisant + recherche web active)'
-        : 'recherche web technique (modèle équilibré + recherche web active)');
+    recommendedTier = isCanvasArtifact || text.length > 1400 ? 'medium' : 'light';
+    recommendedEffort = 'standard';
+    specialty = isCanvasArtifact ? 'claude_ui' : 'search_triage';
+    preferredProvider = isCanvasArtifact ? 'anthropic' : 'openai';
+    preferredPatterns = isCanvasArtifact ? ['sonnet', 'sol'] : ['luna', 'haiku'];
+    rationale = isCanvasArtifact ? 'recherche web + Canvas → Claude équilibré' : 'recherche web → modèle léger';
+  } else if (isSimpleText || (isTrivialDocOrText && !isCoding && !isBackendData && !isFrontendUi)) {
+    intent = isTrivialDocOrText || isLightTask ? 'light_edit' : 'simple_text';
+    recommendedTier = 'light';
+    recommendedEffort = 'standard';
+    specialty = intent === 'light_edit' ? 'docs_light' : 'fast_text';
+    preferredProvider = intent === 'light_edit' ? 'anthropic' : 'openai';
+    preferredPatterns = intent === 'light_edit' ? ['haiku', 'luna'] : ['luna', 'haiku'];
+    rationale = intent === 'light_edit' ? 'texte / typo légère → modèle léger' : 'texte simple / question → modèle léger';
   } else if (isCanvasArtifact && !hasWorkspaceWrite && executionMode !== 'patch') {
     intent = 'canvas_artifact';
     recommendedTier = isHeavyCode ? 'heavy' : 'medium';
     recommendedEffort = isHeavyCode ? 'deep' : 'standard';
-    rationale = 'Canvas / artefact visuel (modèle équilibré + outils Canvas)';
-  } else if (isHeavyCode) {
-    intent = 'heavy_engineering';
+    specialty = 'claude_ui';
+    preferredProvider = 'anthropic';
+    preferredPatterns = isHeavyCode ? ['opus', 'sonnet', 'astra'] : ['sonnet', 'terra', 'sol'];
+    rationale = 'Canvas / artefact visuel → Claude équilibré';
+  } else if (isHeavyAlgo) {
+    intent = 'deep_reasoning_algo';
     recommendedTier = 'heavy';
-    rationale = 'ingénierie complexe (modèle fort)';
-  } else if (isTrivialDocOrText || (isLightTask && !isCoding)) {
-    intent = 'light_edit';
-    recommendedTier = 'light';
-    recommendedEffort = 'standard';
-    rationale = 'tâche légère / texte (modèle rapide suffisant)';
-  } else if (isSimpleText) {
-    intent = 'simple_text';
-    recommendedTier = 'light';
-    recommendedEffort = 'standard';
-    rationale = 'texte simple / question (modèle léger suffisant)';
-  } else if (isCoding && !isHeavyCode && text.length < 2200) {
-    intent = 'standard_coding';
+    recommendedEffort = 'max';
+    specialty = 'gpt_heavy';
+    preferredProvider = 'openai';
+    preferredPatterns = ['astra', 'o4', 'o3', 'opus'];
+    rationale = 'algorithme / concurrence complexe → GPT fort';
+  } else if (isHeavyArch) {
+    intent = 'heavy_agentic_arch';
+    recommendedTier = 'heavy';
+    recommendedEffort = 'max';
+    specialty = 'claude_heavy';
+    preferredProvider = 'anthropic';
+    preferredPatterns = ['opus', 'astra', 'sonnet'];
+    rationale = 'architecture multi-fichiers / sécurité critique → Claude fort';
+  } else if (isFrontendUi && (!isBackendData || /\b(?:svelte|css|html|svg|design|maquette|th[èe]me|animation|glass)\b/i.test(text))) {
+    intent = 'frontend_ui';
     recommendedTier = 'medium';
     recommendedEffort = 'deep';
-    rationale = 'tâche code standard (modèle équilibré)';
+    specialty = 'claude_ui';
+    preferredProvider = 'anthropic';
+    preferredPatterns = ['sonnet', 'terra', 'sol'];
+    rationale = 'UI / Frontend / CSS → Claude équilibré';
+  } else if (isBackendData || isCoding) {
+    intent = isBackendData ? 'backend_algo_data' : 'standard_coding';
+    recommendedTier = 'medium';
+    recommendedEffort = 'deep';
+    specialty = 'gpt_code';
+    preferredProvider = 'openai';
+    preferredPatterns = ['gpt-6.2-sol', 'sol', 'terra', 'sonnet'];
+    rationale = isBackendData ? 'backend / SQL / tests / fix → GPT équilibré' : 'tâche code standard → GPT équilibré';
   }
 
   return {
     intent,
     recommendedTier,
     recommendedEffort,
+    specialty,
+    preferredProvider,
+    preferredPatterns,
     rationale,
-    signals: { isWebResearch, isCanvasArtifact, isImageGen, isHeavyCode, isCoding, isLightTask, isSimpleText, hasWorkspaceWrite },
+    signals: {
+      isWebResearch,
+      isCanvasArtifact,
+      isImageGen,
+      isDocTarget,
+      isCodeSearch,
+      isHeavyAlgo,
+      isHeavyArch,
+      isHeavyCode,
+      isFrontendUi,
+      isBackendData,
+      isCoding,
+      isLightTask,
+      isSimpleText,
+      hasImages,
+      hasWorkspaceWrite,
+    },
     enableWebSearch,
     enableCanvas,
     enableImageGen,
@@ -2003,7 +2168,7 @@ const TIER_ALIASES = {
 
 const MODEL_ALIASES = {
   fable: 'fable', opus: 'opus', sonnet: 'sonnet', haiku: 'haiku',
-  terra: 'terra', sol: 'sol', luna: 'luna', gpt: 'gpt-', claude: 'claude-',
+  astra: 'astra', terra: 'terra', sol: 'sol', luna: 'luna', gpt: 'gpt-', claude: 'claude-',
   mistral: 'mistral', ministral: 'ministral',
 };
 
@@ -2108,8 +2273,8 @@ function profileTier(profile, prompt, { smartRouting = true } = {}) {
       return 'light';
     case 'fast': return CODING_MEDIUM.test(prompt) ? 'medium' : 'light';
     case 'quality':
-      if (smartRouting && !HEAVY.test(prompt) && !/\bbug\b/i.test(prompt) && prompt.length < 2200) {
-        return CODING_MEDIUM.test(prompt) ? 'medium' : 'light';
+      if (smartRouting && !HEAVY.test(prompt) && prompt.length < 6000) {
+        return (CODING_MEDIUM.test(prompt) || BACKEND_DATA_RE.test(prompt) || FRONTEND_UI_RE.test(prompt)) ? 'medium' : 'light';
       }
       return 'heavy';
     case 'security':
@@ -2123,6 +2288,7 @@ export function pickModel(raw, available, state, explicit, {
   metaMap = null,
   workspaceRoot = '',
   useClientTools = false,
+  hasImages = false,
   webSearchMode = null,
   canvasMode = null,
   imageGenMode = null,
@@ -2162,6 +2328,7 @@ export function pickModel(raw, available, state, explicit, {
     executionMode: directives.executionMode,
     workspaceRoot,
     useClientTools,
+    hasImages,
     webSearchMode: resolvedWsMode,
     canvasMode: resolvedCanvasMode,
     imageGenMode: resolvedImgMode,
@@ -2170,6 +2337,8 @@ export function pickModel(raw, available, state, explicit, {
 
   const triggers = {
     intent: intentInfo.intent,
+    specialty: intentInfo.specialty || null,
+    preferredProvider: intentInfo.preferredProvider || null,
     enableWebSearch: intentInfo.enableWebSearch,
     enableCanvas: intentInfo.enableCanvas,
     enableImageGen: intentInfo.enableImageGen,
@@ -2184,8 +2353,12 @@ export function pickModel(raw, available, state, explicit, {
     const alternatives = needsApproval
       ? rankModelsBestToWorst(altSource, state, { includeAsk: false, metaMap }).slice(0, 3)
       : [];
+    const chosenTier = result.tier || classifyTier(result.model, state, metaMap?.get?.(result.model) || null);
     return {
       ...result,
+      tier: chosenTier,
+      specialty: intentInfo.specialty || null,
+      preferredProvider: intentInfo.preferredProvider || null,
       intent: intentInfo.intent,
       enableWebSearch: intentInfo.enableWebSearch,
       enableCanvas: intentInfo.enableCanvas,
@@ -2252,13 +2425,18 @@ export function pickModel(raw, available, state, explicit, {
     }
   }
 
-  // Smart intent routing: even when MAX/Fort is active, downshift simple text, light edits,
-  // web lookups, and standard tasks to an appropriately sized model unless the user forced /model or /heavy.
+  // Smart specialty routing: even when MAX/Fort is active, downshift search, simple text,
+  // docs, UI, and standard coding to the optimal cost/capability model (reserving Opus).
   const smartEnabled = state?.smartRouting !== false;
+  const opusEconomyGuard = state?.opusEconomyGuard !== false;
   const explicitSpecializedProfile = Boolean(directives.profile && ['security', 'refactor'].includes(directives.profile));
   const explicitLightProfile = Boolean(directives.profile && ['eco', 'fast'].includes(directives.profile));
   const explicitMaxDirective = directives.reasoningEffort === 'max';
-  const downshiftEligibleIntents = ['simple_text', 'light_edit', 'web_research', 'image_generation', 'canvas_artifact', 'research_canvas', 'standard_coding'];
+  const downshiftEligibleIntents = [
+    'simple_text', 'light_edit', 'code_search', 'doc_edit', 'web_research',
+    'image_generation', 'vision_computer', 'canvas_artifact', 'research_canvas',
+    'frontend_ui', 'backend_algo_data', 'standard_coding', 'general',
+  ];
   const smartOverrideTier = (
     smartEnabled &&
     !forcedTier &&
@@ -2271,7 +2449,7 @@ export function pickModel(raw, available, state, explicit, {
     smartOverrideTier === 'light' && !forcedTier
       ? (intentInfo.recommendedEffort || 'standard')
       : (smartOverrideTier === 'medium' && effectiveEffort === 'max' && !explicitMaxDirective && !forcedTier
-        ? 'deep'
+        ? (intentInfo.recommendedEffort || 'deep')
         : effectiveEffort)
   );
 
@@ -2280,12 +2458,33 @@ export function pickModel(raw, available, state, explicit, {
       ? 'heavy'
       : profileTier(profile, prompt, { smartRouting: smartEnabled })
   );
-  const tier = forcedTier || preferredTier || (HEAVY.test(prompt) || /\bbug\b/i.test(prompt) || prompt.length > 4000 ? 'heavy'
-    : LIGHT.test(prompt) && prompt.length < 800 ? 'light' : 'medium');
-  const order = tier === 'heavy' ? ['heavy', 'medium', 'light']
-    : tier === 'light' ? ['light', 'medium', 'heavy'] : ['medium', 'heavy', 'light'];
+  const tier = forcedTier || preferredTier || intentInfo.recommendedTier || 'medium';
+  const isHeavyArchIntent = intentInfo.intent === 'heavy_agentic_arch' || explicitSpecializedProfile;
+  const lowBudgetForOpus = quotaPct !== null && quotaPct < 30;
+  const avoidExpensiveClaude = Boolean(
+    !forcedTier &&
+    opusEconomyGuard &&
+    (tier !== 'heavy' || !isHeavyArchIntent || lowBudgetForOpus)
+  );
+  let preferredProvider = intentInfo.preferredProvider || null;
+  let preferredPatterns = Array.isArray(intentInfo.preferredPatterns) ? [...intentInfo.preferredPatterns] : [];
+  if (explicitLightProfile && tier === 'light') {
+    preferredProvider = preferredProvider || 'openai';
+  }
+  if (tier === 'heavy' && avoidExpensiveClaude && preferredProvider === 'anthropic') {
+    preferredProvider = 'openai';
+    preferredPatterns = ['astra', 'o4', 'o3', ...preferredPatterns.filter((p) => !['opus', 'fable'].includes(p))];
+  }
+
+  const order = tier === 'heavy'
+    ? ['heavy', 'medium', 'light']
+    : (tier === 'light' ? ['light', 'medium'] : ['medium', 'light', 'heavy']);
   for (const t of order) {
-    const hit = pickTierCandidate(routingPool, t, state, metaMap);
+    const hit = pickTierCandidate(routingPool, t, state, metaMap, {
+      preferredProvider,
+      preferredPatterns,
+      avoidExpensiveClaude: avoidExpensiveClaude || t !== 'heavy',
+    });
     if (hit) {
       const label = t === 'light' ? 'faible' : t === 'heavy' ? 'fort' : 'équilibré';
       const triggerNotes = [
@@ -2293,15 +2492,19 @@ export function pickModel(raw, available, state, explicit, {
         intentInfo.enableCanvas ? 'Canvas' : null,
         intentInfo.enableImageGen ? 'Image' : null,
       ].filter(Boolean);
+      const opusAvoidedNote = (tier === 'heavy' && isHeavyArchIntent && lowBudgetForOpus && opusEconomyGuard && !isExpensiveClaudeModel(hit))
+        ? ' · budget < 30 % (Opus évité)'
+        : '';
       const baseReason = quotaBypass
         ? `hors-quota Mistral (budget ${Math.max(0, Math.round(quotaPct))} %)`
         : (forcedTier ? `catégorie : ${label}`
           : (smartOverrideTier ? `smart ${intentInfo.rationale || label}${t !== tier ? ' (repli)' : ''}`
-            : (resolvedEffort === 'max' ? `raisonnement max : ${label}`
-              : (preferredTier ? `profil ${profile} : ${label}${t !== tier ? ' (repli)' : ''}`
-                : `auto : ${label}${t !== tier ? ' (repli)' : ''}`))));
+            : (resolvedEffort === 'max' ? `raisonnement max : ${intentInfo.rationale || label}${opusAvoidedNote}`
+              : (preferredTier ? `profil ${profile} : ${intentInfo.rationale || label}${t !== tier ? ' (repli)' : ''}${opusAvoidedNote}`
+                : `auto : ${intentInfo.rationale || label}${t !== tier ? ' (repli)' : ''}`))));
       return finalize({
         model: hit,
+        tier: t,
         prompt,
         reason: triggerNotes.length ? `${baseReason} [${triggerNotes.join('+')}]` : baseReason,
         quotaBypass,
@@ -3204,9 +3407,94 @@ export async function streamGeneration({
   }
 }
 
+export function pickFallbackModel({
+  current,
+  reason = '',
+  startTier = 'medium',
+  tried = new Set(),
+  skippedQuota = new Set(),
+  rankedAll = [],
+  state = null,
+  onlyExempt = false,
+  sawQuotaExhausted = false,
+  metaMap = null,
+} = {}) {
+  const restrictExempt = onlyExempt || sawQuotaExhausted || isQuotaExhaustedError(reason);
+  const untried = (rankedAll || []).filter((c) => (
+    !tried.has(c) &&
+    !skippedQuota.has(c) &&
+    getModelPolicy(c, state) !== 'deny' &&
+    (!restrictExempt || isQuotaExemptModel(c, metaMap?.get?.(c) || null))
+  ));
+  if (!untried.length) return null;
+  const ready = untried.filter((c) => !isModelOnCooldown(c));
+  const pool = ready.length ? ready : untried;
+
+  if (isQuotaExhaustedError(reason) || restrictExempt) {
+    const exempt = pool.find((id) => isQuotaExemptModel(id, metaMap?.get?.(id) || null));
+    if (exempt) return exempt;
+  }
+
+  const tierOf = (id) => classifyTier(id, state, metaMap?.get?.(id) || null);
+  const curProv = current ? detectModelProvider(current, metaMap?.get?.(current) || null) : null;
+  const isUpstreamOutage = /502|503|504|BAD_GATEWAY|no responses upstream has available capacity|rate_limit_error|TOO_MANY_REQUESTS|\b429\b/i.test(String(reason));
+  const preferOtherProvider = (list) => {
+    if (!list.length) return null;
+    if (curProv && isUpstreamOutage) {
+      const alt = list.find((id) => detectModelProvider(id, metaMap?.get?.(id) || null) !== curProv);
+      if (alt) return alt;
+    }
+    if (curProv) {
+      const alt = list.find((id) => detectModelProvider(id, metaMap?.get?.(id) || null) !== curProv);
+      if (alt) return alt;
+    }
+    return list[0];
+  };
+
+  if (startTier === 'light') {
+    const lightPool = pool.filter((id) => tierOf(id) === 'light');
+    if (lightPool.length) return preferOtherProvider(lightPool);
+    const medPool = pool.filter((id) => tierOf(id) === 'medium');
+    if (medPool.length) return preferOtherProvider(medPool);
+    // Bounded fallback: never jump from light directly to heavy (Opus / Fable / Astra).
+    return null;
+  }
+
+  const economyGuard = state?.opusEconomyGuard !== false;
+  const sortHeavyEcoFirst = (list) => [...list].sort((a, b) => {
+    const aExp = isExpensiveClaudeModel(a) ? 1 : 0;
+    const bExp = isExpensiveClaudeModel(b) ? 1 : 0;
+    if (economyGuard && aExp !== bExp) return aExp - bExp;
+    return 0;
+  });
+
+  if (startTier === 'medium') {
+    const medPool = pool.filter((id) => tierOf(id) === 'medium');
+    if (medPool.length) return preferOtherProvider(medPool);
+    const lightPool = pool.filter((id) => tierOf(id) === 'light');
+    const heavyPool = sortHeavyEcoFirst(pool.filter((id) => tierOf(id) === 'heavy' && !/fable/i.test(id)));
+    if (isUpstreamOutage) {
+      if (lightPool.length) return preferOtherProvider(lightPool);
+      if (heavyPool.length) return heavyPool[0];
+    } else {
+      if (heavyPool.length) return heavyPool[0];
+      if (lightPool.length) return preferOtherProvider(lightPool);
+    }
+    return null;
+  }
+
+  // startTier === 'heavy'
+  const heavyPool = sortHeavyEcoFirst(pool.filter((id) => tierOf(id) === 'heavy'));
+  if (heavyPool.length) return preferOtherProvider(heavyPool);
+  const medPool = pool.filter((id) => tierOf(id) === 'medium');
+  if (medPool.length) return preferOtherProvider(medPool);
+  const lightPool = pool.filter((id) => tierOf(id) === 'light');
+  return lightPool[0] ?? pool[0] ?? null;
+}
+
 /**
- * Retries refusals, empty completions, 502/429/upstream errors or timeouts by
- * cascading through available models from BEST to WORST (heavy -> medium -> light).
+ * Retries refusals, empty completions, 502/429/upstream errors or timeouts while
+ * respecting the starting model tier (never escalating from light to Opus).
  * If no model succeeds, activates a 10-minute cooldown with motif "IA non dispo".
  */
 export async function streamGenerationWithRefusalFallback({ availableModels = [], approvedModel = null, quotaBypass = false, quotaRemainingPct = null, onRetry, ...request }) {
@@ -3248,47 +3536,28 @@ export async function streamGenerationWithRefusalFallback({ availableModels = []
     ? request.model
     : (rankedAll[0] || request.model);
   if (isModelOnCooldown(model)) {
-    const firstReady = rankedAll.find((m) => !isModelOnCooldown(m));
+    const startTierCand = classifyTier(model, request.state);
+    const firstReady = rankedAll.find((m) => !isModelOnCooldown(m) && classifyTier(m, request.state) === startTierCand)
+      || rankedAll.find((m) => !isModelOnCooldown(m) && classifyTier(m, request.state) !== 'heavy')
+      || rankedAll.find((m) => !isModelOnCooldown(m));
     if (firstReady) model = firstReady;
   }
+  const startTier = classifyTier(model, request.state);
   let chatId = request.chatId;
   let activeRequest = { ...request };
   const maxAttempts = Math.max(1, rankedAll.length || 1);
 
-  const pickNextBestToWorst = (current, reason = '') => {
-    const restrictExempt = onlyExempt || sawQuotaExhausted || isQuotaExhaustedError(reason);
-    const untried = rankedAll.filter((c) => (
-      !tried.has(c) &&
-      !skippedQuota.has(c) &&
-      getModelPolicy(c, request.state) !== 'deny' &&
-      (!restrictExempt || isQuotaExemptModel(c))
-    ));
-    if (!untried.length) return null;
-    const ready = untried.filter((c) => !isModelOnCooldown(c));
-    const pool = ready.length ? ready : untried;
-
-    // On chat budget exhaustion, jump immediately to quota-exempt Mistral models.
-    if (isQuotaExhaustedError(reason)) {
-      const exempt = pool.find((id) => isQuotaExemptModel(id));
-      if (exempt) return exempt;
-    }
-
-    // If an entire provider upstream just returned 502/429 capacity error, prefer trying the other provider family first while keeping best-to-worst order.
-    const isUpstreamOutage = /502|503|504|BAD_GATEWAY|no responses upstream has available capacity|rate_limit_error|TOO_MANY_REQUESTS|\b429\b/i.test(String(reason));
-    if (isUpstreamOutage && current) {
-      const curIsClaude = /claude|opus|sonnet|haiku|fable/i.test(current);
-      const otherFamily = pool.find((id) => (/claude|opus|sonnet|haiku|fable/i.test(id)) !== curIsClaude);
-      if (otherFamily) return otherFamily;
-    }
-
-    if (!restrictExempt && /artefact|tronquée|sans bloc de code|client tools are not supported/i.test(String(reason))) {
-      for (const kw of ['opus', 'sonnet', 'haiku']) {
-        const hit = pool.find((id) => id.toLowerCase().includes(kw));
-        if (hit) return hit;
-      }
-    }
-    return pool[0] ?? null;
-  };
+  const pickNextBestToWorst = (current, reason = '') => pickFallbackModel({
+    current,
+    reason,
+    startTier,
+    tried,
+    skippedQuota,
+    rankedAll,
+    state: request.state,
+    onlyExempt,
+    sawQuotaExhausted,
+  });
 
   for (;;) {
     tried.add(model);

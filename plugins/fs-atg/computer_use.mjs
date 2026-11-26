@@ -14,6 +14,8 @@ export const COMPUTER_ACTIONS = Object.freeze([
   'screenshot',
   'windows',
   'focus_window',
+  'ui_tree',
+  'ui_click',
   'mouse_move',
   'click',
   'double_click',
@@ -52,11 +54,14 @@ export function validateComputerAction(params = {}, { permissionMode = 'acceptEd
   if (computerUseEnabled === false) {
     throw new Error('Computer Use est désactivé dans les réglages du panneau.');
   }
-  const readOnlyActions = new Set(['screen_info', 'screenshot', 'windows', 'clipboard_get']);
+  const readOnlyActions = new Set(['screen_info', 'screenshot', 'windows', 'ui_tree', 'clipboard_get']);
   if (!readOnlyActions.has(action)) {
     if (permissionMode === 'plan') {
       throw new Error(`Action "${action}" bloquée en mode Lecture seule (plan). Passe en mode Édition ou Complet.`);
     }
+  }
+  if (action === 'ui_click' && !String(params.name || '').trim() && !String(params.automationId || '').trim()) {
+    throw new Error('Paramètre "name" ou "automationId" requis pour ui_click.');
   }
   if (action === 'hotkey' || action === 'key') {
     const norm = normalizeHotkeyString(params.keys || params.key || '');
@@ -89,7 +94,7 @@ function runPowerShellJson(script, payloadObj = {}, timeoutMs = 15_000) {
     const encoded = Buffer.from(fullScript, 'utf16le').toString('base64');
 
     const child = spawn('powershell.exe', [
-      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-OutputFormat', 'Text', '-ExecutionPolicy', 'Bypass',
       '-EncodedCommand', encoded,
     ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
 
@@ -352,6 +357,262 @@ if (-not $proc -or $proc.MainWindowHandle -eq 0) {
 @{ ok = $true; action = 'focus_window'; pid = $proc.Id; title = $proc.MainWindowTitle; processName = $proc.ProcessName } | ConvertTo-Json -Compress
 `, { query, pid });
       logEvent('info', 'computer', 'computer.focus_window', `Fenêtre activée : ${res.title || query}`);
+      return res;
+    }
+
+    case 'ui_tree': {
+      const query = String(params.title || params.processName || '').trim();
+      const pid = Number(params.pid) || null;
+      const maxElements = Math.max(5, Math.min(120, Math.round(Number(params.maxElements ?? 50) || 50)));
+      const res = await runPowerShellJson(`
+${WIN32_CSHARP_HEADER}
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+
+$targetHwnd = [IntPtr]::Zero
+$winTitle = ''
+$winPid = 0
+if ($p.pid) {
+  $proc = Get-Process -Id ([int]$p.pid) -ErrorAction SilentlyContinue
+  if ($proc -and $proc.MainWindowHandle -ne 0) {
+    $targetHwnd = $proc.MainWindowHandle
+    $winTitle = $proc.MainWindowTitle
+    $winPid = $proc.Id
+  }
+} elseif ($p.query) {
+  $q = [string]$p.query
+  $proc = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.MainWindowTitle -like "*$q*" -or $_.ProcessName -like "*$q*") } | Select-Object -First 1
+  if ($proc) {
+    $targetHwnd = $proc.MainWindowHandle
+    $winTitle = $proc.MainWindowTitle
+    $winPid = $proc.Id
+  }
+} else {
+  $targetHwnd = [FsAtgWin32]::GetForegroundWindow()
+}
+
+$rootEl = $null
+if ($targetHwnd -ne [IntPtr]::Zero) {
+  try { $rootEl = [System.Windows.Automation.AutomationElement]::FromHandle($targetHwnd) } catch {}
+}
+if (-not $rootEl) {
+  try {
+    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($focused) {
+      $walkerUp = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+      $cur = $focused
+      while ($cur -and $cur.Current.ControlType.ProgrammaticName -ne 'ControlType.Window') {
+        $parent = $walkerUp.GetParent($cur)
+        if (-not $parent -or $parent -eq [System.Windows.Automation.AutomationElement]::RootElement) { break }
+        $cur = $parent
+      }
+      $rootEl = $cur
+    }
+  } catch {}
+}
+if (-not $rootEl) {
+  try {
+    $fallbackProc = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | Select-Object -First 1
+    if ($fallbackProc) {
+      $targetHwnd = $fallbackProc.MainWindowHandle
+      $winTitle = $fallbackProc.MainWindowTitle
+      $winPid = $fallbackProc.Id
+      $rootEl = [System.Windows.Automation.AutomationElement]::FromHandle($targetHwnd)
+    }
+  } catch {}
+}
+if (-not $rootEl) {
+  try { $rootEl = [System.Windows.Automation.AutomationElement]::RootElement } catch {}
+}
+if (-not $rootEl) {
+  @{ ok = $true; action = 'ui_tree'; windowTitle = ''; pid = 0; count = 0; visited = 0; controls = @(); note = 'Aucune fenêtre UIA accessible.' } | ConvertTo-Json -Compress
+  exit 0
+}
+if (-not $winTitle) { try { $winTitle = [string]$rootEl.Current.Name } catch { $winTitle = '' } }
+if (-not $winPid) { try { $winPid = [int]$rootEl.Current.ProcessId } catch { $winPid = 0 } }
+
+$allowedTypes = @('Button','Edit','Document','ComboBox','CheckBox','RadioButton','TabItem','MenuItem','ListItem','Hyperlink','TreeItem','Slider','Text')
+$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+$queue = New-Object System.Collections.ArrayList
+[void]$queue.Add($rootEl)
+$qHead = 0
+$controls = New-Object System.Collections.ArrayList
+$visited = 0
+$maxVisit = 650
+
+while ($qHead -lt $queue.Count -and $controls.Count -lt [int]$p.maxElements -and $visited -lt $maxVisit) {
+  $node = $queue[$qHead]
+  $qHead++
+  $visited++
+  $child = $null
+  try { $child = $walker.GetFirstChild($node) } catch {}
+  while ($child -and $visited -lt $maxVisit -and $controls.Count -lt [int]$p.maxElements) {
+    $visited++
+    [void]$queue.Add($child)
+    try {
+      $c = $child.Current
+      $ct = ($c.ControlType.ProgrammaticName -replace '^ControlType\.', '')
+      $nm = ([string]$c.Name).Trim()
+      $aid = ([string]$c.AutomationId).Trim()
+      $rect = $c.BoundingRectangle
+      $validRect = (-not [double]::IsInfinity($rect.X)) -and (-not [double]::IsInfinity($rect.Y)) -and (-not [double]::IsInfinity($rect.Width)) -and (-not [double]::IsInfinity($rect.Height)) -and ($rect.Width -gt 1) -and ($rect.Height -gt 1)
+      $isShortText = ($ct -ne 'Text') -or ($nm.Length -gt 0 -and $nm.Length -le 90)
+      if ((-not $c.IsOffscreen) -and $validRect -and ($allowedTypes -contains $ct) -and $isShortText -and ($nm -or $aid)) {
+        $w = [int][math]::Round($rect.Width)
+        $h = [int][math]::Round($rect.Height)
+        $x = [int][math]::Round($rect.X + $rect.Width / 2.0)
+        $y = [int][math]::Round($rect.Y + $rect.Height / 2.0)
+        [void]$controls.Add(@{
+          name = if ($nm.Length -gt 120) { $nm.Substring(0, 120) } else { $nm }
+          controlType = $ct
+          automationId = $aid
+          x = $x
+          y = $y
+          width = $w
+          height = $h
+          enabled = [bool]$c.IsEnabled
+        })
+      }
+    } catch {}
+    try { $child = $walker.GetNextSibling($child) } catch { $child = $null }
+  }
+}
+
+$outTitle = [string]$winTitle
+$outPid = [int]$winPid
+$outControls = $controls.ToArray()
+@{
+  ok = $true
+  action = 'ui_tree'
+  windowTitle = $outTitle
+  pid = $outPid
+  count = $controls.Count
+  visited = $visited
+  controls = $outControls
+} | ConvertTo-Json -Compress -Depth 5
+`, { query, pid, maxElements }, 18_000);
+      logEvent('info', 'computer', 'computer.ui_tree', `Arbre UIA lu (${res.count ?? 0} contrôles sur "${res.windowTitle || 'fenêtre'}").`);
+      return res;
+    }
+
+    case 'ui_click': {
+      const targetName = String(params.name || '').trim();
+      const targetId = String(params.automationId || '').trim();
+      const targetType = String(params.controlType || '').trim();
+      const query = String(params.title || params.processName || '').trim();
+      const pid = Number(params.pid) || null;
+      const useInvoke = params.useInvoke !== false;
+      const res = await runPowerShellJson(`
+${WIN32_CSHARP_HEADER}
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+
+$targetHwnd = [IntPtr]::Zero
+if ($p.pid) {
+  $proc = Get-Process -Id ([int]$p.pid) -ErrorAction SilentlyContinue
+  if ($proc -and $proc.MainWindowHandle -ne 0) { $targetHwnd = $proc.MainWindowHandle }
+} elseif ($p.query) {
+  $q = [string]$p.query
+  $proc = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.MainWindowTitle -like "*$q*" -or $_.ProcessName -like "*$q*") } | Select-Object -First 1
+  if ($proc) { $targetHwnd = $proc.MainWindowHandle }
+} else {
+  $targetHwnd = [FsAtgWin32]::GetForegroundWindow()
+}
+
+$rootEl = $null
+if ($targetHwnd -ne [IntPtr]::Zero) {
+  try { $rootEl = [System.Windows.Automation.AutomationElement]::FromHandle($targetHwnd) } catch {}
+}
+if (-not $rootEl) {
+  try {
+    $fallbackProc = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | Select-Object -First 1
+    if ($fallbackProc) { $rootEl = [System.Windows.Automation.AutomationElement]::FromHandle($fallbackProc.MainWindowHandle) }
+  } catch {}
+}
+if (-not $rootEl) {
+  @{ ok = $false; error = 'Fenêtre cible UIA introuvable.' } | ConvertTo-Json -Compress
+  exit 0
+}
+
+$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+$queue = New-Object System.Collections.ArrayList
+[void]$queue.Add($rootEl)
+$qHead = 0
+$visited = 0
+$maxVisit = 800
+$hit = $null
+$hitMeta = $null
+$wantName = ([string]$p.targetName).ToLowerInvariant()
+$wantId = ([string]$p.targetId).ToLowerInvariant()
+$wantType = ([string]$p.targetType).ToLowerInvariant()
+
+while ($qHead -lt $queue.Count -and $visited -lt $maxVisit -and -not $hit) {
+  $node = $queue[$qHead]
+  $qHead++
+  $visited++
+  $child = $null
+  try { $child = $walker.GetFirstChild($node) } catch {}
+  while ($child -and $visited -lt $maxVisit -and -not $hit) {
+    $visited++
+    [void]$queue.Add($child)
+    try {
+      $c = $child.Current
+      $ct = ($c.ControlType.ProgrammaticName -replace '^ControlType\.', '')
+      $nm = ([string]$c.Name).Trim()
+      $aid = ([string]$c.AutomationId).Trim()
+      $typeOk = (-not $wantType) -or ($ct.ToLowerInvariant() -eq $wantType)
+      $idOk = (-not $wantId) -or ($aid.ToLowerInvariant() -eq $wantId)
+      $nameOk = (-not $wantName) -or ($nm.ToLowerInvariant().Contains($wantName))
+      if ((-not $c.IsOffscreen) -and $c.IsEnabled -and $typeOk -and $idOk -and $nameOk) {
+        $rect = $c.BoundingRectangle
+        $validRect = (-not [double]::IsInfinity($rect.X)) -and (-not [double]::IsInfinity($rect.Y)) -and (-not [double]::IsInfinity($rect.Width)) -and (-not [double]::IsInfinity($rect.Height)) -and ($rect.Width -gt 1) -and ($rect.Height -gt 1)
+        $cx = if ($validRect) { [int][math]::Round($rect.X + $rect.Width / 2.0) } else { $null }
+        $cy = if ($validRect) { [int][math]::Round($rect.Y + $rect.Height / 2.0) } else { $null }
+        $hit = $child
+        $hitMeta = @{ name = $nm; controlType = $ct; automationId = $aid; x = $cx; y = $cy }
+        break
+      }
+    } catch {}
+    try { $child = $walker.GetNextSibling($child) } catch { $child = $null }
+  }
+}
+
+if (-not $hit) {
+  @{ ok = $false; error = "Contrôle UIA introuvable (name='$($p.targetName)', automationId='$($p.targetId)')." } | ConvertTo-Json -Compress
+  exit 0
+}
+
+$method = ''
+if ($p.useInvoke) {
+  $pat = $null
+  try {
+    if ($hit.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pat) -and $pat) {
+      $pat.Invoke()
+      $method = 'InvokePattern'
+    }
+  } catch {}
+}
+if (-not $method) {
+  if ($null -eq $hitMeta.x -or $null -eq $hitMeta.y) {
+    @{ ok = $false; error = 'Contrôle trouvé mais sans rectangle cliquable ni InvokePattern.' } | ConvertTo-Json -Compress
+    exit 0
+  }
+  [void][FsAtgWin32]::SetCursorPos([int]$hitMeta.x, [int]$hitMeta.y)
+  Start-Sleep -Milliseconds 25
+  [FsAtgWin32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)
+  Start-Sleep -Milliseconds 20
+  [FsAtgWin32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)
+  $method = 'mouse_click'
+}
+
+@{
+  ok = $true
+  action = 'ui_click'
+  method = $method
+  matched = $hitMeta
+} | ConvertTo-Json -Compress -Depth 4
+`, { targetName, targetId, targetType, query, pid, useInvoke }, 18_000);
+      logEvent('info', 'computer', 'computer.ui_click', `Clic UIA "${res.matched?.name || targetName || targetId}" (${res.method}).`);
       return res;
     }
 
