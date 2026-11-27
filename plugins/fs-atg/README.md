@@ -5,9 +5,9 @@ Orchestrateur **France Student** complet pour **Antigravity** (Serveur MCP + Sid
 Il délègue l’exploration, la planification, l’édition atomique de code (`/undo`), le raisonnement approfondi, la création d’artifacts Canvas, le pilotage bureau Windows (*Computer Use* + boucle Vision Live) et les recherches web directement aux modèles France Student afin d’économiser le quota Antigravity.
 
 <div align="center">
-  <img src="../../assets/screenshots/fs-atg-home.png" alt="Onglet Accueil" width="260" />
-  <img src="../../assets/screenshots/fs-atg-models.png" alt="Onglet Modèles" width="260" />
-  <img src="../../assets/screenshots/fs-atg-settings.png" alt="Onglet Réglages" width="260" />
+  <img src="assets/screenshots/fs-atg-home.png" alt="Onglet Accueil" width="260" />
+  <img src="assets/screenshots/fs-atg-models.png" alt="Onglet Modèles" width="260" />
+  <img src="assets/screenshots/fs-atg-settings.png" alt="Onglet Réglages" width="260" />
 </div>
 
 ---
@@ -71,11 +71,35 @@ Il délègue l’exploration, la planification, l’édition atomique de code (`
 
 ## Installation rapide (Antigravity)
 
-1. Copier ce dossier dans `%USERPROFILE%\.gemini\config\plugins\fs-atg`.
-2. Installer les dépendances Node.js à la racine du plugin (le sidecar `sidecars/fs_atg_panel` n'a aucune dépendance npm) :
+1. Copie le dossier `fs-atg` dans `%USERPROFILE%\.gemini\config\plugins\fs-atg`. Vérifie que `node` est accessible depuis l'environnement qui lance Antigravity.
+2. Installe les dépendances du serveur MCP (`@modelcontextprotocol/sdk` et `zod`) à la racine du plugin :
    ```powershell
    cd "$env:USERPROFILE\.gemini\config\plugins\fs-atg"
-   npm install
+   npm ci
    ```
-3. Remplacer impérativement `C:/Users/<USER>/...` dans `mcp_config.json` par votre chemin utilisateur local (ex. `C:/Users/prenom/.gemini/config/plugins/fs-atg/mcp_server.mjs`), puis activer le plugin `fs-atg` dans Antigravity.
-4. Ouvrir le panneau **France Student [ATG]** et cliquer sur **Connexion navigateur** (ou coller votre clé / jeton).
+   Le panneau n'a pas de dépendances npm propres. Son module `sidecar_sdk` est fourni par l'hôte Antigravity : ne l'installe pas avec npm et ne lance pas `main.mjs` directement avec Node pour tester le panneau.
+3. Dans le fichier `mcp_config.json` du plugin, remplace le chemin par le chemin absolu sur ta machine. Exemple complet pour un compte Windows nommé `alice` (les `/` évitent d'avoir à doubler les antislashs en JSON) :
+
+   ```json
+   {
+     "mcpServers": {
+       "fs-atg": {
+         "command": "node",
+         "args": [
+           "C:/Users/alice/.gemini/config/plugins/fs-atg/mcp_server.mjs"
+         ]
+       }
+     }
+   }
+   ```
+
+4. Active le plugin dans Antigravity. Ouvre **France Student [ATG]**, puis clique sur **Connexion navigateur** ou renseigne ta clé ou ton jeton.
+
+### Serveur MCP ou panneau : où chercher ?
+
+- **Les outils `fs_*` n'apparaissent pas ou `fs_status` ne répond pas** : consulte les journaux MCP dans Antigravity. Vérifie le chemin dans `mcp_config.json`, l'accès à `node` et l'installation de `@modelcontextprotocol/sdk` et `zod` à la racine du plugin. `fs_status` permet de vérifier le connecteur sans appeler France Student.
+- **`fs_status` répond, mais le panneau ne s'ouvre pas ou affiche « Sidecar indisponible »** : consulte les journaux du panneau ou du sidecar dans Antigravity, puis recharge la fenêtre. Vérifie que le dossier `sidecars/fs_atg_panel` a été copié en entier. Une erreur de chargement de `sidecar_sdk` concerne l'hôte du panneau, pas les dépendances npm du serveur MCP.
+
+### Vérifications locales
+
+Depuis la racine du plugin, lance `npm run check` pour vérifier la syntaxe des modules et du script du panneau, puis `npm test` pour lancer les tests de régression. Ces commandes ne nécessitent ni Antigravity ni une connexion France Student. Elles ne remplacent pas un essai du panneau dans Antigravity.

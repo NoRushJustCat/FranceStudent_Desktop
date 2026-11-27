@@ -206,19 +206,24 @@
       opacity: 1;
       transform: translateY(0);
       transition:
-        opacity 200ms cubic-bezier(0.22, 1, 0.36, 1),
-        transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+        opacity 130ms cubic-bezier(0.22, 1, 0.36, 1),
+        transform 130ms cubic-bezier(0.22, 1, 0.36, 1);
       will-change: opacity, transform;
     }
     .view[hidden], .sub-view[hidden] { display: none; }
     .view.view-leaving, .sub-view.view-leaving {
-      opacity: 0;
-      transform: translateY(4px);
+      opacity: 0.55;
+      transform: translateY(2px);
       pointer-events: none;
     }
     .view.view-entering, .sub-view.view-entering {
-      opacity: 0;
-      transform: translateY(4px);
+      opacity: 0.55;
+      transform: translateY(2px);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .view, .sub-view { transition: none; }
+      .view.view-leaving, .sub-view.view-leaving,
+      .view.view-entering, .sub-view.view-entering { opacity: 1; transform: none; }
     }
 
     /* Crisp Entrance for Popovers, Approval Box, Visual Stage & Details */
@@ -341,6 +346,8 @@
     .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fs-faint); }
     .status-pill.on .dot { background: var(--fs-ok); box-shadow: 0 0 6px rgba(48, 209, 88, 0.7); }
     .status-pill.cd .dot { background: var(--fs-warn); }
+    .status-pill.off { color: #FFD6D3; background: rgba(255, 69, 58, 0.14); }
+    .status-pill.off .dot { background: var(--fs-bad); }
 
     /* Hero Big Budget Metric */
     .hero-budget-row {
@@ -616,7 +623,9 @@
     /* Elevated Command Palette Popover */
     .cmd-popover {
       position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: 70;
-      background: var(--fs-card-elev);
+      background: rgba(22, 27, 40, 0.98);
+      backdrop-filter: blur(36px) saturate(160%);
+      -webkit-backdrop-filter: blur(36px) saturate(160%);
       border: 1px solid #2A3244;
       border-radius: var(--fs-r); padding: 10px;
       box-shadow: 0 14px 36px rgba(0, 0, 0, 0.54);
@@ -702,6 +711,80 @@
     .chip:hover { color: var(--fs-fg); background: rgba(255, 255, 255, 0.10); }
     .chip.on { background: var(--fs-thumb); color: #FFFFFF; font-weight: 600; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); }
     .chip-cnt { font-size: 9.5px; opacity: 0.85; background: rgba(255, 255, 255, 0.10); padding: 0 5.5px; border-radius: var(--fs-pill); font-variant-numeric: tabular-nums; }
+    /* Les chips ne tronquent jamais (pas de « … ») : texte + badge restent entiers, le retour à la ligne se fait entre chips */
+    .tier-row .chip { white-space: nowrap; flex: 0 0 auto; max-width: none; overflow: visible; text-overflow: clip; }
+    .tier-row .chip-cnt { flex-shrink: 0; min-width: 1.7em; text-align: center; overflow: visible; text-overflow: clip; white-space: nowrap; }
+    @media (max-width: 420px) {
+      .tier-row { gap: 4px; }
+      .tier-row .chip { flex: 1 1 auto; justify-content: center; padding: 4px 7px; gap: 4px; font-size: 10px; }
+      .tier-row .chip-cnt { padding: 0 4.5px; font-size: 9px; min-width: 1.5em; }
+      .tier-row .chip .ico-sm { width: 11px; height: 11px; }
+    }
+
+    /* Compte France Student : 3 actions de même largeur (jamais 2 lignes asymétriques) */
+    .fs-native-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; align-items: stretch; }
+    .fs-native-actions .btn {
+      width: 100%; min-width: 0; display: inline-flex; align-items: center; justify-content: center;
+      text-align: center; white-space: normal; line-height: 1.2; min-height: 30px; padding: 4px 6px;
+    }
+    .fs-native-actions .toast { grid-column: 1 / -1; }
+    .fs-native-actions .toast:empty { display: none; }
+    @media (max-width: 420px) {
+      .fs-native-actions { gap: 5px; }
+      .fs-native-actions .btn { font-size: 10px; padding: 4px 4px; }
+    }
+
+    /* Fondu bas dans Réglages : le contenu disparaît doucement derrière le dock flottant (CSS pur via :has) */
+    body:has(#tab-settings:not([hidden]))::after {
+      content: ""; position: fixed; left: 0; right: 0; bottom: 0;
+      height: calc(84px + env(safe-area-inset-bottom, 0px));
+      pointer-events: none; z-index: 100;
+      background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--fs-bg) 78%, transparent) 55%, var(--fs-bg) 100%);
+    }
+
+    /* Cible Workspace (près du bouton Envoyer) */
+    .ws-target {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+      padding: 5px 8px 6px; min-width: 0;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .ws-target[hidden] { display: none; }
+    .ws-pill {
+      display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%;
+      padding: 3px 8px; border: 0; border-radius: var(--fs-pill); cursor: pointer;
+      background: rgba(255, 255, 255, 0.05); color: var(--fs-muted);
+      font-family: var(--fs-font); font-size: 10px; font-weight: 500;
+      transition: background var(--fs-ease), color var(--fs-ease);
+    }
+    .ws-pill:hover, .ws-pill[aria-expanded="true"] { background: rgba(255, 255, 255, 0.11); color: var(--fs-fg); }
+    .ws-pill .ico-sm { flex-shrink: 0; }
+    .ws-pill-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--fs-faint); }
+    .ws-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px; text-align: left; }
+    .ws-pill-state {
+      flex-shrink: 0; white-space: nowrap; font-size: 9px; font-weight: 600; letter-spacing: 0.02em;
+      padding: 0 6px; border-radius: var(--fs-pill); background: rgba(255, 255, 255, 0.08);
+    }
+    .ws-target[data-state="confirmed"] .ws-pill-dot { background: var(--fs-ok); box-shadow: 0 0 6px rgba(48, 209, 88, 0.55); }
+    .ws-target[data-state="confirmed"] .ws-pill-state { background: rgba(48, 209, 88, 0.16); color: var(--fs-ok); }
+    .ws-target[data-state="unconfirmed"] .ws-pill { background: rgba(245, 158, 11, 0.12); color: #FBBF24; }
+    .ws-target[data-state="unconfirmed"] .ws-pill-dot { background: var(--fs-warn); }
+    .ws-target[data-state="unconfirmed"] .ws-pill-state { background: rgba(245, 158, 11, 0.20); color: #FBBF24; }
+    .ws-target[data-state="invalid"] .ws-pill { background: rgba(248, 113, 113, 0.12); color: #FCA5A5; }
+    .ws-target[data-state="invalid"] .ws-pill-dot { background: var(--fs-bad); }
+    .ws-target[data-state="invalid"] .ws-pill-state { background: rgba(248, 113, 113, 0.20); color: #FCA5A5; }
+    .ws-hint { flex: 1 1 140px; min-width: 0; font-size: 9.5px; line-height: 1.35; color: var(--fs-faint); }
+    .ws-hint[hidden] { display: none; }
+    .ws-target[data-state="unconfirmed"] .ws-hint { color: #FBBF24; }
+    .ws-target[data-state="invalid"] .ws-hint { color: #FCA5A5; }
+    .ws-editor { flex: 1 1 100%; display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+    .ws-editor[hidden] { display: none; }
+    .ws-editor-lbl { font-size: 9.5px; font-weight: 600; color: var(--fs-muted); }
+    .ws-editor-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-width: 0; }
+    .ws-editor-row input[type="text"] { flex: 1 1 180px; min-width: 0; width: auto; font-family: var(--fs-mono); font-size: 10.5px; padding: 5px 8px; }
+    .ws-editor-msg { font-size: 9.5px; min-height: 0; color: var(--fs-faint); }
+    .ws-editor-msg:empty { display: none; }
+    .ws-editor-msg.err { color: #FCA5A5; }
+    .ws-editor-msg.ok { color: var(--fs-ok); }
 
     /* Triggers Grid (Web Search + Canvas) */
     .triggers-grid {
@@ -1396,6 +1479,16 @@
       border-top-color: rgba(255, 255, 255, 0.16);
       box-shadow: 0 18px 44px rgba(0, 0, 0, 0.6);
     }
+    /* Palette « / » : quasi opaque + flou fort pour rester lisible au-dessus du texte du prompt */
+    body.ui-liquid-glass .cmd-popover {
+      background: rgba(26, 28, 36, 0.98);
+      backdrop-filter: blur(40px) saturate(190%);
+      -webkit-backdrop-filter: blur(40px) saturate(190%);
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.68), 0 0 0 1px rgba(0, 0, 0, 0.35);
+    }
+    @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+      .cmd-popover, body.ui-liquid-glass .cmd-popover { background: #1A1C24; }
+    }
     body.ui-liquid-glass .canvas-modal {
       background: rgba(18, 18, 20, 0.96);
       backdrop-filter: blur(28px);
@@ -1441,7 +1534,7 @@
 <body class="ui-liquid-glass">
 
   <!-- TAB 1: ACCUEIL -->
-  <div id="tab-dash" class="view">
+  <div id="tab-dash" class="view" role="tabpanel" aria-labelledby="tabbtn-dash">
     <div id="nokey" class="warnbox" hidden>
       <div class="warn-left">
         <div class="warn-ico">
@@ -1618,6 +1711,26 @@
           <span class="spacer"></span>
           <button type="button" class="btn-send" id="go">Envoyer <kbd id="sendKbdHint">⌘↵</kbd></button>
         </div>
+        <!-- Cible Workspace : dossier où France Student pourra écrire (état : unset | unconfirmed | confirmed | invalid) -->
+ <div class="ws-target" id="wsTarget" data-state="unset" role="group" aria-label="Dossier de travail ciblé">
+   <button type="button" class="ws-pill" id="wsPill" aria-expanded="false" aria-controls="wsEditor" title="Choisir ou confirmer le dossier de travail">
+     <svg class="ico ico-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+     <span class="ws-pill-dot" id="wsPillDot" aria-hidden="true"></span>
+     <span class="ws-pill-name" id="wsPillName">Aucun dossier ciblé</span>
+     <span class="ws-pill-state" id="wsPillState">À définir</span>
+          </button>
+          <span class="ws-hint" id="wsHint" role="status" aria-live="polite" hidden></span>
+   <div class="ws-editor" id="wsEditor" hidden>
+            <label class="ws-editor-lbl" for="wsInput">Chemin absolu du dossier de travail</label>
+     <div class="ws-editor-row">
+       <input type="text" id="wsInput" placeholder="C:\Users\moi\mon-projet" autocomplete="off" autocapitalize="off" spellcheck="false" />
+       <button type="button" class="btn sm" id="wsConfirmBtn">Confirmer</button>
+       <button type="button" class="btn ghost sm" id="wsClearBtn">Effacer</button>
+       <button type="button" class="link-btn" id="wsCancelBtn">Annuler</button>
+            </div>
+     <div class="ws-editor-msg" id="wsEditorMsg" role="status" aria-live="polite"></div>
+   </div>
+        </div>
       </div>
       <div class="vision-strip" id="visionLiveBanner" hidden>
         <span style="display:inline-flex;align-items:center;gap:6px;min-width:0">
@@ -1717,7 +1830,7 @@
   </div>
 
   <!-- TAB 2: MODÈLES -->
-  <div id="tab-models" class="view" hidden>
+  <div id="tab-models" class="view" role="tabpanel" aria-labelledby="tabbtn-models" hidden>
     <div class="toolbar">
       <input type="text" id="modelSearch" placeholder="Filtrer par nom, ID ou fournisseur…" />
       <button class="btn ghost sm" id="refreshModelsBtn" title="Actualiser le catalogue">Actualiser</button>
@@ -1731,14 +1844,14 @@
   </div>
 
   <!-- TAB 3: RÉGLAGES -->
-  <div id="tab-settings" class="view" hidden>
-    <div class="seg-3 settings-subseg" id="settingsSubSeg">
-      <button type="button" data-sub="essential" class="on">Essentiel</button>
-      <button type="button" data-sub="memory">Mémoire <span class="tab-badge" id="memCntBadge" hidden>0</span></button>
-      <button type="button" data-sub="advanced">Journal &amp; Avancé</button>
+  <div id="tab-settings" class="view" role="tabpanel" aria-labelledby="tabbtn-settings" hidden>
+    <div class="seg-3 settings-subseg" id="settingsSubSeg" role="tablist" aria-label="Sections des réglages">
+      <button type="button" role="tab" id="subtab-essential" aria-controls="settings-sub-essential" aria-selected="true" data-sub="essential" class="on">Essentiel</button>
+      <button type="button" role="tab" id="subtab-memory" aria-controls="settings-sub-memory" aria-selected="false" data-sub="memory">Mémoire <span class="tab-badge" id="memCntBadge" hidden>0</span></button>
+      <button type="button" role="tab" id="subtab-advanced" aria-controls="settings-sub-advanced" aria-selected="false" data-sub="advanced">Journal &amp; Avancé</button>
     </div>
 
-    <div id="settings-sub-essential" class="sub-view">
+    <div id="settings-sub-essential" class="sub-view" role="tabpanel" aria-labelledby="subtab-essential">
       <div class="card">
         <div class="settings-title">
           <svg class="ico" viewBox="0 0 24 24"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
@@ -1751,7 +1864,7 @@
           </div>
           <div class="actions">
             <button type="button" class="btn sm" id="browserLoginBtn">Se connecter avec France Student</button>
-            <button type="button" class="btn danger sm" id="disconnectBtn" hidden>Déconnecter</button>
+            <button type="button" class="btn danger sm" id="disconnectBtn" hidden disabled>Déconnecter</button>
           </div>
           <div id="browserLoginBox" class="auth-progress" hidden>
             <div class="auth-progress-left">
@@ -1894,16 +2007,16 @@
           </div>
           <div class="mac-group">
             <div class="toggle-row">
-              <span>Outils Canvas / Documents natifs (<code>documentToolsEnabled</code>)</span>
+              <span>Outils documents &amp; Canvas</span>
               <label class="switch"><input type="checkbox" id="fsDocToolsInput" /><span class="slider"></span></label>
             </div>
             <div class="toggle-row">
-              <span>Génération d’images IA native (<code>imageGenerationToolEnabled</code>)</span>
+              <span>Génération d’images IA</span>
               <label class="switch"><input type="checkbox" id="fsImgToolsInput" /><span class="slider"></span></label>
             </div>
           </div>
-          <div class="actions">
-            <button type="button" class="btn sm" id="syncFsNativeBtn">Appliquer au compte</button>
+          <div class="actions fs-native-actions">
+     <button type="button" class="btn sm" id="syncFsNativeBtn">Appliquer au compte</button>
             <button type="button" class="btn ghost sm" id="loadCloudChatsBtn">Conversations Cloud</button>
             <button type="button" class="btn ghost sm" id="loadTokenActivityBtn">Activité tokens</button>
             <span class="toast" id="fsNativeToast"></span>
@@ -1918,7 +2031,7 @@
             <svg class="ico" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             Extensions MCP actives
           </span>
-          <span class="hchip" id="extMcpCountTag">3 / 3 actives</span>
+          <span class="hchip" id="extMcpCountTag">— / 4 actives</span>
         </div>
         <div class="mac-group">
           <div class="toggle-row">
@@ -1989,7 +2102,7 @@
       </div>
     </div>
 
-    <div id="settings-sub-memory" class="sub-view" hidden>
+    <div id="settings-sub-memory" class="sub-view" role="tabpanel" aria-labelledby="subtab-memory" hidden>
       <div class="card">
         <div class="settings-title" style="justify-content:space-between">
           <span style="display:inline-flex;align-items:center;gap:7px">
@@ -2024,7 +2137,7 @@
       </div>
     </div>
 
-    <div id="settings-sub-advanced" class="sub-view" hidden>
+    <div id="settings-sub-advanced" class="sub-view" role="tabpanel" aria-labelledby="subtab-advanced" hidden>
       <div class="card">
         <div class="settings-title">
           <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18"/><path d="M14 9h4"/><path d="M14 15h4"/></svg>
@@ -2117,17 +2230,17 @@
   <!-- BOTTOM DOCK NAVIGATION -->
   <nav class="tabs has-liquid-pill" id="mainTabs" role="tablist" aria-label="Navigation principale">
     <span class="nav-pill-indicator" aria-hidden="true"></span>
-    <button type="button" class="tab-btn on" role="tab" aria-selected="true" data-tab="dash">
+    <button type="button" class="tab-btn on" role="tab" id="tabbtn-dash" aria-controls="tab-dash" aria-selected="true" data-tab="dash">
       <svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg>
       <span>Accueil</span>
     </button>
-    <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="models">
+    <button type="button" class="tab-btn" role="tab" id="tabbtn-models" aria-controls="tab-models" aria-selected="false" data-tab="models">
       <svg class="ico" viewBox="0 0 24 24"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
       <span>Modèles</span>
       <span class="tab-badge" id="tabModelsCnt">—</span>
       <span class="tab-dot" id="tabModelsNew" hidden title="Nouveau modèle récent"></span>
     </button>
-    <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="settings">
+    <button type="button" class="tab-btn" role="tab" id="tabbtn-settings" aria-controls="tab-settings" aria-selected="false" data-tab="settings">
       <svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.79 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       <span>Réglages</span>
       <span class="tab-badge err" id="tabErrBadge" hidden>0</span>
@@ -2503,8 +2616,52 @@
         throw new Error(`Réponse non JSON (HTTP ${res.status})`);
       }
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      if (!res.ok) {
+        const err = new Error(json.error || json.message || `HTTP ${res.status}`);
+        err.status = res.status;
+        err.code = json.code || '';
+        err.data = json;
+        throw err;
+      }
       return json;
+    }
+
+    // Écriture réellement réussie ? (HTTP 200 mais `{ ok:false }` = échec métier à traiter comme une erreur)
+    function assertOk(json, fallback = 'Opération refusée par le panneau') {
+      if (json && json.ok === false) {
+        const err = new Error(json.error || json.message || fallback);
+        err.code = json.code || '';
+        err.data = json;
+        throw err;
+      }
+      return json;
+    }
+
+    // Copie vérifiée : renvoie true seulement si le presse-papiers a vraiment reçu le texte.
+    async function copyText(text) {
+      const value = String(text ?? '');
+      if (!value) return false;
+      try {
+ if (navigator.clipboard?.writeText) {
+   await navigator.clipboard.writeText(value);
+   return true;
+ }
+      } catch { /* repli execCommand ci-dessous */ }
+      const ta = document.createElement('textarea');
+      ta.value = value;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0;';
+      document.body.appendChild(ta);
+      const prevFocus = document.activeElement;
+      try {
+ ta.select();
+        return document.execCommand('copy') === true;
+      } catch {
+        return false;
+      } finally {
+        ta.remove();
+        try { prevFocus?.focus?.(); } catch {}
+      }
     }
 
     function flash(msg, target = 'toast', isErr = false) {
@@ -2631,7 +2788,7 @@
       document.querySelectorAll('.tab-btn').forEach((b) => {
         const isOn = b.dataset.tab === tab;
         b.classList.toggle('on', isOn);
-        b.setAttribute('aria-selected', isOn ? 'true' : 'false');
+        b.setAttribute('aria-selected', isOn ? 'true' : 'false'); b.tabIndex = isOn ? 0 : -1;
       });
       syncLiquidPill($('mainTabs'), { animate: changed, popIcon: changed });
       animateViewSwap(
@@ -3138,12 +3295,12 @@
     }
 
     function updateExtMcpCount() {
-      const c = $('computerUseInput')?.checked !== false ? 1 : 0;
-      const t = $('deepThinkingInput')?.checked !== false ? 1 : 0;
-      const v = $('canvasEnabledInput')?.checked !== false ? 1 : 0;
-      const m = $('mediaToolsInput')?.checked !== false ? 1 : 0;
-      const tot = c + t + v + m;
-      if ($('extMcpCountTag')) $('extMcpCountTag').textContent = `${tot} / 4 active${tot > 1 ? 's' : ''}`;
+      const ids = ['computerUseInput', 'deepThinkingInput', 'canvasEnabledInput', 'mediaToolsInput'];
+      const ready = stateLoad === 'ready';
+      const tot = ids.filter((id) => $(id)?.checked === true).length;
+      const shown = ready ? String(tot) : '—';
+      // total dynamique = nombre d'extensions MCP listées (Computer Use, Raisonnement approfondi, Canvas Live, Média & Vidéo)
+      if ($('extMcpCountTag')) $('extMcpCountTag').textContent = `${shown} / ${ids.length} active${(!ready || tot > 1) ? 's' : ''}`;
     }
 
     function syncProfilePills(animate = false) {
@@ -3269,7 +3426,7 @@
         $('browserLoginBtn').textContent = S.hasKey ? 'Reconnecter avec France Student' : 'Se connecter avec France Student';
       }
       if ($('disconnectBtn')) {
-        $('disconnectBtn').hidden = !S.hasKey || credMode === 'environment';
+        $('disconnectBtn').hidden = !S.hasKey || credMode === 'environment'; $('disconnectBtn').disabled = stateLoad !== 'ready' || !S.hasKey;
       }
       if ($('browserLoginBox')) {
         $('browserLoginBox').hidden = !inProgress;
@@ -3401,7 +3558,7 @@
       $('tabModelsNew').hidden = !catalog.some((m) => m.isNew);
       if (activeTab === 'models') renderModelsTab();
       if (activeTab === 'settings' && settingsSubTab === 'advanced') void loadLogs();
-      if (!settingsLoaded) { syncSettingsForm(); settingsLoaded = true; }
+      if (!settingsLoaded) { syncSettingsForm(); settingsLoaded = true; } renderWorkspaceTarget();
       notifyFinishedJobs();
       updateCtxGauge();
       syncLiquidPill($('mainTabs'), { animate: false });
@@ -3413,6 +3570,21 @@
     }
 
     let initialUiMtime = null;
+    // /api/state injoignable : on quitte « Chargement… », on le dit clairement et on neutralise « Déconnecter ».
+    function renderOfflineState() {
+      if ($('connPill')) {
+        $('connPill').className = 'status-pill off';
+        $('connPill').title = 'Impossible de joindre le sidecar (/api/state). Nouvel essai automatique…';
+      }
+      if ($('connTxt')) $('connTxt').textContent = 'Sidecar indisponible';
+      if ($('disconnectBtn')) $('disconnectBtn').disabled = true;
+      // Textes de chargement résiduels → états explicites (les valeurs réelles déjà affichées ne sont pas écrasées).
+      const replaceIf = (id, from, to) => { const el = $(id); if (el && el.textContent.trim() === from) el.textContent = to; };
+      replaceIf('qtxt', 'Chargement…', 'Indisponible');
+      replaceIf('sessionStatusLine', 'Chargement…', 'Indisponible');
+      for (const id of ['cnt-heavy', 'cnt-medium', 'cnt-light']) replaceIf(id, '…', '—');
+      updateExtMcpCount();
+    }
     async function poll() {
       const seq = settingsSaveSeq;
       try {
@@ -3458,7 +3630,7 @@
         stateLoad = 'ready';
         render();
       } catch {
-        stateLoad = 'unavailable';
+        stateLoad = 'unavailable'; renderOfflineState();
       }
       schedulePoll();
     }
@@ -3508,12 +3680,149 @@
       lastModelsRenderSig = '';
     }
 
+    // ─── Ciblage Workspace (#wsTarget ↔ /api/workspace) ──────────────────────────────
+    // États : unset (rien) · unconfirmed (mémorisé, jamais confirmé) · confirmed · invalid (introuvable / non absolu).
+    // Règle : un chemin NON confirmé n'est jamais envoyé tel quel à /api/delegate (le serveur le tiendrait pour une confirmation).
+    const WS_ERROR_CODES = new Set(['WORKSPACE_REQUIRED', 'WORKSPACE_INVALID']);
+
+    function wsInfo() {
+      const root = String(S.workspaceRoot || S.lastWorkspaceRoot || '').trim();
+      const valid = root ? (S.workspaceRootValid === undefined ? true : S.workspaceRootValid === true) : false;
+      const confirmed = valid && S.workspaceRootConfirmed === true;
+      const state = !root ? 'unset' : (!valid ? 'invalid' : (confirmed ? 'confirmed' : 'unconfirmed'));
+      const name = String(S.workspaceName || '').trim() || root.split(/[\\/]/).filter(Boolean).pop() || root;
+      return { root, name, valid, confirmed, state, blocked: S.workspaceWriteBlocked === true };
+    }
+    function wsConfirmedRoot() {
+      const w = wsInfo();
+      return w.confirmed ? w.root : undefined;
+    }
+
+    function setWsMsg(text, kind) {
+      const el = $('wsEditorMsg');
+      if (!el) return;
+      el.textContent = text || '';
+      el.classList.toggle('err', kind === 'err');
+      el.classList.toggle('ok', kind === 'ok');
+    }
+
+    function renderWorkspaceTarget() {
+      const box = $('wsTarget');
+      if (!box) return;
+      const w = wsInfo();
+      const labels = { unset: 'À définir', unconfirmed: 'À confirmer', confirmed: 'Confirmé', invalid: 'Invalide' };
+      box.dataset.state = w.state;
+      box.dataset.blocked = w.blocked ? 'true' : 'false';
+      if ($('wsPillName')) $('wsPillName').textContent = w.root ? w.name : 'Aucun dossier ciblé';
+      if ($('wsPillState')) $('wsPillState').textContent = labels[w.state];
+      if ($('wsPill')) $('wsPill').title = w.root ? `${w.root} — ${labels[w.state]}` : 'Choisir ou confirmer le dossier de travail';
+      let hint = '';
+      if (w.state === 'invalid') hint = `Le dossier mémorisé « ${w.name} » est introuvable ou invalide. Corrige le chemin.`;
+      else if (w.blocked && w.state === 'unconfirmed') hint = `Écriture bloquée : confirme le dossier « ${w.name} » avant d'envoyer.`;
+      else if (w.blocked) hint = 'Écriture bloquée : choisis un dossier de travail avant d\'envoyer.';
+      const hintEl = $('wsHint');
+      if (hintEl) { hintEl.textContent = hint; hintEl.hidden = !hint; }
+    }
+
+    function openWsEditor({ prefill, message, kind } = {}) {
+      const ed = $('wsEditor');
+      if (!ed) return;
+      ed.hidden = false;
+      $('wsPill')?.setAttribute('aria-expanded', 'true');
+      const input = $('wsInput');
+      if (input) {
+ input.value = prefill !== undefined && prefill !== null ? String(prefill) : wsInfo().root;
+        input.focus();
+        input.select();
+      }
+      setWsMsg(message || '', kind);
+    }
+    function closeWsEditor({ focusPill = false } = {}) {
+      if ($('wsEditor')) $('wsEditor').hidden = true;
+      $('wsPill')?.setAttribute('aria-expanded', 'false');
+      setWsMsg('', null);
+      if (focusPill) $('wsPill')?.focus();
+    }
+
+    function applyWorkspaceView(v) {
+      if (!v) return;
+      for (const k of ['workspaceRoot', 'workspaceName', 'workspaceRootValid', 'workspaceRootConfirmed', 'workspaceRootSource', 'workspaceRootConfirmedAt', 'workspaceWriteBlocked']) {
+        if (k in v) S[k] = v[k];
+      }
+      S.lastWorkspaceRoot = v.workspaceRoot || null;
+    }
+
+    // Enregistre (ou efface avec '') le dossier ciblé. N'affiche « confirmé » qu'après réponse serveur positive.
+    async function saveWorkspace(value) {
+      const confirmBtn = $('wsConfirmBtn');
+      const clearBtn = $('wsClearBtn');
+      if (confirmBtn) confirmBtn.disabled = true;
+      if (clearBtn) clearBtn.disabled = true;
+      setWsMsg(value ? 'Vérification du dossier…' : 'Effacement…', null);
+      try {
+        const res = assertOk(await api('/api/workspace', { workspaceRoot: value }), 'Dossier refusé par le panneau');
+        applyWorkspaceView(res);
+        renderWorkspaceTarget();
+        const msg = value ? `Dossier confirmé : ${res.workspaceName || res.workspaceRoot || value}` : 'Dossier effacé. Aucune écriture tant qu\'un dossier n\'est pas confirmé.';
+        setWsMsg(msg, 'ok');
+        if (value) setTimeout(() => { if ($('wsEditorMsg')?.textContent === msg) closeWsEditor({ focusPill: true }); }, 1400);
+ void poll();
+      } catch (e) {
+ setWsMsg(e.message || 'Impossible d\'enregistrer le dossier.', 'err');
+      } finally {
+        if (confirmBtn) confirmBtn.disabled = false;
+ if (clearBtn) clearBtn.disabled = false;
+      }
+    }
+
+    // Erreur d'envoi liée au workspace : ouvre l'éditeur (pré-rempli), garde la saisie #task intacte. Renvoie true si gérée.
+    function handleWorkspaceError(e) {
+      const code = e?.code || e?.data?.code;
+      if (!WS_ERROR_CODES.has(code)) return false;
+      const d = e?.data || {};
+      if (typeof activeTab !== 'undefined' && activeTab !== 'dash') switchTab('dash');
+      const prefill = d.suggestedWorkspaceRoot || d.workspaceRoot || wsInfo().root || '';
+      openWsEditor({ prefill, message: e.message || 'Dossier de travail requis.', kind: 'err' });
+      flash('Dossier de travail à confirmer avant d\'écrire — ta demande est conservée.', 'toast', true);
+      void poll();
+      return true;
+    }
+
+    // Appel /api/delegate commun (envoi + relance depuis l'historique) : workspace explicite + gestion des erreurs WORKSPACE_*.
+    async function apiDelegate(body) {
+      const payload = { ...body };
+      if (payload.workspaceRoot === undefined) payload.workspaceRoot = wsConfirmedRoot();
+      try {
+        return await api('/api/delegate', payload);
+      } catch (e) {
+        handleWorkspaceError(e); // ouvre #wsEditor pré-rempli ; l'erreur est relancée pour que l'appelant garde la saisie
+ throw e;
+      }
+    }
+
+    if ($('wsPill')) {
+      $('wsPill').addEventListener('click', () => {
+        if ($('wsEditor').hidden) openWsEditor(); else closeWsEditor();
+      });
+      $('wsConfirmBtn').addEventListener('click', () => {
+        const value = String($('wsInput').value || '').trim();
+ if (!value) { setWsMsg('Saisis un chemin absolu, ou utilise « Effacer ».', 'err'); $('wsInput').focus(); return; }
+        void saveWorkspace(value);
+      });
+      $('wsClearBtn').addEventListener('click', () => { $('wsInput').value = ''; void saveWorkspace(''); });
+      $('wsCancelBtn').addEventListener('click', () => closeWsEditor({ focusPill: true }));
+      $('wsInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); $('wsConfirmBtn').click(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeWsEditor({ focusPill: true }); }
+      });
+    }
+
     // Lance une entrée d'historique « À demander » puis retire l'entrée en attente (approvalOf côté serveur).
     async function launchFromHistory(job, model, approve) {
       const jId = job.jobId || job.id;
       const task = job.approvalPrompt || job.rawTask || job.task;
       if (!task) throw new Error('Tâche introuvable pour cette entrée');
-      const res = await api('/api/delegate', {
+      const res = await apiDelegate({
  task,
         model: model || undefined,
         approveModel: approve ? model : undefined,
@@ -3542,7 +3851,7 @@
       settingsSaveInFlight += 1;
       Object.assign(pendingUiOverrides, patch);
       try {
-        return await api('/api/settings', patch);
+ return assertOk(await api('/api/settings', patch), 'Réglage refusé par le panneau');
       } finally {
         for (const k of Object.keys(patch)) delete pendingUiOverrides[k];
         settingsSaveInFlight = Math.max(0, settingsSaveInFlight - 1);
@@ -3580,10 +3889,12 @@
       }
       if (goBtn) { goBtn.disabled = true; goBtn.textContent = 'Envoi…'; }
       try {
-        const res = await api('/api/delegate', {
+        const res = await apiDelegate({
           task,
           model: targetModel,
           approveModel: extra.approveModel || undefined,
+   // Workspace explicite : seulement un dossier validé ET confirmé (sinon le serveur répond WORKSPACE_REQUIRED + suggestion).
+          workspaceRoot: extra.workspaceRoot !== undefined ? extra.workspaceRoot : wsConfirmedRoot(),
           attachScreenshot: Boolean(extra.attachScreenshot ?? liveVisionAttached),
           screenIndex: Number.isFinite(Number(extra.screenIndex)) ? Number(extra.screenIndex) : Number(S.selectedScreenIndex ?? 0),
           liveComputerMode: Boolean(extra.liveComputerMode ?? liveVisionAttached),
@@ -3602,7 +3913,7 @@
         }
         pendingApproval = null;
         renderApprovalBox();
-        $('task').value = '';
+        assertOk(res, 'Envoi refusé par le panneau'); $('task').value = '';
         syncCmdPills();
         updateCtxGauge();
         flash(res?.localAction ? (res.message || 'OK') : 'Envoyé');
@@ -3877,10 +4188,36 @@
       renderModelsTab();
     });
 
+    // Navigation clavier d'un role="tablist" (motif WAI-ARIA, activation automatique) : ←/→ (avec bouclage), Début, Fin.
+    // tabindex itinérant : seul l'onglet sélectionné est dans l'ordre de tabulation ; les autres s'atteignent aux flèches.
+    function bindTablistKeys(list, activate) {
+      if (!list) return;
+      const tabs = () => Array.from(list.querySelectorAll('[role="tab"]')).filter((t) => !t.hidden && !t.disabled);
+      tabs().forEach((t) => { t.tabIndex = t.getAttribute('aria-selected') === 'true' ? 0 : -1; });
+      list.addEventListener('keydown', (e) => {
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+        const items = tabs();
+        const cur = e.target && e.target.closest ? e.target.closest('[role="tab"]') : null;
+        const idx = items.indexOf(cur);
+        if (idx < 0) return;
+        let next = -1;
+ if (e.key === 'ArrowRight') next = (idx + 1) % items.length;
+ else if (e.key === 'ArrowLeft') next = (idx - 1 + items.length) % items.length;
+        else if (e.key === 'Home') next = 0;
+        else if (e.key === 'End') next = items.length - 1;
+        else return;
+ e.preventDefault();
+ items[next].focus();
+        activate(items[next]);
+      });
+    }
+    bindTablistKeys($('mainTabs'), (b) => switchTab(b.dataset.tab));
+    bindTablistKeys($('settingsSubSeg'), (b) => switchSettingsSubTab(b.dataset.sub));
+
     function switchSettingsSubTab(sub) {
       const changed = settingsSubTab !== sub;
       settingsSubTab = sub;
-      document.querySelectorAll('#settingsSubSeg button').forEach((b) => b.classList.toggle('on', b.dataset.sub === sub));
+      document.querySelectorAll('#settingsSubSeg button').forEach((b) => { const isOn = b.dataset.sub === sub; b.classList.toggle('on', isOn); b.setAttribute('aria-selected', isOn ? 'true' : 'false'); b.tabIndex = isOn ? 0 : -1; });
       syncLiquidPill($('settingsSubSeg'), { animate: changed, popIcon: changed });
       animateViewSwap(
         {
@@ -3998,9 +4335,9 @@
             await pushSettingPatch({ [apiKey]: b.dataset[dataKey] });
             void poll();
           } catch (e) {
-            S[stateKey] = prevState;
-            group.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === prevBtn));
-            syncLiquidPill(group, { animate: true });
+            const restoreBtn = prevBtn || Array.from(group.querySelectorAll('button')).find((x) => x.dataset[dataKey] === prevState) || null; S[stateKey] = prevState;
+            group.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === restoreBtn));
+            syncLiquidPill(group, { animate: true }); if (afterApply && restoreBtn) afterApply(restoreBtn); try { b.blur(); } catch {} void poll(); e.message = `${label} non enregistré, valeur précédente restaurée (${e.message})`;
             flash(e.message, 'toast', true);
           }
         };
@@ -4914,8 +5251,8 @@
         const job = (S.history || []).find((h) => (h.jobId || h.id) === copyCodeBtn.dataset.copyCode);
         const extracted = extractCopyableCode(job);
         if (extracted?.code) {
-          await navigator.clipboard.writeText(extracted.code).catch(() => {});
-          flash(`Code copié (${extracted.kind}) !`);
+          const codeCopied = await copyText(extracted.code);
+          if (codeCopied) flash(`Code copié (${extracted.kind}) !`); else flash('Copie impossible : presse-papiers inaccessible. Sélectionne le code et copie-le à la main.', 'toast', true);
         }
         return;
       }
@@ -4923,15 +5260,17 @@
       if (copyRespBtn) {
         const job = (S.history || []).find((h) => (h.jobId || h.id) === copyRespBtn.dataset.copyResp);
         const text = job?.response || job?.summary || '';
-        await navigator.clipboard.writeText(text).catch(() => {});
-        flash('Réponse copiée !');
+        const respCopied = text ? await copyText(text) : false;
+        if (respCopied) flash('Réponse copiée !'); else flash(text ? 'Copie impossible : presse-papiers inaccessible. Sélectionne le texte et copie-le à la main.' : 'Aucune réponse à copier pour cette entrée.', 'toast', true);
         return;
       }
       const delHistBtn = e.target.closest('[data-del-hist]');
       if (delHistBtn) {
         const delId = delHistBtn.dataset.delHist;
+        let delOk = true;
+        try { assertOk(await api('/api/delete-history', { id: delId }), 'Suppression refusée'); } catch (err) { delOk = false; flash(`Suppression impossible : ${err.message}`, 'toast', true); }
+        if (!delOk) return;
         expandedHistory.delete(delId);
-        await api('/api/delete-history', { id: delId }).catch(() => {});
         lastHistoryRenderSig = '';
         flash('Entrée supprimée');
         await poll();
@@ -4950,10 +5289,15 @@
       }
       const cancel = e.target.closest('[data-cancel]');
       if (cancel) {
-        await api('/api/cancel', { id: cancel.dataset.cancel }).catch(() => {});
+               try {
+          assertOk(await api('/api/cancel', { id: cancel.dataset.cancel }), 'Annulation refusée');
+        } catch (err) {
+          flash(`Annulation impossible : ${err.message}`, 'toast', true);
+   return;
+        }
         flash('Annulation envoyée');
         await poll();
-        return;
+ return;
       }
 
       const hist = e.target.closest('[data-hist]');

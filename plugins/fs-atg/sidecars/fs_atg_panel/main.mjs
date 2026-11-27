@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SidecarApp, Response } from 'sidecar_sdk';
 import {
@@ -136,6 +136,143 @@ function normalizeDelegation(task, requestedMode, requestedProfile, requestedPer
   const reasoningEffort = REASONING_EFFORTS.includes(requestedEffort) ? requestedEffort
     : (REASONING_EFFORTS.includes(directives.reasoningEffort) ? directives.reasoningEffort : undefined);
   return { task: directives.prompt, rawTask, executionMode, routingProfile, permissionMode, reasoningEffort };
+}
+
+// ─── Ciblage explicite du projet (workspaceRoot) ─────────────────────────────
+// `lastWorkspaceRoot` reste le chemin mémorisé (compat). `workspaceRootConfirmed` indique qu'il a été
+// choisi explicitement (panneau ou fs_delegate MCP) : sans confirmation, aucune écriture silencieuse.
+const READ_ONLY_EXECUTION_MODES = new Set(['plan', 'patch', 'dry-run']);
+
+/** Erreur API portant un statut HTTP et un corps `{ ok: false, error, code, ... }`. */
+class ApiError extends Error {
+  constructor(status, code, message, extra = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.statusCode = status;
+    this.code = code;
+    this.ok = false;
+    Object.assign(this, extra);
+  }
+}
+
+const WORKSPACE_REASONS = {
+  not_absolute: 'le chemin doit être absolu (ex. C:\\Users\\moi\\projet)',
+  not_found: 'le dossier est introuvable',
+  not_directory: 'ce chemin n’est pas un dossier',
+  invalid: 'chemin invalide',
+};
+
+/** Valide un chemin de workspace : absolu, existant, dossier. Ne lève jamais. */
+function inspectWorkspacePath(raw) {
+  const input = String(raw ?? '').trim().replace(/^"(.*)"$/, '$1').trim();
+  if (!input) return { input: '', root: '', valid: false, reason: 'empty' };
+  if (input.includes('\0')) return { input, root: '', valid: false, reason: 'invalid' };
+  if (!isAbsolute(input)) return { input, root: '', valid: false, reason: 'not_absolute' };
+  const root = resolve(input);
+  try {
+    if (!statSync(root).isDirectory()) return { input, root: '', valid: false, reason: 'not_directory' };
+  } catch {
+    return { input, root: '', valid: false, reason: 'not_found' };
+  }
+  return { input, root, valid: true, reason: null };
+}
+
+/** Vrai si la demande peut écrire sur disque (acceptEdits/full, hors /plan, /patch, /dry-run, outils locaux actifs). */
+function isWriteRequested(permissionMode, executionMode, useClientTools = true) {
+  const perm = PERMISSION_MODES.includes(permissionMode) ? permissionMode : 'acceptEdits';
+  if (useClientTools === false) return false;
+  if (READ_ONLY_EXECUTION_MODES.has(executionMode)) return false;
+  return perm === 'acceptEdits' || perm === 'full';
+}
+
+/** Vue publique du workspace mémorisé (exposée par /api/state, /api/settings, /api/workspace). */
+function workspaceView(st, { permissionMode, useClientTools } = {}) {
+  const stored = String(st?.lastWorkspaceRoot || '').trim();
+  const info = stored ? inspectWorkspacePath(stored) : null;
+  const valid = Boolean(info?.valid);
+  const confirmed = valid && st?.workspaceRootConfirmed === true;
+  const writeMode = isWriteRequested(
+    permissionMode ?? st?.permissionMode,
+    undefined,
+    useClientTools ?? (st?.useClientTools !== false),
+  );
+  return {
+    workspaceRoot: stored || null,
+    workspaceName: stored ? (basename(stored.replace(/[\\/]+$/, '')) || stored) : null,
+    workspaceRootValid: valid,
+    workspaceRootConfirmed: confirmed,
+    workspaceRootSource: confirmed ? (st?.workspaceRootSource || 'panel') : null,
+    workspaceRootConfirmedAt: confirmed ? (st?.workspaceRootConfirmedAt ?? null) : null,
+    workspaceWriteBlocked: writeMode && !confirmed,
+  };
+}
+
+function persistWorkspace(st, root, source = 'panel') {
+  st.lastWorkspaceRoot = root;
+  st.workspaceRootConfirmed = true;
+  st.workspaceRootSource = source;
+  st.workspaceRootConfirmedAt = Date.now();
+}
+
+function clearWorkspace(st) {
+  st.lastWorkspaceRoot = null;
+  delete st.workspaceRootConfirmed;
+  delete st.workspaceRootSource;
+  delete st.workspaceRootConfirmedAt;
+}
+
+/** Applique un `workspaceRoot` reçu du panneau sur `st` (chaîne vide/null = effacer). Lève ApiError 400 si invalide. */
+function applyWorkspaceUpdate(st, raw, source = 'panel') {
+  if (raw === null || String(raw).trim() === '') {
+    clearWorkspace(st);
+    return false;
+  }
+  const info = inspectWorkspacePath(raw);
+  if (!info.valid) {
+    throw new ApiError(400, 'WORKSPACE_INVALID', `Workspace invalide : ${WORKSPACE_REASONS[info.reason] || WORKSPACE_REASONS.invalid}.`, {
+      workspaceRoot: info.input,
+      reason: info.reason,
+    });
+  }
+  persistWorkspace(st, info.root, source);
+  return true;
+}
+
+/**
+ * Détermine le workspace cible d'une demande.
+ * - `workspaceRoot` explicite : doit être valide (sinon 400), considéré comme confirmé.
+ * - sinon : on n'utilise le chemin mémorisé que s'il a déjà été confirmé.
+ * - si `requireForWrite` et aucun workspace confirmé : 400 `WORKSPACE_REQUIRED` (jamais d'écriture silencieuse).
+ */
+function resolveTargetWorkspace(explicitRaw, st, { requireForWrite = false } = {}) {
+  const explicitInput = String(explicitRaw ?? '').trim();
+  if (explicitInput) {
+    const info = inspectWorkspacePath(explicitInput);
+    if (!info.valid) {
+      throw new ApiError(400, 'WORKSPACE_INVALID', `Workspace invalide : ${WORKSPACE_REASONS[info.reason] || WORKSPACE_REASONS.invalid}.`, {
+        workspaceRoot: info.input,
+        reason: info.reason,
+      });
+    }
+    return { root: info.root, explicit: true, confirmed: true };
+  }
+  const view = workspaceView(st);
+  if (view.workspaceRootValid && view.workspaceRootConfirmed) {
+    return { root: resolve(view.workspaceRoot), explicit: false, confirmed: true };
+  }
+  if (requireForWrite) {
+    const suggestion = view.workspaceRootValid ? view.workspaceRoot : null;
+    throw new ApiError(
+      400,
+      'WORKSPACE_REQUIRED',
+      suggestion
+        ? `Workspace non confirmé : renseigne ou confirme le dossier du projet (« ${suggestion} ») avant d’autoriser l’écriture, ou passe en mode Lecture / /plan.`
+        : 'Aucun workspace défini : renseigne le dossier du projet (chemin absolu) avant d’autoriser l’écriture, ou passe en mode Lecture / /plan.',
+      { writeRequested: true, workspaceRoot: view.workspaceRoot, suggestedWorkspaceRoot: suggestion },
+    );
+  }
+  return { root: view.workspaceRootValid ? resolve(view.workspaceRoot) : '', explicit: false, confirmed: false };
 }
 
 function panelModelKey(modelId) {
@@ -419,7 +556,7 @@ async function runJob(job) {
     state = profileState(loadState(), job.routingProfile);
     const effectiveEffort = normalizeReasoningEffort(job.reasoningEffort || state.reasoningEffort, 'deep');
     state.reasoningEffort = effectiveEffort;
-    const wsRoot = job.workspaceRoot || state.lastWorkspaceRoot || '';
+    const wsRoot = job.workspaceRoot || (workspaceView(state).workspaceRootConfirmed ? state.lastWorkspaceRoot : '') || '';
     const preUseTools = Boolean(state.useClientTools !== false && wsRoot && job.executionMode !== 'patch');
     const hasImages = Boolean(job.attachScreenshot || job.imagePaths?.length || job.liveComputerMode);
     const route = pickModel(job.rawTask ?? job.task, ids, state, job.explicitModel, {
@@ -720,6 +857,7 @@ app.api('/api/state', async () => {
   const wsRoot = state.lastWorkspaceRoot || '';
   const permMode = PERMISSION_MODES.includes(state.permissionMode) ? state.permissionMode : 'acceptEdits';
   const useClientTools = state.useClientTools !== false;
+  const wsView = workspaceView(state, { permissionMode: permMode, useClientTools });
   return {
     uiMtime: (() => { try { return Math.round(statSync(join(__dirname, 'index.html')).mtimeMs); } catch { return 0; } })(),
     hasKey: credential.configured === true,
@@ -748,6 +886,17 @@ app.api('/api/state', async () => {
     compactUi: Boolean(state.compactUi),
     liquidGlass: state.liquidGlass !== false,
     lastWorkspaceRoot: wsRoot || null,
+    // Projet ciblé : chemin, validité (dossier existant), confirmation explicite, source et blocage d'écriture.
+    ...wsView,
+    workspace: {
+      root: wsView.workspaceRoot,
+      name: wsView.workspaceName,
+      valid: wsView.workspaceRootValid,
+      confirmed: wsView.workspaceRootConfirmed,
+      source: wsView.workspaceRootSource,
+      confirmedAt: wsView.workspaceRootConfirmedAt,
+      writeBlocked: wsView.workspaceWriteBlocked,
+    },
     undoEntries: wsRoot ? listUndoEntries(wsRoot, 15) : [],
     projectMemory: getProjectMemory(wsRoot),
     autoDelegate: state.autoDelegate !== false,
@@ -889,6 +1038,10 @@ app.api('/api/auth/login-cancel', () => ({ ok: true, authLogin: cancelBrowserLog
 
 app.api('/api/settings', (data) => {
   state = loadState();
+  // Ciblage du projet : validé en premier pour ne rien modifier si le chemin est refusé (400).
+  if (data && Object.prototype.hasOwnProperty.call(data, 'workspaceRoot')) {
+    applyWorkspaceUpdate(state, data.workspaceRoot, 'panel');
+  }
   if (data.mode === 'eco' || data.mode === 'fast') state.mode = data.mode;
   if (ROUTING_PROFILES.has(data.routingProfile)) state.routingProfile = data.routingProfile;
   if (typeof data.autoDelegate === 'boolean') {
@@ -991,7 +1144,20 @@ app.api('/api/settings', (data) => {
     permissionMode: state.permissionMode || 'acceptEdits',
     modelPolicies: state.modelPolicies || {},
     blockedModels: state.blockedModels || [],
+    ...workspaceView(state),
   };
+});
+
+// Définit, confirme ou efface explicitement le projet ciblé : { workspaceRoot: "C:\\chemin\\projet" } (vide/null = effacer).
+app.api('/api/workspace', (data) => {
+  state = loadState();
+  if (!data || !Object.prototype.hasOwnProperty.call(data, 'workspaceRoot')) {
+    throw new ApiError(400, 'WORKSPACE_MISSING_FIELD', 'Champ workspaceRoot manquant.');
+  }
+  const set = applyWorkspaceUpdate(state, data.workspaceRoot, 'panel');
+  saveState(state);
+  logEvent('info', 'panel', set ? 'workspace.set' : 'workspace.clear', set ? `Workspace ciblé : ${state.lastWorkspaceRoot}` : 'Workspace effacé.');
+  return { ok: true, ...workspaceView(state) };
 });
 
 function recordPanelToolHistory({
@@ -1293,11 +1459,23 @@ app.api('/api/logs/clear', () => {
 
 app.api('/api/delegate', async (data) => {
   const rawInput = String(data?.task ?? '').trim();
-  const ws = String(data?.workspaceRoot || loadState().lastWorkspaceRoot || '').trim();
+  // Workspace explicite envoyé par le panneau (`workspaceRoot`) ; invalide => 400. Sans lui, seul un workspace déjà confirmé sert de repli.
+  const explicitWs = String(data?.workspaceRoot ?? '').trim();
+  const rememberWs = (target) => {
+    if (!target.explicit) return;
+    const cur = loadState();
+    if (cur.lastWorkspaceRoot !== target.root || cur.workspaceRootConfirmed !== true) {
+      persistWorkspace(cur, target.root, 'panel');
+      saveState(cur);
+      state = cur;
+    }
+  };
   // Instant local slash commands (FranceStudent_Desktop V.0.9 + project-frstcli parity)
   const remM = /^\/remember\s+([\s\S]+)$/i.exec(rawInput);
   if (remM) {
-    const r = addProjectNote(ws, remM[1]);
+    const target = resolveTargetWorkspace(explicitWs, loadState());
+    rememberWs(target);
+    const r = addProjectNote(target.root, remM[1]);
     return { ok: true, localAction: 'remember', message: `Note mémorisée (${r.total} au total).` };
   }
   if (/^\/(?:compact|compacter)(?:\s|$)/i.test(rawInput)) {
@@ -1309,8 +1487,10 @@ app.api('/api/delegate', async (data) => {
     return { ok: true, localAction: 'new', message: res.message || 'Nouvelle session prête.' };
   }
   if (/^\/undo$/i.test(rawInput)) {
-    if (!ws) throw new Error('Aucun workspace actif pour /undo.');
-    const res = undoLastChange(ws, null);
+    // /undo modifie le disque : workspace explicite ou déjà confirmé obligatoire.
+    const target = resolveTargetWorkspace(explicitWs, loadState(), { requireForWrite: true });
+    rememberWs(target);
+    const res = undoLastChange(target.root, null);
     return { ok: Boolean(res.ok), localAction: 'undo', message: res.ok ? `Annulé : ${res.undone.rel}` : (res.message || 'Rien à annuler.') };
   }
 
@@ -1318,9 +1498,14 @@ app.api('/api/delegate', async (data) => {
   if (!delegation.task) throw new Error('Tâche vide après les commandes locales.');
   const st = profileState(loadState(), delegation.routingProfile);
   st.reasoningEffort = normalizeReasoningEffort(delegation.reasoningEffort || st.reasoningEffort, 'deep');
+  // Garde-fou : jamais d'écriture (acceptEdits/full, hors /plan, /patch, /dry-run) sans workspace valide et confirmé.
+  const effectivePerm = delegation.permissionMode || st.permissionMode;
+  const writeRequested = isWriteRequested(effectivePerm, delegation.executionMode, st.useClientTools !== false);
+  const target = resolveTargetWorkspace(explicitWs, st, { requireForWrite: writeRequested });
+  rememberWs(target);
   const { ids, metaMap } = await fetchModels().catch(() => ({ ids: [], metaMap: new Map() }));
   if (ids.length) {
-    const wsRoot = data.workspaceRoot || st.lastWorkspaceRoot || '';
+    const wsRoot = target.root;
     const preUseTools = Boolean(st.useClientTools !== false && wsRoot && delegation.executionMode !== 'patch');
     const route = pickModel(delegation.rawTask, ids, st, data.model || undefined, {
       approvedModel: data.approveModel || null,
@@ -1356,7 +1541,7 @@ app.api('/api/delegate', async (data) => {
     title: `${ATG} ${firstLine.slice(0, 70)}${firstLine.length > 70 ? '…' : ''}`,
     task: delegation.task,
     rawTask: delegation.rawTask,
-    workspaceRoot: data.workspaceRoot || loadState().lastWorkspaceRoot || undefined,
+    workspaceRoot: target.root || undefined,
     explicitModel: data.model || undefined,
     approveModel: data.approveModel || undefined,
     executionMode: delegation.executionMode,

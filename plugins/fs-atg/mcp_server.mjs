@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, isAbsolute, resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -196,6 +196,40 @@ function normalizedDelegation(task, requestedMode, requestedProfile, requestedPe
   const reasoningEffort = REASONING_EFFORTS.includes(requestedEffort) ? requestedEffort
     : (REASONING_EFFORTS.includes(directives.reasoningEffort) ? directives.reasoningEffort : undefined);
   return { task: directives.prompt, rawTask, executionMode, routingProfile, permissionMode, reasoningEffort };
+}
+
+// Ciblage explicite du projet : même contrat que le panneau (`lastWorkspaceRoot` + `workspaceRootConfirmed`).
+// Un `workspaceRoot` passé à fs_delegate est validé (absolu, dossier existant) puis mémorisé comme confirmé ;
+// sans lui, seul un workspace déjà confirmé sert de repli et toute écriture sans cible confirmée est refusée.
+function checkWorkspaceDir(raw) {
+  const input = String(raw ?? '').trim().replace(/^"(.*)"$/, '$1').trim();
+  if (!input) return { valid: false, root: '', reason: 'vide' };
+  if (!isAbsolute(input)) return { valid: false, root: '', reason: 'le chemin doit être absolu' };
+  const root = resolve(input);
+  try {
+    if (!existsSync(root) || !statSync(root).isDirectory()) return { valid: false, root: '', reason: 'dossier introuvable' };
+  } catch {
+    return { valid: false, root: '', reason: 'dossier inaccessible' };
+  }
+  return { valid: true, root, reason: null };
+}
+
+function resolveMcpWorkspace(explicitRaw, st, { requireForWrite = false } = {}) {
+  if (String(explicitRaw ?? '').trim()) {
+    const chk = checkWorkspaceDir(explicitRaw);
+    if (!chk.valid) throw new Error(`workspaceRoot invalide (${chk.reason}) : ${String(explicitRaw).trim()}`);
+    return { root: chk.root, explicit: true };
+  }
+  const stored = checkWorkspaceDir(st.lastWorkspaceRoot);
+  if (stored.valid && st.workspaceRootConfirmed === true) return { root: stored.root, explicit: false };
+  if (requireForWrite && stored.valid) {
+    // Un workspace mémorisé mais jamais confirmé ne doit pas recevoir d'écriture silencieuse.
+    throw new Error(
+      `workspaceRoot requis : « ${stored.root} » n’a jamais été confirmé comme cible. Passe workspaceRoot `
+      + '(chemin absolu du projet) pour autoriser l’écriture, ou utilise permissionMode="plan" / executionMode="plan" pour rester en lecture seule.',
+    );
+  }
+  return { root: '', explicit: false };
 }
 
 function profileState(st, profile) {
@@ -1004,12 +1038,20 @@ server.registerTool('fs_delegate', {
 }, async (a) => {
   const delegation = normalizedDelegation(a.task, a.executionMode, a.routingProfile, a.permissionMode, a.reasoningEffort);
   if (!delegation.task && !a.parts?.length) throw new Error('Consigne vide après les commandes locales.');
-  if (a.workspaceRoot) {
-    const st = loadState();
-    const resolvedWs = resolve(a.workspaceRoot);
-    if (st.lastWorkspaceRoot !== resolvedWs) {
-      st.lastWorkspaceRoot = resolvedWs;
-      saveState(st);
+  const stNow = loadState();
+  const effPerm = delegation.permissionMode || (PERMISSION_MODES.includes(stNow.permissionMode) ? stNow.permissionMode : 'acceptEdits');
+  const writeRequested = stNow.useClientTools !== false
+    && !['plan', 'patch', 'dry-run'].includes(delegation.executionMode)
+    && (effPerm === 'acceptEdits' || effPerm === 'full');
+  const target = resolveMcpWorkspace(a.workspaceRoot, stNow, { requireForWrite: writeRequested });
+  if (target.explicit) {
+    // Stockage explicite : le chemin devient le workspace confirmé (partagé avec le panneau via /api/state).
+    if (stNow.lastWorkspaceRoot !== target.root || stNow.workspaceRootConfirmed !== true) {
+      stNow.lastWorkspaceRoot = target.root;
+      stNow.workspaceRootConfirmed = true;
+      stNow.workspaceRootSource = 'mcp';
+      stNow.workspaceRootConfirmedAt = Date.now();
+      saveState(stNow);
     }
   }
   const waitSec = typeof a.waitSeconds === 'number' ? Math.max(0, Math.min(130, a.waitSeconds)) : 110;
@@ -1019,7 +1061,7 @@ server.registerTool('fs_delegate', {
     title: `${ATG} ${firstLine.slice(0, 70)}${firstLine.length > 70 ? '…' : ''}`,
     task: delegation.task || a.parts?.join(' ; '),
     rawTask: delegation.rawTask,
-    workspaceRoot: a.workspaceRoot || loadState().lastWorkspaceRoot || undefined,
+    workspaceRoot: target.root || undefined,
     files: a.files ?? [],
     explicitModel: a.model,
     approveModel: a.approveModel || undefined,
