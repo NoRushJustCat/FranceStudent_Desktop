@@ -138,9 +138,15 @@ function normalizeDelegation(task, requestedMode, requestedProfile, requestedPer
   return { task: directives.prompt, rawTask, executionMode, routingProfile, permissionMode, reasoningEffort };
 }
 
-async function preparePanelChat(st) {
+function panelModelKey(modelId) {
+  const m = String(modelId || '').trim().toLowerCase();
+  return m ? `panel::${m}` : 'panel';
+}
+
+async function preparePanelChat(st, modelId) {
   if (st.reuseChat === false) return undefined;
-  const chatId = st.directChats?.panel;
+  const fullKey = panelModelKey(modelId);
+  const chatId = st.directChats?.[fullKey];
   if (!chatId) return undefined;
   try {
     const context = await fetchChatContext(st, chatId);
@@ -151,7 +157,7 @@ async function preparePanelChat(st) {
     return chatId;
   } catch (e) {
     if (String(e?.message ?? e).includes('HTTP 404')) {
-      delete st.directChats.panel;
+      delete st.directChats[fullKey];
       saveState(st);
       return undefined;
     }
@@ -159,20 +165,22 @@ async function preparePanelChat(st) {
   }
 }
 
-function rememberPanelChat(chatId) {
+function rememberPanelChat(chatId, modelId) {
   if (!chatId) return;
   const st = loadState();
   if (st.reuseChat === false) return;
-  st.directChats = { ...(st.directChats || {}), panel: chatId };
+  const fullKey = panelModelKey(modelId);
+  st.directChats = { ...(st.directChats || {}), [fullKey]: chatId, panel: chatId };
   saveState(st);
 }
 
 async function panelSession(action = 'status') {
   state = loadState();
-  const chatId = state.directChats?.panel;
+  const panelKeys = Object.keys(state.directChats || {}).filter((k) => k === 'panel' || k.startsWith('panel::'));
+  const chatId = state.directChats?.panel || (panelKeys.length ? state.directChats[panelKeys[panelKeys.length - 1]] : undefined);
   if (action === 'new') {
-    if (chatId) {
-      delete state.directChats.panel;
+    if (panelKeys.length) {
+      for (const k of panelKeys) delete state.directChats[k];
       saveState(state);
     }
     logEvent('info', 'panel', 'session.new', 'Session du panneau réinitialisée.');
@@ -474,8 +482,8 @@ async function runJob(job) {
 
     logEvent('info', 'panel', 'panel.job.start', `Démarrage job panneau ${job.id} (${route.model}).`, { jobId: job.id, model: route.model, tools: clientTools.length, reasoningEffort: job.reasoningEffort, triggers: job.triggeredCapabilities });
 
-    const usePersistent = job.executionMode !== 'plan' && job.executionMode !== 'dry-run' && modelSupportsClientTools(route.model);
-    const chatId = usePersistent ? await preparePanelChat(state) : undefined;
+    const usePersistent = job.executionMode !== 'dry-run' && state.reuseChat !== false;
+    const chatId = usePersistent ? await preparePanelChat(state, route.model) : undefined;
     if (chatId) job.chatId = chatId;
 
     let finalPrompt = route.prompt;
@@ -610,8 +618,8 @@ async function runJob(job) {
     }
     flushThought();
     job.chatId = result.chatId ?? job.chatId;
-    if (usePersistent && result.chatId) rememberPanelChat(result.chatId);
     job.model = result.model ?? job.model;
+    if (usePersistent && result.chatId) rememberPanelChat(result.chatId, job.model || route.model);
     job.refusals = result.refusals ?? job.refusals ?? [];
     job.attemptedModels = result.attemptedModels ?? job.attemptedModels;
     job.toolTurns = result.toolTurns ?? 0;

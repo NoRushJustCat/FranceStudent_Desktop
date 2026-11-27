@@ -126,9 +126,15 @@ function directSessionKey(job) {
   return job.workspaceRoot ? `workspace:${resolve(job.workspaceRoot).toLowerCase()}` : 'mcp:global';
 }
 
-async function prepareDirectChat(st, key) {
+function modelSessionKey(baseKey, modelId) {
+  const m = String(modelId || '').trim().toLowerCase();
+  return m ? `${baseKey}::${m}` : baseKey;
+}
+
+async function prepareDirectChat(st, baseKey, modelId) {
   if (st.reuseChat === false) return undefined;
-  const chatId = st.directChats?.[key];
+  const fullKey = modelSessionKey(baseKey, modelId);
+  const chatId = st.directChats?.[fullKey];
   if (!chatId) return undefined;
   try {
     const context = await fetchChatContext(st, chatId);
@@ -139,7 +145,7 @@ async function prepareDirectChat(st, key) {
     return chatId;
   } catch (e) {
     if (String(e?.message ?? e).includes('HTTP 404')) {
-      delete st.directChats[key];
+      delete st.directChats[fullKey];
       saveState(st);
       return undefined;
     }
@@ -147,11 +153,12 @@ async function prepareDirectChat(st, key) {
   }
 }
 
-function rememberDirectChat(key, chatId) {
+function rememberDirectChat(baseKey, chatId, modelId) {
   if (!chatId) return;
   const st = loadState();
   if (st.reuseChat === false) return;
-  st.directChats = { ...(st.directChats || {}), [key]: chatId };
+  const fullKey = modelSessionKey(baseKey, modelId);
+  st.directChats = { ...(st.directChats || {}), [fullKey]: chatId };
   saveState(st);
 }
 
@@ -240,14 +247,15 @@ function buildNaturalPrompt(basePrompt, job, st, hasPersistentChat, { useTools =
 
 async function sessionAction(action, workspaceRoot) {
   const st = loadState();
-  const key = workspaceRoot ? `workspace:${resolve(workspaceRoot).toLowerCase()}` : 'mcp:global';
-  const chatId = st.directChats?.[key];
+  const baseKey = workspaceRoot ? `workspace:${resolve(workspaceRoot).toLowerCase()}` : 'mcp:global';
+  const matchingKeys = Object.keys(st.directChats || {}).filter((k) => k === baseKey || k.startsWith(`${baseKey}::`));
+  const chatId = matchingKeys.length ? st.directChats[matchingKeys[matchingKeys.length - 1]] : undefined;
   if (action === 'new') {
-    if (chatId) {
-      delete st.directChats[key];
+    if (matchingKeys.length) {
+      for (const k of matchingKeys) delete st.directChats[k];
       saveState(st);
     }
-    logEvent('info', 'mcp', 'session.new', 'Session réinitialisée pour la prochaine requête.', { key });
+    logEvent('info', 'mcp', 'session.new', 'Session réinitialisée pour la prochaine requête.', { key: baseKey, cleared: matchingKeys.length });
     return { ok: true, action, chatId: null, message: 'La prochaine demande ouvrira une nouvelle session.' };
   }
   if (!chatId) return { ok: true, action, chatId: null, usagePercent: null, message: 'Aucune session active.' };
@@ -256,7 +264,7 @@ async function sessionAction(action, workspaceRoot) {
     logEvent('info', 'mcp', 'session.compact', `Contexte compacté pour la session ${chatId}.`, { chatId });
   }
   const context = await fetchChatContext(st, chatId).catch(() => ({}));
-  return { ok: true, action, chatId, usagePercent: context?.usagePercent ?? null };
+  return { ok: true, action, chatId, activeChats: matchingKeys.length, usagePercent: context?.usagePercent ?? null };
 }
 
 async function diagnosticsSnapshot() {
@@ -750,9 +758,9 @@ async function runJob(job) {
         : null;
 
       const key = directSessionKey(job);
-      // Only reuse persistent chat per project workspace when the selected model supports clientTools; standalone prompts or tool-less models (e.g. Ministral) run isolated so tool history never leaks.
-      const usePersistentChat = !job.planB && Boolean(job.workspaceRoot) && job.executionMode !== 'plan' && job.executionMode !== 'dry-run' && modelSupportsClientTools(route.model);
-      const chatId = usePersistentChat ? await prepareDirectChat(st, key) : undefined;
+      // Reuse the persistent France Student discussion whenever the same model is used for this scope (including standalone/plan/Ministral chats), while keeping distinct models in separate discussions.
+      const usePersistentChat = !job.planB && job.executionMode !== 'dry-run' && st.reuseChat !== false;
+      const chatId = usePersistentChat ? await prepareDirectChat(st, key, route.model) : undefined;
       if (chatId) job.chatId = chatId;
 
       const local = buildNaturalPrompt(route.prompt, job, st, Boolean(chatId), { useTools: clientTools.length > 0 });
@@ -865,8 +873,8 @@ async function runJob(job) {
 
       flushThought();
       job.chatId = result.chatId ?? job.chatId;
-      if (usePersistentChat && result.chatId) rememberDirectChat(key, result.chatId);
       job.model = result.model ?? job.model;
+      if (usePersistentChat && result.chatId) rememberDirectChat(key, result.chatId, job.model || route.model);
       job.refusals = result.refusals ?? job.refusals ?? [];
       job.attemptedModels = result.attemptedModels ?? job.attemptedModels;
       job.toolTurns = result.toolTurns ?? 0;

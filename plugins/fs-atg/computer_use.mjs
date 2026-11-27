@@ -125,7 +125,11 @@ function runPowerShellJson(script, payloadObj = {}, timeoutMs = 15_000) {
         resolve(parsed);
       } catch {
         if (code !== 0) {
-          reject(new Error((stderr || stdout || `PowerShell exit ${code}`).trim().slice(0, 320)));
+          const cleanErr = String(stderr || stdout || `PowerShell exit ${code}`)
+            .replace(/#< CLIXML[\s\S]*?<\/Objs>/g, '')
+            .replace(/#< CLIXML[\s\S]*/g, '')
+            .trim();
+          reject(new Error((cleanErr || stdout || `PowerShell exit ${code}`).trim().slice(0, 320)));
         } else {
           resolve({ ok: true, raw: stdout.trim() });
         }
@@ -139,45 +143,113 @@ $ProgressPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 if (-not ("FsAtgWin32" -as [type])) {
-  $csCode = 'using System; using System.Runtime.InteropServices; using System.Text; public static class FsAtgWin32 { [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y); [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, IntPtr dwExtraInfo); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }'
+  $csCode = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class FsAtgWin32 {
+  [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+  [StructLayout(LayoutKind.Sequential)] public struct HARDWAREINPUT { public uint uMsg; public ushort wParamL; public ushort wParamH; }
+  [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public HARDWAREINPUT hi; }
+  [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, IntPtr dwExtraInfo);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern short VkKeyScanW(char ch);
+  public static uint TypeUnicode(string text) {
+    if (string.IsNullOrEmpty(text)) return 0;
+    var list = new List<INPUT>(text.Length * 2);
+    for (int i = 0; i < text.Length; i++) {
+      char ch = text[i];
+      if (ch == '\\r') {
+        if (i + 1 < text.Length && text[i + 1] == '\\n') i++;
+        list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = 0x0D } } });
+        list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = 0x0D, dwFlags = 0x0002 } } });
+        continue;
+      }
+      if (ch == '\\n') {
+        list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = 0x0D } } });
+        list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = 0x0D, dwFlags = 0x0002 } } });
+        continue;
+      }
+      list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = 0x0004 } } });
+      list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = 0, wScan = ch, dwFlags = 0x0004 | 0x0002 } } });
+    }
+    return SendInput((uint)list.Count, list.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+  }
+  public static uint SendVkCombo(int[] vks) {
+    if (vks == null || vks.Length == 0) return 0;
+    var list = new List<INPUT>(vks.Length * 2);
+    for (int i = 0; i < vks.Length; i++) {
+      list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = (ushort)vks[i] } } });
+    }
+    for (int i = vks.Length - 1; i >= 0; i--) {
+      list.Add(new INPUT { type = 1, U = new INPUTUNION { ki = new KEYBDINPUT { wVk = (ushort)vks[i], dwFlags = 0x0002 } } });
+    }
+    return SendInput((uint)list.Count, list.ToArray(), Marshal.SizeOf(typeof(INPUT)));
+  }
+  public static int LookupVk(char ch) {
+    short r = VkKeyScanW(ch);
+    return r == -1 ? 0 : (r & 0xFF);
+  }
+}
+'@
   Add-Type -TypeDefinition $csCode
 }
 [void][FsAtgWin32]::SetProcessDPIAware()
 `;
 
-function toSendKeysPattern(rawKey, isHotkey = false) {
+const VK_MAP = {
+  backspace: 0x08, bs: 0x08,
+  tab: 0x09,
+  enter: 0x0D, return: 0x0D,
+  shift: 0x10,
+  ctrl: 0x11, control: 0x11,
+  alt: 0x12, menu: 0x12,
+  pause: 0x13, capslock: 0x14,
+  escape: 0x1B, esc: 0x1B,
+  space: 0x20, ' ': 0x20,
+  pageup: 0x21, pgup: 0x21,
+  pagedown: 0x22, pgdn: 0x22,
+  end: 0x23, home: 0x24,
+  left: 0x25, arrowleft: 0x25,
+  up: 0x26, arrowup: 0x26,
+  right: 0x27, arrowright: 0x27,
+  down: 0x28, arrowdown: 0x28,
+  insert: 0x2D, ins: 0x2D,
+  delete: 0x2E, del: 0x2E,
+  win: 0x5B, windows: 0x5B, super: 0x5B, meta: 0x5B, cmd: 0x5B,
+  f1: 0x70, f2: 0x71, f3: 0x72, f4: 0x73, f5: 0x74, f6: 0x75,
+  f7: 0x76, f8: 0x77, f9: 0x78, f10: 0x79, f11: 0x7A, f12: 0x7B,
+};
+
+function toVirtualKeySpec(rawKey, isHotkey = false) {
   const s = String(rawKey || '').trim();
-  if (!isHotkey) {
-    const map = {
-      enter: '{ENTER}', return: '{ENTER}',
-      escape: '{ESC}', esc: '{ESC}',
-      tab: '{TAB}',
-      backspace: '{BACKSPACE}', bs: '{BACKSPACE}',
-      delete: '{DELETE}', del: '{DELETE}',
-      up: '{UP}', arrowup: '{UP}',
-      down: '{DOWN}', arrowdown: '{DOWN}',
-      left: '{LEFT}', arrowleft: '{LEFT}',
-      right: '{RIGHT}', arrowright: '{RIGHT}',
-      home: '{HOME}', end: '{END}',
-      pageup: '{PGUP}', pgup: '{PGUP}',
-      pagedown: '{PGDN}', pgdn: '{PGDN}',
-      space: ' ',
-      f1: '{F1}', f2: '{F2}', f3: '{F3}', f4: '{F4}', f5: '{F5}', f6: '{F6}',
-      f7: '{F7}', f8: '{F8}', f9: '{F9}', f10: '{F10}', f11: '{F11}', f12: '{F12}',
-    };
-    const low = s.toLowerCase();
-    return map[low] || s.replace(/([+^%~(){}])/g, '{$1}');
+  const tokens = (isHotkey || s.includes('+'))
+    ? s.split('+').map((p) => p.trim()).filter(Boolean)
+    : [s];
+  const vks = [];
+  const fallbackChars = [];
+  for (const tok of tokens) {
+    const low = tok.toLowerCase();
+    if (VK_MAP[low] !== undefined) {
+      vks.push(VK_MAP[low]);
+    } else if (/^[a-z0-9]$/i.test(tok)) {
+      vks.push(tok.toUpperCase().charCodeAt(0));
+    } else if (tok.length === 1) {
+      fallbackChars.push(tok);
+    } else {
+      throw new Error(`Touche inconnue : "${tok}".`);
+    }
   }
-  const parts = s.toLowerCase().split('+').map((p) => p.trim()).filter(Boolean);
-  let prefix = '';
-  let main = '';
-  for (const part of parts) {
-    if (part === 'ctrl' || part === 'control') prefix += '^';
-    else if (part === 'alt') prefix += '%';
-    else if (part === 'shift') prefix += '+';
-    else main = toSendKeysPattern(part, false);
-  }
-  return `${prefix}${main}`;
+  return { vks, fallbackChars };
 }
 
 export async function executeComputerAction(params = {}, options = {}) {
@@ -698,31 +770,43 @@ if ($null -ne $p.x -and $null -ne $p.y) {
     case 'type': {
       const text = String(params.text ?? '');
       if (!text) throw new Error('Paramètre "text" requis pour type.');
-      const pattern = text.replace(/([+^%~(){}])/g, '{$1}').replace(/\r?\n/g, '{ENTER}');
-      await runPowerShellJson(`
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.SendKeys]::SendWait([string]$p.pattern)
-@{ ok = $true; action = 'type'; length = ([string]$p.text).Length } | ConvertTo-Json -Compress
-`, { pattern, text });
+      const res = await runPowerShellJson(`
+${WIN32_CSHARP_HEADER}
+$sent = [FsAtgWin32]::TypeUnicode([string]$p.text)
+@{ ok = $true; action = 'type'; length = ([string]$p.text).Length; events = $sent } | ConvertTo-Json -Compress
+`, { text });
       logEvent('info', 'computer', 'computer.type', `Saisie clavier (${text.length} caractères).`);
-      return { ok: true, action: 'type', length: text.length };
+      return res;
     }
 
     case 'key':
     case 'hotkey': {
       const raw = String(params.keys || params.key || '').trim();
-      const pattern = toSendKeysPattern(raw, action === 'hotkey' || raw.includes('+'));
-      await runPowerShellJson(`
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.SendKeys]::SendWait([string]$p.pattern)
-@{ ok = $true; action = [string]$p.act; key = [string]$p.raw } | ConvertTo-Json -Compress
-`, { act: action, raw, pattern });
+      const spec = toVirtualKeySpec(raw, action === 'hotkey' || raw.includes('+'));
+      const res = await runPowerShellJson(`
+${WIN32_CSHARP_HEADER}
+$vks = New-Object System.Collections.Generic.List[int]
+foreach ($v in @($p.vks)) { if ($v) { [void]$vks.Add([int]$v) } }
+foreach ($ch in @($p.fallbackChars)) {
+  if ($ch) {
+    $vk = [FsAtgWin32]::LookupVk(([string]$ch)[0])
+    if ($vk -gt 0) { [void]$vks.Add([int]$vk) }
+  }
+}
+if ($vks.Count -eq 0) {
+  @{ ok = $false; error = "Aucune touche valide pour '$($p.raw)'." } | ConvertTo-Json -Compress
+  exit 0
+}
+$sent = [FsAtgWin32]::SendVkCombo($vks.ToArray())
+@{ ok = $true; action = [string]$p.act; key = [string]$p.raw; events = $sent } | ConvertTo-Json -Compress
+`, { act: action, raw, vks: spec.vks, fallbackChars: spec.fallbackChars });
       logEvent('info', 'computer', `computer.${action}`, `Touche envoyée : ${raw}`);
-      return { ok: true, action, key: raw, pattern };
+      return res;
     }
 
     case 'clipboard_get': {
       return await runPowerShellJson(`
+$ProgressPreference = 'SilentlyContinue'
 $txt = Get-Clipboard -Raw -ErrorAction SilentlyContinue
 @{ ok = $true; action = 'clipboard_get'; text = [string]$txt } | ConvertTo-Json -Compress
 `);
@@ -731,6 +815,7 @@ $txt = Get-Clipboard -Raw -ErrorAction SilentlyContinue
     case 'clipboard_set': {
       const text = String(params.text ?? '');
       await runPowerShellJson(`
+$ProgressPreference = 'SilentlyContinue'
 Set-Clipboard -Value ([string]$p.text)
 @{ ok = $true; action = 'clipboard_set'; length = ([string]$p.text).Length } | ConvertTo-Json -Compress
 `, { text });
