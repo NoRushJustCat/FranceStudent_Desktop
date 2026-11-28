@@ -16,6 +16,8 @@ export const COMPUTER_ACTIONS = Object.freeze([
   'focus_window',
   'ui_tree',
   'ui_click',
+  'wait_for',
+  'ocr_screen',
   'mouse_move',
   'click',
   'double_click',
@@ -54,7 +56,7 @@ export function validateComputerAction(params = {}, { permissionMode = 'acceptEd
   if (computerUseEnabled === false) {
     throw new Error('Computer Use est désactivé dans les réglages du panneau.');
   }
-  const readOnlyActions = new Set(['screen_info', 'screenshot', 'windows', 'ui_tree', 'clipboard_get']);
+  const readOnlyActions = new Set(['screen_info', 'screenshot', 'windows', 'ui_tree', 'clipboard_get', 'wait_for', 'ocr_screen']);
   if (!readOnlyActions.has(action)) {
     if (permissionMode === 'plan') {
       throw new Error(`Action "${action}" bloquée en mode Lecture seule (plan). Passe en mode Édition ou Complet.`);
@@ -154,12 +156,14 @@ public static class FsAtgWin32 {
   [StructLayout(LayoutKind.Sequential)] public struct HARDWAREINPUT { public uint uMsg; public ushort wParamL; public ushort wParamH; }
   [StructLayout(LayoutKind.Explicit)] public struct INPUTUNION { [FieldOffset(0)] public MOUSEINPUT mi; [FieldOffset(0)] public KEYBDINPUT ki; [FieldOffset(0)] public HARDWAREINPUT hi; }
   [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public INPUTUNION U; }
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, int dwData, IntPtr dwExtraInfo);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern short VkKeyScanW(char ch);
@@ -299,9 +303,20 @@ if (-not $actTitle) {
     }
 
     case 'screenshot': {
-      const fileName = `capture_${Date.now()}_${randomUUID().slice(0, 6)}.png`;
+      const fmt = String(params.format || (params.maxWidth ? 'jpeg' : 'png')).toLowerCase() === 'jpeg' || String(params.format || '').toLowerCase() === 'jpg'
+        ? 'jpeg'
+        : 'png';
+      const ext = fmt === 'jpeg' ? 'jpg' : 'png';
+      const fileName = `capture_${Date.now()}_${randomUUID().slice(0, 6)}.${ext}`;
       const outPath = params.outputPath ? String(params.outputPath) : join(COMPUTER_CAPTURE_DIR, fileName);
       const region = params.region && typeof params.region === 'object' ? params.region : null;
+      const marker = params.marker && typeof params.marker === 'object' && Number.isFinite(Number(params.marker.x)) && Number.isFinite(Number(params.marker.y))
+        ? { x: Math.round(Number(params.marker.x)), y: Math.round(Number(params.marker.y)), label: String(params.marker.label || '').slice(0, 24) }
+        : null;
+      const maxWidth = Number(params.maxWidth) > 0 ? Math.max(320, Math.min(3840, Math.round(Number(params.maxWidth)))) : 0;
+      const quality = Math.max(35, Math.min(95, Math.round(Number(params.quality || 76))));
+      const winQuery = String(params.windowTitle || params.processName || '').trim();
+
       const res = await runPowerShellJson(`
 ${WIN32_CSHARP_HEADER}
 $allScreens = @([System.Windows.Forms.Screen]::AllScreens)
@@ -320,6 +335,22 @@ $rx = if ($null -ne $p.rx) { [int]$p.rx } else { $bounds.X }
 $ry = if ($null -ne $p.ry) { [int]$p.ry } else { $bounds.Y }
 $rw = if ($null -ne $p.rw -and [int]$p.rw -gt 0) { [int]$p.rw } else { $bounds.Width }
 $rh = if ($null -ne $p.rh -and [int]$p.rh -gt 0) { [int]$p.rh } else { $bounds.Height }
+
+if ($p.winQuery) {
+  $q = [string]$p.winQuery
+  $wp = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.MainWindowTitle -like "*$q*" -or $_.ProcessName -like "*$q*") } | Select-Object -First 1
+  if ($wp) {
+    $rect = New-Object FsAtgWin32+RECT
+    if ([FsAtgWin32]::GetWindowRect($wp.MainWindowHandle, [ref]$rect)) {
+      $ww = $rect.Right - $rect.Left
+      $wh = $rect.Bottom - $rect.Top
+      if ($ww -gt 40 -and $wh -gt 40) {
+        $rx = $rect.Left; $ry = $rect.Top; $rw = $ww; $rh = $wh
+      }
+    }
+  }
+}
+
 $bmp = New-Object System.Drawing.Bitmap($rw, $rh)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $protectedSurface = $false
@@ -342,10 +373,62 @@ try {
   $fTitle.Dispose()
   $fSub.Dispose()
 }
+
+$markerDrawn = $false
+if ($null -ne $p.marker) {
+  $mx = [int]$p.marker.x - $rx
+  $my = [int]$p.marker.y - $ry
+  if ($mx -ge 0 -and $mx -lt $rw -and $my -ge 0 -and $my -lt $rh) {
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $whitePen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, 6)
+    $redPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(245, 239, 68, 68), 3.5)
+    $redBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(230, 239, 68, 68))
+    $g.DrawEllipse($whitePen, $mx - 20, $my - 20, 40, 40)
+    $g.DrawEllipse($redPen, $mx - 20, $my - 20, 40, 40)
+    $g.DrawLine($whitePen, $mx - 28, $my, $mx + 28, $my)
+    $g.DrawLine($whitePen, $mx, $my - 28, $mx, $my + 28)
+    $g.DrawLine($redPen, $mx - 26, $my, $mx + 26, $my)
+    $g.DrawLine($redPen, $mx, $my - 26, $mx, $my + 26)
+    $g.FillEllipse($redBrush, $mx - 5, $my - 5, 10, 10)
+    $lbl = if ($p.marker.label) { "$($p.marker.label) ($($p.marker.x),$($p.marker.y))" } else { "CLIC ($($p.marker.x),$($p.marker.y))" }
+    $fLbl = New-Object System.Drawing.Font('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
+    $sz = $g.MeasureString($lbl, $fLbl)
+    $bx = [Math]::Min([Math]::Max(6, $mx + 24), [Math]::Max(6, $rw - [int]$sz.Width - 18))
+    $by = [Math]::Min([Math]::Max(6, $my - 14), [Math]::Max(6, $rh - [int]$sz.Height - 12))
+    $bgBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(220, 15, 23, 42))
+    $g.FillRectangle($bgBrush, $bx, $by, $sz.Width + 10, $sz.Height + 4)
+    $g.DrawRectangle($redPen, $bx, $by, $sz.Width + 10, $sz.Height + 4)
+    $g.DrawString($lbl, $fLbl, [System.Drawing.Brushes]::White, $bx + 5, $by + 2)
+    $whitePen.Dispose(); $redPen.Dispose(); $redBrush.Dispose(); $bgBrush.Dispose(); $fLbl.Dispose()
+    $markerDrawn = $true
+  }
+}
 $g.Dispose()
+
+$outW = $rw
+$outH = $rh
+if ([int]$p.maxWidth -gt 0 -and $rw -gt [int]$p.maxWidth) {
+  $outW = [int]$p.maxWidth
+  $outH = [Math]::Max(1, [int][Math]::Round($rh * ($outW / [double]$rw)))
+  $scaled = New-Object System.Drawing.Bitmap($outW, $outH)
+  $sg = [System.Drawing.Graphics]::FromImage($scaled)
+  $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $sg.DrawImage($bmp, 0, 0, $outW, $outH)
+  $sg.Dispose()
+  $bmp.Dispose()
+  $bmp = $scaled
+}
+
 $dir = Split-Path -Parent $p.outPath
 if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
-$bmp.Save($p.outPath, [System.Drawing.Imaging.ImageFormat]::Png)
+if ([string]$p.fmt -eq 'jpeg') {
+  $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
+  $ep = New-Object System.Drawing.Imaging.EncoderParameters(1)
+  $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]$p.quality)
+  $bmp.Save($p.outPath, $codec, $ep)
+} else {
+  $bmp.Save($p.outPath, [System.Drawing.Imaging.ImageFormat]::Png)
+}
 $bmp.Dispose()
 $pos = [System.Windows.Forms.Cursor]::Position
 $fg = [FsAtgWin32]::GetForegroundWindow()
@@ -355,8 +438,16 @@ $sb = New-Object System.Text.StringBuilder 512
   ok = $true
   action = 'screenshot'
   path = $p.outPath
-  width = $rw
-  height = $rh
+  format = [string]$p.fmt
+  width = $outW
+  height = $outH
+  captureWidth = $rw
+  captureHeight = $rh
+  originX = $rx
+  originY = $ry
+  scaleX = [Math]::Round($rw / [double]$outW, 4)
+  scaleY = [Math]::Round($rh / [double]$outH, 4)
+  markerDrawn = $markerDrawn
   protectedSurface = $protectedSurface
   screenIndex = $screenIndex
   deviceName = $screen.DeviceName
@@ -367,6 +458,11 @@ $sb = New-Object System.Text.StringBuilder 512
 } | ConvertTo-Json -Compress
 `, {
         outPath,
+        fmt,
+        maxWidth,
+        quality,
+        marker,
+        winQuery,
         rx: region?.x ?? null,
         ry: region?.y ?? null,
         rw: region?.width ?? null,
@@ -375,14 +471,15 @@ $sb = New-Object System.Text.StringBuilder 512
         dn: params.deviceName ? String(params.deviceName) : null,
       });
       const bytes = existsSync(outPath) ? statSync(outPath).size : 0;
+      const mime = fmt === 'jpeg' ? 'image/jpeg' : 'image/png';
       let dataUrl = null;
       if (bytes > 0 && bytes <= 1_800_000) {
         try {
-          dataUrl = `data:image/png;base64,${readFileSync(outPath).toString('base64')}`;
+          dataUrl = `data:${mime};base64,${readFileSync(outPath).toString('base64')}`;
         } catch {}
       }
-      logEvent('info', 'computer', 'computer.screenshot', `Capture écran enregistrée (${res.width}x${res.height}, ${bytes} octets).`, { path: outPath });
-      return { ...res, bytes, dataUrl };
+      logEvent('info', 'computer', 'computer.screenshot', `Capture écran enregistrée (${res.width}x${res.height} ${fmt}, ${bytes} octets${res.markerDrawn ? ', marqueur clic' : ''}).`, { path: outPath });
+      return { ...res, bytes, mimeType: mime, dataUrl };
     }
 
     case 'windows': {
@@ -550,9 +647,72 @@ while ($qHead -lt $queue.Count -and $controls.Count -lt [int]$p.maxElements -and
   }
 }
 
+$outControls = $controls.ToArray()
+# Windows 11 UWP / Store fallback (ApplicationFrameHost / CalculatorApp / etc.)
+if ($controls.Count -eq 0 -and ($p.query -or $winTitle)) {
+  try {
+    $searchKey = if ($p.query) { [string]$p.query } else { [string]$winTitle }
+    $rootChildren = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+      [System.Windows.Automation.TreeScope]::Children,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    $uwpRoot = $null
+    foreach ($rc in $rootChildren) {
+      try {
+        $rn = [string]$rc.Current.Name
+        if ($rn -and ($rn -like "*$searchKey*" -or $searchKey -like "*$rn*")) {
+          $uwpRoot = $rc
+          break
+        }
+      } catch {}
+    }
+    if ($uwpRoot) {
+      $winTitle = [string]$uwpRoot.Current.Name
+      try { $winPid = [int]$uwpRoot.Current.ProcessId } catch {}
+      $rawWalker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+      $q2 = New-Object System.Collections.ArrayList
+      [void]$q2.Add($uwpRoot)
+      $h2 = 0
+      $v2 = 0
+      while ($h2 -lt $q2.Count -and $controls.Count -lt [int]$p.maxElements -and $v2 -lt 700) {
+        $n2 = $q2[$h2]; $h2++; $v2++
+        $ch2 = $null
+        try { $ch2 = $rawWalker.GetFirstChild($n2) } catch {}
+        while ($ch2 -and $v2 -lt 700 -and $controls.Count -lt [int]$p.maxElements) {
+          $v2++
+          [void]$q2.Add($ch2)
+          try {
+            $c = $ch2.Current
+            $ct = ($c.ControlType.ProgrammaticName -replace '^ControlType\.', '')
+            $nm = ([string]$c.Name).Trim()
+            $aid = ([string]$c.AutomationId).Trim()
+            $rect = $c.BoundingRectangle
+            $validRect = (-not [double]::IsInfinity($rect.X)) -and (-not [double]::IsInfinity($rect.Y)) -and (-not [double]::IsInfinity($rect.Width)) -and (-not [double]::IsInfinity($rect.Height)) -and ($rect.Width -gt 1) -and ($rect.Height -gt 1)
+            $isShortText = ($ct -ne 'Text') -or ($nm.Length -gt 0 -and $nm.Length -le 90)
+            if ((-not $c.IsOffscreen) -and $validRect -and ($allowedTypes -contains $ct) -and $isShortText -and ($nm -or $aid)) {
+              [void]$controls.Add(@{
+                name = if ($nm.Length -gt 120) { $nm.Substring(0, 120) } else { $nm }
+                controlType = $ct
+                automationId = $aid
+                x = [int][math]::Round($rect.X + $rect.Width / 2.0)
+                y = [int][math]::Round($rect.Y + $rect.Height / 2.0)
+                width = [int][math]::Round($rect.Width)
+                height = [int][math]::Round($rect.Height)
+                enabled = [bool]$c.IsEnabled
+              })
+            }
+          } catch {}
+          try { $ch2 = $rawWalker.GetNextSibling($ch2) } catch { $ch2 = $null }
+        }
+      }
+      $visited += $v2
+      $outControls = $controls.ToArray()
+    }
+  } catch {}
+}
+
 $outTitle = [string]$winTitle
 $outPid = [int]$winPid
-$outControls = $controls.ToArray()
 @{
   ok = $true
   action = 'ui_tree'
@@ -647,6 +807,62 @@ while ($qHead -lt $queue.Count -and $visited -lt $maxVisit -and -not $hit) {
     } catch {}
     try { $child = $walker.GetNextSibling($child) } catch { $child = $null }
   }
+}
+
+if (-not $hit) {
+  # Windows 11 UWP / Store fallback via RootElement + RawViewWalker
+  try {
+    $searchKey = [string]$p.query
+    $rootChildren = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+      [System.Windows.Automation.TreeScope]::Children,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    $uwpRoot = $null
+    if ($searchKey) {
+      foreach ($rc in $rootChildren) {
+        try {
+          $rn = [string]$rc.Current.Name
+          if ($rn -and ($rn -like "*$searchKey*" -or $searchKey -like "*$rn*")) { $uwpRoot = $rc; break }
+        } catch {}
+      }
+    } elseif ($rootEl) {
+      $uwpRoot = $rootEl
+    }
+    if ($uwpRoot) {
+      $rawWalker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+      $q2 = New-Object System.Collections.ArrayList
+      [void]$q2.Add($uwpRoot)
+      $h2 = 0; $v2 = 0
+      while ($h2 -lt $q2.Count -and $v2 -lt 700 -and -not $hit) {
+        $n2 = $q2[$h2]; $h2++; $v2++
+        $ch2 = $null
+        try { $ch2 = $rawWalker.GetFirstChild($n2) } catch {}
+        while ($ch2 -and $v2 -lt 700 -and -not $hit) {
+          $v2++
+          [void]$q2.Add($ch2)
+          try {
+            $c = $ch2.Current
+            $ct = ($c.ControlType.ProgrammaticName -replace '^ControlType\.', '')
+            $nm = ([string]$c.Name).Trim()
+            $aid = ([string]$c.AutomationId).Trim()
+            $typeOk = (-not $wantType) -or ($ct.ToLowerInvariant() -eq $wantType)
+            $idOk = (-not $wantId) -or ($aid.ToLowerInvariant() -eq $wantId)
+            $nameOk = (-not $wantName) -or ($nm.ToLowerInvariant().Contains($wantName))
+            if ((-not $c.IsOffscreen) -and $c.IsEnabled -and $typeOk -and $idOk -and $nameOk) {
+              $rect = $c.BoundingRectangle
+              $validRect = (-not [double]::IsInfinity($rect.X)) -and (-not [double]::IsInfinity($rect.Y)) -and (-not [double]::IsInfinity($rect.Width)) -and (-not [double]::IsInfinity($rect.Height)) -and ($rect.Width -gt 1) -and ($rect.Height -gt 1)
+              $cx = if ($validRect) { [int][math]::Round($rect.X + $rect.Width / 2.0) } else { $null }
+              $cy = if ($validRect) { [int][math]::Round($rect.Y + $rect.Height / 2.0) } else { $null }
+              $hit = $ch2
+              $hitMeta = @{ name = $nm; controlType = $ct; automationId = $aid; x = $cx; y = $cy }
+              break
+            }
+          } catch {}
+          try { $ch2 = $rawWalker.GetNextSibling($ch2) } catch { $ch2 = $null }
+        }
+      }
+    }
+  } catch {}
 }
 
 if (-not $hit) {
@@ -820,6 +1036,122 @@ Set-Clipboard -Value ([string]$p.text)
 @{ ok = $true; action = 'clipboard_set'; length = ([string]$p.text).Length } | ConvertTo-Json -Compress
 `, { text });
       return { ok: true, action: 'clipboard_set', length: text.length };
+    }
+
+    case 'wait_for': {
+      const titleQuery = String(params.windowTitle || params.title || params.processName || '').trim().toLowerCase();
+      const controlName = String(params.name || '').trim().toLowerCase();
+      const timeoutMs = Math.max(500, Math.min(30_000, Math.round(Number(params.timeoutMs ?? 8000) || 8000)));
+      const pollMs = Math.max(200, Math.min(2000, Math.round(Number(params.pollMs ?? 400) || 400)));
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if (titleQuery && !controlName) {
+          const wins = await executeComputerAction({ action: 'windows' }, opts);
+          const match = (wins?.windows || []).find((w) =>
+            String(w.title || '').toLowerCase().includes(titleQuery)
+            || String(w.processName || '').toLowerCase().includes(titleQuery)
+          );
+          if (match) {
+            return { ok: true, action: 'wait_for', matched: 'window', window: match, waitedMs: Date.now() - startedAt };
+          }
+        } else if (controlName) {
+          const tree = await executeComputerAction({
+            action: 'ui_tree',
+            title: params.windowTitle || params.title || undefined,
+            processName: params.processName || undefined,
+            maxElements: 60,
+          }, opts);
+          const ctrl = (tree?.controls || []).find((c) =>
+            String(c.name || '').toLowerCase().includes(controlName)
+            || String(c.automationId || '').toLowerCase().includes(controlName)
+          );
+          if (ctrl) {
+            return { ok: true, action: 'wait_for', matched: 'control', control: ctrl, windowTitle: tree.windowTitle, waitedMs: Date.now() - startedAt };
+          }
+        } else {
+          // Simple passive wait
+          await new Promise((r) => setTimeout(r, Math.min(timeoutMs, 1000)));
+          return { ok: true, action: 'wait_for', matched: 'delay', waitedMs: Date.now() - startedAt };
+        }
+        await new Promise((r) => setTimeout(r, pollMs));
+      }
+      return {
+        ok: false,
+        action: 'wait_for',
+        timedOut: true,
+        waitedMs: Date.now() - startedAt,
+        error: `Délai dépassé (${timeoutMs} ms) en attendant "${params.name || params.windowTitle || params.title || params.processName || ''}".`,
+      };
+    }
+
+    case 'ocr_screen': {
+      const shot = await executeComputerAction({
+        action: 'screenshot',
+        screenIndex: params.screenIndex,
+        deviceName: params.deviceName,
+        windowTitle: params.windowTitle || params.title,
+        processName: params.processName,
+        format: 'png',
+        maxWidth: 0,
+      }, opts);
+      if (!shot?.ok || !shot?.path) {
+        return { ok: false, action: 'ocr_screen', error: shot?.error || 'Capture préalable échouée.' };
+      }
+      const res = await runPowerShellJson(`
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime]
+$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime]
+$null = [Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType=WindowsRuntime]
+$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+  $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1'
+})[0]
+function Await-WinRt($op, $type) {
+  $task = $asTaskGeneric.MakeGenericMethod($type).Invoke($null, @($op))
+  $task.Wait()
+  return $task.Result
+}
+try {
+  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+  if (-not $engine) {
+    @{ ok = $false; error = 'Moteur OCR Windows indisponible (aucun pack de langue OCR installé).' } | ConvertTo-Json -Compress
+    exit 0
+  }
+  $file = Await-WinRt ([Windows.Storage.StorageFile]::GetFileFromPathAsync([string]$p.path)) ([Windows.Storage.StorageFile])
+  $stream = Await-WinRt ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+  $decoder = Await-WinRt ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+  $bitmap = Await-WinRt ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+  $ocrRes = Await-WinRt ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+  $lines = New-Object System.Collections.ArrayList
+  foreach ($ln in $ocrRes.Lines) {
+    $words = @($ln.Words)
+    $minX = 999999; $minY = 999999; $maxX = 0; $maxY = 0
+    foreach ($w in $words) {
+      $r = $w.BoundingRect
+      if ($r.X -lt $minX) { $minX = $r.X }
+      if ($r.Y -lt $minY) { $minY = $r.Y }
+      if (($r.X + $r.Width) -gt $maxX) { $maxX = $r.X + $r.Width }
+      if (($r.Y + $r.Height) -gt $maxY) { $maxY = $r.Y + $r.Height }
+    }
+    $cx = if ($maxX -gt $minX) { [int][math]::Round(($minX + $maxX) / 2.0) + [int]$p.originX } else { $null }
+    $cy = if ($maxY -gt $minY) { [int][math]::Round(($minY + $maxY) / 2.0) + [int]$p.originY } else { $null }
+    [void]$lines.Add(@{ text = [string]$ln.Text; x = $cx; y = $cy })
+  }
+  $stream.Dispose()
+  @{
+    ok = $true
+    action = 'ocr_screen'
+    text = [string]$ocrRes.Text
+    lineCount = $lines.Count
+    lines = $lines.ToArray()
+    screenshotPath = [string]$p.path
+  } | ConvertTo-Json -Compress -Depth 4
+} catch {
+  @{ ok = $false; action = 'ocr_screen'; error = $_.Exception.Message } | ConvertTo-Json -Compress
+}
+`, { path: shot.path, originX: shot.originX ?? 0, originY: shot.originY ?? 0 }, 22_000);
+      logEvent('info', 'computer', 'computer.ocr_screen', `OCR Windows (${res.lineCount ?? 0} lignes).`);
+      return res;
     }
 
     default:

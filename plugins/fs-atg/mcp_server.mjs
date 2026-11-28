@@ -47,6 +47,7 @@ import {
   HISTORY_LIMIT,
   buildApprovalFields,
   prepareVisionAttachments,
+  runAutonomousComputerLoop,
   VISION_LIVE_INSTRUCTIONS,
 } from './fs_core.mjs';
 import { LOG_PATH, countRecentErrors, logEvent, readLogs } from './logger.mjs';
@@ -355,6 +356,7 @@ function publicView(j) {
   return {
     jobId: j.id || j.jobId,
     id: j.id || j.jobId,
+    chatId: j.chatId ?? null,
     title: j.title,
     task: j.task || '',
     status: j.status,
@@ -395,6 +397,7 @@ function publicView(j) {
     generatedImages: j.generatedImages ?? [],
     canvasDocuments: j.canvasDocuments ?? [],
     canvasPreview: j.canvasPreview ?? null,
+    computerSteps: j.computerSteps ?? null,
     antigravitySavings: j.antigravitySavings ?? null,
   };
 }
@@ -421,10 +424,12 @@ function mcpCompactView(j, verbose = false) {
   const commandsRun = Array.isArray(j.commandsRun) && j.commandsRun.length ? j.commandsRun : undefined;
   return {
     jobId: j.id ?? j.jobId,
+    ...(j.chatId ? { chatId: j.chatId } : {}),
     status: j.status,
     model: j.model,
     ...(j.permissionMode ? { permissionMode: j.permissionMode } : {}),
     ...(j.toolTurns ? { toolTurns: j.toolTurns } : {}),
+    ...(j.computerSteps?.length ? { computerSteps: j.computerSteps.length } : {}),
     ...(j.triggeredCapabilities ? { triggeredCapabilities: j.triggeredCapabilities } : {}),
     ...(j.webSearchSources?.length ? { webSearchSources: j.webSearchSources.slice(0, 8) } : {}),
     ...(j.generatedImages?.length ? { generatedImages: j.generatedImages } : {}),
@@ -438,112 +443,6 @@ function mcpCompactView(j, verbose = false) {
     ...(j.refusals?.length ? { refusals: j.refusals } : {}),
     ...(j.antigravitySavings?.totalTokensSavedEst ? { savedAgTokensEst: j.antigravitySavings.totalTokensSavedEst } : {}),
   };
-}
-
-function formatComputerHistoryMeta(params, res) {
-  const act = String(params?.action || '');
-  switch (act) {
-    case 'screenshot': {
-      const idx = (res?.screenIndex ?? params?.screenIndex ?? 0) + 1;
-      return {
-        title: `Capture d’écran (Écran ${idx})`,
-        summary: `${res?.width || '?'}×${res?.height || '?'} · ${Math.round((res?.bytes || 0) / 1024)} Ko`,
-      };
-    }
-    case 'screen_info':
-      return {
-        title: `Détection des écrans (${res?.screens?.length ?? 0})`,
-        summary: `${res?.screens?.length ?? 0} écran(s) · curseur (${res?.cursor?.x ?? 0}, ${res?.cursor?.y ?? 0})`,
-      };
-    case 'windows':
-      return {
-        title: `Fenêtres ouvertes (${res?.count ?? 0})`,
-        summary: `${res?.count ?? 0} fenêtre(s) active(s)`,
-      };
-    case 'ui_tree': {
-      const win = String(res?.windowTitle || '').trim();
-      return {
-        title: win ? `Inspection d’interface — ${win.slice(0, 34)}` : 'Inspection d’interface',
-        summary: `${res?.count ?? 0} contrôle(s) détecté(s)`,
-      };
-    }
-    case 'ui_click': {
-      const lbl = res?.matched?.name || res?.clicked || params?.name || params?.automationId || 'contrôle';
-      return {
-        title: `Clic interface — ${String(lbl).slice(0, 38)}`,
-        summary: res?.x != null ? `Position (${res.x}, ${res.y})` : 'Clic UIA exécuté',
-      };
-    }
-    case 'click':
-      return { title: `Clic souris (${params?.x ?? '?'}, ${params?.y ?? '?'})`, summary: 'Clic gauche' };
-    case 'double_click':
-      return { title: `Double-clic (${params?.x ?? '?'}, ${params?.y ?? '?'})`, summary: 'Double-clic gauche' };
-    case 'right_click':
-      return { title: `Clic droit (${params?.x ?? '?'}, ${params?.y ?? '?'})`, summary: 'Menu contextuel' };
-    case 'type':
-      return { title: 'Saisie clavier', summary: `${String(params?.text || '').length} caractère(s)` };
-    case 'key':
-    case 'hotkey': {
-      const combo = params?.key || params?.keys || 'touche';
-      return { title: `Raccourci clavier — ${combo}`, summary: `Touche ${combo}` };
-    }
-    case 'scroll':
-      return { title: 'Défilement écran', summary: `Delta ${params?.deltaY ?? 0}` };
-    case 'focus_window':
-      return { title: `Focus fenêtre — ${String(params?.title || 'fenêtre').slice(0, 36)}`, summary: 'Mise au premier plan' };
-    case 'clipboard_get':
-      return { title: 'Lecture presse-papiers', summary: `${String(res?.text || '').length} car.` };
-    case 'clipboard_set':
-      return { title: 'Copie presse-papiers', summary: `${String(params?.text || '').length} car.` };
-    default:
-      return { title: `Contrôle bureau — ${act || 'action'}`, summary: `Action ${act}` };
-  }
-}
-
-const GIT_ACTION_LABELS = {
-  status: 'État du dépôt',
-  diff: 'Différences',
-  log: 'Historique commits',
-  branch: 'Branches',
-  show: 'Détail commit',
-};
-
-function recordToolHistoryEntry({
-  tool,
-  title,
-  task = '',
-  status = 'done',
-  summary = '',
-  response = '',
-  error = null,
-  triggeredCapabilities = null,
-  canvasPreview = null,
-}) {
-  try {
-    const st = loadState();
-    const now = Date.now();
-    const id = randomUUID().slice(0, 8);
-    const entry = {
-      id,
-      jobId: id,
-      title: `${ATG} ${String(title || tool || 'Outil MCP').slice(0, 70)}`,
-      task: String(task || title || tool || ''),
-      status,
-      model: String(tool || 'mcp'),
-      routeReason: `outil MCP (${tool})`,
-      createdAt: now,
-      startedAt: now,
-      endedAt: now,
-      summary: String(summary || '').slice(0, 400),
-      response: String(response || summary || '').slice(0, 20_000),
-      ...(error ? { error: String(error).slice(0, 300) } : {}),
-      thoughts: [],
-      ...(triggeredCapabilities ? { triggeredCapabilities } : {}),
-      ...(canvasPreview ? { canvasPreview } : {}),
-    };
-    st.history = [entry, ...(st.history || [])].slice(0, HISTORY_LIMIT);
-    saveState(st);
-  } catch { /* non-blocking */ }
 }
 
 function finishJob(job, status) {
@@ -797,6 +696,55 @@ async function runJob(job) {
       const chatId = usePersistentChat ? await prepareDirectChat(st, key, route.model) : undefined;
       if (chatId) job.chatId = chatId;
 
+      // Boucle autonome & économe Computer Use pilotée par France Student (1 seule discussion, JPEG 1280px + viseur rouge clic)
+      if (job.liveComputerMode && effectivePerm !== 'plan' && !job.planB) {
+        const screenIdx = Number.isInteger(job.screenIndex) ? job.screenIndex : (Number(st.selectedScreenIndex ?? 0) || 0);
+        const loopRes = await runAutonomousComputerLoop({
+          state: st,
+          goal: route.prompt,
+          model: route.model,
+          chatId,
+          screenIndex: screenIdx,
+          maxSteps: job.maxComputerSteps || 6,
+          permissionMode: effectivePerm,
+          reasoningEffort: job.reasoningEffort || 'standard',
+          signal: ac.signal,
+          executeComputerAction,
+          streamTurn: (req) => streamGenerationWithRefusalFallback({
+            state: st,
+            model: req.model,
+            approvedModel: job.approveModel || null,
+            availableModels: ids,
+            quotaBypass: Boolean(route.quotaBypass),
+            quotaRemainingPct: q?.remainingPct ?? null,
+            agentMap,
+            instructions: req.instructions,
+            prompt: req.prompt,
+            fileIds: req.fileIds,
+            chatId: req.chatId,
+            enableWebSearch: false,
+            signal: req.signal,
+            ...makeStreamCallbacks('[Computer Use] '),
+          }),
+          onThought: (t) => { job.thoughts.push(t); job.thoughts = job.thoughts.slice(-20); notify(); },
+          onStep: (s) => {
+            job.computerSteps = [...(job.computerSteps || []), s];
+            job.toolTurns = job.computerSteps.length;
+            notify();
+          },
+        });
+        flushThought();
+        job.chatId = loopRes.chatId ?? job.chatId;
+        job.model = loopRes.model ?? job.model;
+        if (usePersistentChat && loopRes.chatId) rememberDirectChat(key, loopRes.chatId, job.model || route.model);
+        job.computerSteps = loopRes.steps;
+        job.toolTurns = loopRes.stepsCount;
+        job.response = String(loopRes.text || '').slice(0, 160_000);
+        job.summary = job.response.slice(0, 400);
+        finishJob(job, 'done');
+        return;
+      }
+
       const local = buildNaturalPrompt(route.prompt, job, st, Boolean(chatId), { useTools: clientTools.length > 0 });
       job.contextMode = local.mode;
       job.inputEstimateTokens = estimateTokens(local.prompt);
@@ -1033,7 +981,8 @@ server.registerTool('fs_delegate', {
     attachScreenshot: z.boolean().optional().describe('Boucle Vision Live : capture l’écran Windows et la joint au modèle (upload /filesv2).'),
     screenIndex: z.number().int().min(0).optional().describe('Écran à capturer (0 = premier écran, voir fs_computer screen_info). Défaut : écran choisi dans le panneau.'),
     imagePaths: z.array(z.string()).max(6).optional().describe('Images locales (png/jpg/webp/gif) à joindre au modèle, chemins absolus ou relatifs au workspace.'),
-    liveComputerMode: z.boolean().optional().describe('Le modèle répond par UNE action fs_computer à exécuter, puis tu relances fs_delegate avec une nouvelle capture.'),
+    liveComputerMode: z.boolean().optional().describe('Active la boucle Computer Use autonome pilotée par France Student (JPEG 1280px + viseur rouge de clic, 1 seule discussion).'),
+    maxComputerSteps: z.number().int().min(1).max(12).optional().describe('Nombre maximal d’étapes pour la boucle Computer Use autonome (défaut 6, max 12).'),
   },
 }, async (a) => {
   const delegation = normalizedDelegation(a.task, a.executionMode, a.routingProfile, a.permissionMode, a.reasoningEffort);
@@ -1081,6 +1030,7 @@ server.registerTool('fs_delegate', {
     screenIndex: Number.isInteger(a.screenIndex) ? a.screenIndex : undefined,
     imagePaths: Array.isArray(a.imagePaths) ? a.imagePaths.filter(Boolean).slice(0, 6) : [],
     liveComputerMode: typeof a.liveComputerMode === 'boolean' ? a.liveComputerMode : Boolean(loadState().liveComputerMode && a.attachScreenshot),
+    maxComputerSteps: Number.isInteger(a.maxComputerSteps) ? a.maxComputerSteps : undefined,
     waitedInline: waitSec > 0,
     status: 'queued',
     createdAt: Date.now(),
@@ -1249,12 +1199,6 @@ server.registerTool('fs_undo', {
   const res = await undoLastChange(ws, undoId || null);
   if (res.ok) {
     logEvent('info', 'mcp', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
-    recordToolHistoryEntry({
-      tool: 'fs_undo',
-      title: `Fichier restauré — ${basename(String(res.undone.rel || '')) || res.undone.rel}`,
-      summary: `Restauré ${res.undone.rel} (${res.undone.action})`,
-      response: JSON.stringify(res, null, 2),
-    });
   }
   return asCompactText(res);
 });
@@ -1327,53 +1271,39 @@ server.registerTool('fs_computer', {
     }).optional().describe('Sous-région de capture écran optionnelle (coordonnées absolues du bureau virtuel).'),
     screenIndex: z.number().int().min(0).optional().describe('Écran à capturer pour screenshot (0 = premier écran de screen_info). Défaut : écran choisi dans le panneau.'),
     deviceName: z.string().optional().describe('Nom Windows de l’écran (ex: \\\\.\\DISPLAY2), prioritaire sur screenIndex.'),
+    windowTitle: z.string().optional().describe('Capture ciblée d’une fenêtre (screenshot, ocr_screen) ou attente de fenêtre (wait_for).'),
+    format: z.enum(['png', 'jpeg', 'jpg']).optional().describe('Format de capture screenshot (jpeg recommandé pour économie de bande passante).'),
+    maxWidth: z.number().int().min(0).max(3840).optional().describe('Largeur maximale de redimensionnement pour screenshot (ex: 1280).'),
+    quality: z.number().int().min(30).max(100).optional().describe('Qualité JPEG pour screenshot (défaut 78).'),
+    marker: z.object({ x: z.number(), y: z.number(), label: z.string().optional() }).optional().describe('Dessine un viseur rouge aux coordonnées absolues (x, y) sur la capture screenshot.'),
+    timeoutMs: z.number().int().min(500).max(30000).optional().describe('Délai maximal en ms pour wait_for (défaut 8000).'),
+    pollMs: z.number().int().min(200).max(2000).optional().describe('Intervalle de polling en ms pour wait_for (défaut 400).'),
   },
 }, async (params) => {
   const st = loadState();
   const effective = { ...params };
-  if (effective.action === 'screenshot' && effective.screenIndex === undefined && !effective.deviceName && !effective.region) {
+  if (effective.action === 'screenshot' && effective.screenIndex === undefined && !effective.deviceName && !effective.region && !effective.windowTitle) {
     effective.screenIndex = Number(st.selectedScreenIndex ?? 0) || 0;
   }
-  try {
-    const res = await executeComputerAction(effective, {
-      permissionMode: st.permissionMode || 'acceptEdits',
-      computerUseEnabled: st.computerUseEnabled !== false,
-    });
-    const meta = formatComputerHistoryMeta(effective, res);
-    const { dataUrl: _dropUrl, ...metaForHist } = (res && typeof res === 'object') ? res : { res };
-    recordToolHistoryEntry({
-      tool: 'fs_computer',
-      title: meta.title,
-      summary: meta.summary,
-      response: JSON.stringify(metaForHist, null, 2),
-      triggeredCapabilities: { intent: 'computer_use' },
-    });
-    if (effective.action === 'screenshot' && res?.dataUrl) {
-      const { dataUrl, ...shotMeta } = res;
-      const base64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
-      return {
-        content: [
-          { type: 'text', text: JSON.stringify(shotMeta) },
-          { type: 'image', data: base64, mimeType: 'image/png' },
-        ],
-      };
-    }
-    if (res && typeof res === 'object' && 'dataUrl' in res) {
-      const { dataUrl, ...shotMeta } = res;
-      return asCompactText({ ...shotMeta, note: 'Image trop lourde pour être renvoyée inline : utilise le fichier "path".' });
-    }
-    return asCompactText(res);
-  } catch (err) {
-    const meta = formatComputerHistoryMeta(effective, null);
-    recordToolHistoryEntry({
-      tool: 'fs_computer',
-      title: meta.title,
-      status: 'error',
-      error: err?.message || String(err),
-      triggeredCapabilities: { intent: 'computer_use' },
-    });
-    throw err;
+  const res = await executeComputerAction(effective, {
+    permissionMode: st.permissionMode || 'acceptEdits',
+    computerUseEnabled: st.computerUseEnabled !== false,
+  });
+  if (effective.action === 'screenshot' && res?.dataUrl) {
+    const { dataUrl, ...shotMeta } = res;
+    const base64 = String(dataUrl).replace(/^data:[^;]+;base64,/, '');
+    return {
+      content: [
+        { type: 'text', text: JSON.stringify(shotMeta) },
+        { type: 'image', data: base64, mimeType: res.mimeType || 'image/png' },
+      ],
+    };
   }
+  if (res && typeof res === 'object' && 'dataUrl' in res) {
+    const { dataUrl, ...shotMeta } = res;
+    return asCompactText({ ...shotMeta, note: 'Image trop lourde pour être renvoyée inline : utilise le fichier "path".' });
+  }
+  return asCompactText(res);
 });
 
 server.registerTool('fs_canvas', {
@@ -1388,17 +1318,6 @@ server.registerTool('fs_canvas', {
   },
 }, async (params) => {
   const res = await executeCanvasAction(params);
-  if (params.action === 'create' || params.action === 'update') {
-    const fmt = String(params.type || res?.type || 'html').toUpperCase();
-    recordToolHistoryEntry({
-      tool: 'fs_canvas',
-      title: `Canvas — ${params.title || params.id || res?.id || 'Artifact'}`,
-      summary: `Artifact ${fmt} prêt à prévisualiser`,
-      response: params.content || JSON.stringify(res, null, 2),
-      triggeredCapabilities: { canvas: true, intent: 'canvas_artifact' },
-      canvasPreview: res?.previewUrl ? { id: res.id, type: res.type || params.type || 'html', url: res.previewUrl, title: params.title || '' } : null,
-    });
-  }
   return asCompactText(res);
 });
 
@@ -1421,18 +1340,6 @@ server.registerTool('fs_thinking', {
 }, async (params) => {
   const st = loadState();
   const res = await executeThinkingAction(params, { deepThinkingEnabled: st.deepThinkingEnabled !== false });
-  if (!params.action || params.action === 'think') {
-    const n = params.thoughtNumber || res?.thoughtNumber || 1;
-    const tot = params.totalThoughts || res?.totalThoughts || '';
-    const snippet = String(params.thought || '').replace(/\s+/g, ' ').trim().slice(0, 48);
-    recordToolHistoryEntry({
-      tool: 'fs_thinking',
-      title: snippet ? `Réflexion #${n} — ${snippet}` : `Réflexion — Étape #${n}`,
-      summary: tot ? `Étape ${n}/${tot}` : `Étape ${n}`,
-      response: String(params.thought || JSON.stringify(res, null, 2)),
-      triggeredCapabilities: { intent: 'sequential_thinking' },
-    });
-  }
   return asCompactText(res);
 });
 
@@ -1443,30 +1350,12 @@ server.registerTool('fs_fetch', {
     url: z.string().min(8).describe('URL http:// ou https:// publique à lire.'),
     maxChars: z.number().int().min(500).max(80_000).optional().describe('Limite de caractères retournés (défaut 12000).'),
     raw: z.boolean().optional().describe('True pour retourner le contenu brut sans conversion Markdown.'),
+    extractLinks: z.boolean().optional().describe('True pour extraire aussi la liste structurée des liens absolus de la page HTML.'),
     timeoutMs: z.number().int().min(3000).max(30_000).optional().describe('Délai HTTP max en ms (défaut 15000).'),
   },
 }, async (params) => {
-  const urlHost = (() => { try { return new URL(params.url).hostname; } catch { return params.url; } })();
-  try {
-    const res = await executeWebFetch(params);
-    recordToolHistoryEntry({
-      tool: 'fs_fetch',
-      title: `Page web — ${String(res.title || urlHost).slice(0, 50)}`,
-      summary: `HTTP ${res.status} · ${res.totalChars} car.`,
-      response: res.content || '',
-      triggeredCapabilities: { webSearch: true, intent: 'web_fetch' },
-    });
-    return asCompactText(res);
-  } catch (err) {
-    recordToolHistoryEntry({
-      tool: 'fs_fetch',
-      title: `Page web — ${String(urlHost).slice(0, 50)}`,
-      status: 'error',
-      error: err?.message || String(err),
-      triggeredCapabilities: { webSearch: true, intent: 'web_fetch' },
-    });
-    throw err;
-  }
+  const res = await executeWebFetch(params);
+  return asCompactText(res);
 });
 
 server.registerTool('fs_doc_read', {
@@ -1480,24 +1369,14 @@ server.registerTool('fs_doc_read', {
 }, async (params) => {
   const ws = params.workspaceRoot || loadState().lastWorkspaceRoot || '';
   const res = await executeDocRead({ ...params, workspaceRoot: ws });
-  const fileName = basename(String(params.path || '')) || params.path;
-  recordToolHistoryEntry({
-    tool: 'fs_doc_read',
-    title: `Document — ${fileName}`,
-    status: res.ok ? 'done' : 'error',
-    summary: res.ok ? `${String(res.format || '').toUpperCase()} · ${res.totalChars} car.` : (res.error || 'Échec'),
-    response: res.ok ? (res.content || '') : '',
-    error: res.ok ? null : res.error,
-    triggeredCapabilities: { intent: 'doc_read' },
-  });
   return asCompactText(res);
 });
 
 server.registerTool('fs_git', {
-  title: 'Git Lecture Seule (status, diff, log, branch, show) [ATG]',
-  description: 'Inspecte un dépôt Git local en lecture seule sans permission shell : status, diff, log, branch, show.',
+  title: 'Git Lecture Seule (status, diff, log, branch, show, stash_list) [ATG]',
+  description: 'Inspecte un dépôt Git local en lecture seule sans permission shell : status, diff, log, branch, show, stash_list.',
   inputSchema: {
-    action: z.enum(GIT_ACTIONS).default('status').describe('Action Git lecture seule : status, diff, log, branch ou show.'),
+    action: z.enum(GIT_ACTIONS).default('status').describe('Action Git lecture seule : status, diff, log, branch, show ou stash_list.'),
     workspaceRoot: z.string().optional().describe('Chemin du dépôt Git (défaut : dernier workspace utilisé).'),
     staged: z.boolean().optional().describe('Pour diff : comparer la zone de staging (--staged).'),
     limit: z.number().int().min(1).max(50).optional().describe('Pour log : nombre de commits récents (défaut 15).'),
@@ -1507,38 +1386,20 @@ server.registerTool('fs_git', {
   },
 }, async (params) => {
   const ws = params.workspaceRoot || loadState().lastWorkspaceRoot || '';
-  const act = params.action || 'status';
   const res = await executeGitAction({ ...params, workspaceRoot: ws });
-  recordToolHistoryEntry({
-    tool: 'fs_git',
-    title: `Git — ${GIT_ACTION_LABELS[act] || act}`,
-    summary: act === 'status' ? `${res.branch || 'dépôt'} · ${res.files?.length ?? 0} modif(s)` : (GIT_ACTION_LABELS[act] || act),
-    response: JSON.stringify(res, null, 2),
-    triggeredCapabilities: { intent: 'git_read' },
-  });
   return asCompactText(res);
 });
 
-const MEDIA_ACTION_LABELS = {
-  capabilities: 'Capacités médias locales',
-  image_info: 'Inspection image',
-  image_edit: 'Édition image',
-  svg_export: 'Export SVG / PNG',
-  video_info: 'Inspection vidéo',
-  video_edit: 'Montage vidéo FFmpeg',
-  hyperframes: 'HyperFrames HTML→MP4',
-};
-
 server.registerTool('fs_media', {
   title: 'Média, Image, SVG, FFmpeg & HyperFrames [ATG]',
-  description: 'Outil média unifié et compact : infos/édition image native Windows (resize/crop/rotate/convert), export SVG→PNG, montage vidéo FFmpeg (clip/convert/frames/9:16/audio) et rendu HTML→MP4 HyperFrames.',
+  description: 'Outil média unifié et compact : infos/édition image native Windows (resize/crop/rotate/convert), export SVG→PNG, montage vidéo FFmpeg (clip/convert/frames/9:16/audio), passerelle Canvas→HyperFrames et rendu HTML→MP4 HyperFrames.',
   inputSchema: {
-    action: z.enum(MEDIA_ACTIONS).default('capabilities').describe('capabilities, image_info, image_edit, svg_export, video_info, video_edit ou hyperframes.'),
+    action: z.enum(MEDIA_ACTIONS).default('capabilities').describe('capabilities, image_info, image_edit, svg_export, video_info, video_edit, hyperframes ou canvas_to_hyperframes.'),
     subAction: z.string().optional().describe('video_edit : clip|convert|frames|reframe_9_16|audio_extract|normalize_audio ; hyperframes : init|render|normalize-audio.'),
-    inputPath: z.string().optional().describe('Fichier source (image ou vidéo).'),
+    inputPath: z.string().optional().describe('Fichier source (image, vidéo ou HTML Canvas).'),
     path: z.string().optional().describe('Alias de inputPath ou dossier projet HyperFrames.'),
     outputPath: z.string().optional().describe('Chemin de sortie souhaité.'),
-    projectDir: z.string().optional().describe('Dossier projet pour hyperframes.'),
+    projectDir: z.string().optional().describe('Dossier projet pour hyperframes / canvas_to_hyperframes.'),
     workspaceRoot: z.string().optional().describe('Dossier racine pour chemins relatifs.'),
     width: z.number().int().min(1).max(8192).optional().describe('Largeur cible en pixels.'),
     height: z.number().int().min(1).max(8192).optional().describe('Hauteur cible en pixels.'),
@@ -1548,52 +1409,23 @@ server.registerTool('fs_media', {
     format: z.string().optional().describe('Format de sortie (png, jpg, bmp, gif, webp, mp4, webm, mp3, wav).'),
     quality: z.number().int().min(10).max(100).optional().describe('Qualité JPEG/WebP (10-100, défaut 90).'),
     svg: z.string().optional().describe('Code SVG complet pour svg_export.'),
+    html: z.string().optional().describe('Code HTML complet pour canvas_to_hyperframes.'),
+    title: z.string().optional().describe('Titre du projet pour canvas_to_hyperframes.'),
     renderPng: z.boolean().optional().describe('Pour svg_export : rendre aussi un PNG haute résolution.'),
     start: z.union([z.string(), z.number()]).optional().describe('Début de découpe vidéo (ex: "00:00:05" ou 5).'),
-    duration: z.union([z.string(), z.number()]).optional().describe('Durée de découpe vidéo (en secondes ou HH:MM:SS).'),
-    fps: z.number().optional().describe('Images par seconde (frames ou GIF).'),
+    duration: z.union([z.string(), z.number()]).optional().describe('Durée vidéo (en secondes ou HH:MM:SS).'),
+    fps: z.number().optional().describe('Images par seconde (frames, GIF ou HyperFrames).'),
     maxFrames: z.number().int().min(1).max(30).optional().describe('Nombre max de frames PNG extraites (défaut 6).'),
   },
 }, async (params) => {
   const st = loadState();
   const ws = params.workspaceRoot || st.lastWorkspaceRoot || '';
-  const act = params.action || 'capabilities';
-  const label = MEDIA_ACTION_LABELS[act] || act;
-  const targetName = params.outputPath || params.inputPath || params.path || params.projectDir || '';
-  const shortTarget = targetName ? basename(String(targetName)) : '';
-  try {
-    const res = await executeMediaAction(params, {
-      permissionMode: st.permissionMode || 'acceptEdits',
-      mediaToolsEnabled: st.mediaToolsEnabled !== false,
-      workspaceRoot: ws,
-    });
-    const detail = act === 'image_info' || act === 'image_edit'
-      ? `${res.width || '?'}×${res.height || '?'} (${String(res.format || '').toUpperCase()} · ${res.sizeKb ?? '?'} Ko)`
-      : (act === 'svg_export'
-        ? (res.pngPath ? `SVG + PNG (${basename(res.pngPath)})` : `SVG (${Math.round((res.bytes || 0) / 1024)} Ko)`)
-        : (act === 'capabilities'
-          ? `Image native OK · FFmpeg ${res.ffmpeg ? 'OK' : 'absent'}`
-          : (params.subAction ? `${label} (${params.subAction})` : label)));
-    recordToolHistoryEntry({
-      tool: 'fs_media',
-      title: shortTarget ? `${label} — ${shortTarget}` : label,
-      status: res.ok === false ? 'error' : 'done',
-      summary: res.ok === false ? (res.error || 'Indisponible') : detail,
-      response: JSON.stringify(res, null, 2),
-      error: res.ok === false ? res.error : null,
-      triggeredCapabilities: { intent: 'media_tool' },
-    });
-    return asCompactText(res);
-  } catch (err) {
-    recordToolHistoryEntry({
-      tool: 'fs_media',
-      title: shortTarget ? `${label} — ${shortTarget}` : label,
-      status: 'error',
-      error: err?.message || String(err),
-      triggeredCapabilities: { intent: 'media_tool' },
-    });
-    throw err;
-  }
+  const res = await executeMediaAction(params, {
+    permissionMode: st.permissionMode || 'acceptEdits',
+    mediaToolsEnabled: st.mediaToolsEnabled !== false,
+    workspaceRoot: ws,
+  });
+  return asCompactText(res);
 });
 
 const transport = new StdioServerTransport();

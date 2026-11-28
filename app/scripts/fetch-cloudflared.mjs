@@ -60,6 +60,15 @@ const version = (process.env.CLOUDFLARED_VERSION || PINNED_VERSION).trim();
 const pinned = version === PINNED_VERSION;
 const isWin = triple.includes("windows");
 const dest = join(dir, `cloudflared-${triple}${isWin ? ".exe" : ""}`);
+const noticePath = join(dir, "CLOUDFLARED_NOTICE.txt");
+if (!existsSync(noticePath)) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    noticePath,
+    "Cloudflare Tunnel (cloudflared)\nCopyright (c) Cloudflare, Inc.\nLicensed under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).\nOfficial releases: https://github.com/cloudflare/cloudflared/releases\n",
+    "utf8",
+  );
+}
 
 function sha256(buf) {
   return createHash("sha256").update(buf).digest("hex").toLowerCase();

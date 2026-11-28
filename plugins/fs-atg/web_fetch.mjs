@@ -157,6 +157,7 @@ export async function executeWebFetch({
   url,
   maxChars = 12_000,
   raw = false,
+  extractLinks = false,
   timeoutMs = 15_000,
 } = {}) {
   let currentUrl = (await validatePublicHttpUrl(url)).toString();
@@ -194,7 +195,24 @@ export async function executeWebFetch({
 
     let title = '';
     let content = rawBody;
-    if (!raw && (contentType.includes('text/html') || contentType.includes('application/xhtml+xml') || /^\s*<!doctype\s+html|<html[\s>]/i.test(rawBody))) {
+    let links = undefined;
+    const isHtml = contentType.includes('text/html') || contentType.includes('application/xhtml+xml') || /^\s*<!doctype\s+html|<html[\s>]/i.test(rawBody);
+    if (extractLinks && isHtml) {
+      const seen = new Set();
+      links = [];
+      for (const m of rawBody.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+        const rawHref = decodeHtmlEntities(m[1].trim());
+        if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:') || rawHref.startsWith('mailto:')) continue;
+        let absHref = rawHref;
+        try { absHref = new URL(rawHref, currentUrl).toString(); } catch { continue; }
+        if (seen.has(absHref)) continue;
+        seen.add(absHref);
+        const label = decodeHtmlEntities(m[2].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 120);
+        links.push({ text: label || absHref, url: absHref });
+        if (links.length >= 60) break;
+      }
+    }
+    if (!raw && isHtml) {
       const converted = htmlToMarkdown(rawBody);
       title = converted.title;
       content = converted.markdown;
@@ -219,6 +237,7 @@ export async function executeWebFetch({
       content: outContent,
       totalChars,
       truncated,
+      ...(links ? { linksCount: links.length, links } : {}),
     };
   } finally {
     clearTimeout(timer);

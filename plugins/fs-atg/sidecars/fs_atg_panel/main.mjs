@@ -55,9 +55,17 @@ import {
   HISTORY_LIMIT,
   buildApprovalFields,
   prepareVisionAttachments,
+  runAutonomousComputerLoop,
   uploadFileToFs,
   VISION_LIVE_INSTRUCTIONS,
 } from '../../fs_core.mjs';
+import {
+  applyGithubUpdate,
+  checkForGithubUpdate,
+  readLocalPluginVersion,
+  readUpdateMeta,
+} from '../../updater.mjs';
+import { executeMediaAction } from '../../media_tools.mjs';
 import { clearLogs, countRecentErrors, logEvent, readLogs } from '../../logger.mjs';
 import {
   cancelBrowserLogin,
@@ -91,6 +99,11 @@ let state = loadState();
 let quotaCache = null;
 let modelCache = null;
 let catalogCache = null;
+let updateStatusCache = readUpdateMeta().lastResult || {
+  ok: true,
+  localVersion: readLocalPluginVersion(),
+  updateAvailable: false,
+};
 const jobs = new Map();
 const running = new Map();
 const queue = [];
@@ -462,6 +475,7 @@ function publicView(j) {
   return {
     jobId: j.id || j.jobId,
     id: j.id || j.jobId,
+    chatId: j.chatId ?? null,
     title: j.title,
     task: j.task || '',
     status: j.status,
@@ -499,6 +513,7 @@ function publicView(j) {
     generatedImages: j.generatedImages ?? [],
     canvasDocuments: j.canvasDocuments ?? [],
     canvasPreview: j.canvasPreview ?? null,
+    computerSteps: j.computerSteps ?? null,
     antigravitySavings: j.antigravitySavings ?? null,
   };
 }
@@ -654,6 +669,60 @@ async function runJob(job) {
     let liveText = '';
     let result;
     try {
+      if (job.liveComputerMode && job.permissionMode !== 'plan') {
+        const screenIdx = Number.isInteger(job.screenIndex) ? job.screenIndex : (Number(state.selectedScreenIndex ?? 0) || 0);
+        const loopRes = await runAutonomousComputerLoop({
+          state,
+          goal: route.prompt,
+          model: route.model,
+          chatId,
+          screenIndex: screenIdx,
+          maxSteps: job.maxComputerSteps || 6,
+          permissionMode: job.permissionMode || state.permissionMode || 'acceptEdits',
+          reasoningEffort: job.reasoningEffort || 'standard',
+          signal: ac.signal,
+          executeComputerAction,
+          uploadFile: uploadFileToFs,
+          streamTurn: (req) => streamGenerationWithRefusalFallback({
+            state,
+            model: req.model,
+            approvedModel: job.approveModel || null,
+            availableModels: ids,
+            quotaBypass: Boolean(route.quotaBypass),
+            quotaRemainingPct: q?.remainingPct ?? null,
+            agentMap,
+            instructions: req.instructions,
+            prompt: req.prompt,
+            fileIds: req.fileIds,
+            chatId: req.chatId,
+            enableWebSearch: false,
+            signal: req.signal,
+            onChatId: (cid) => { job.chatId = cid; },
+            onText: (d) => {
+              job.receivedChars += d.length;
+              liveText += d;
+              job.summary = `[Computer Use] ${liveText.slice(-260)}`;
+            },
+          }),
+          onThought: (t) => { job.thoughts.push(t); job.thoughts = job.thoughts.slice(-20); },
+          onStep: (s) => {
+            job.computerSteps = [...(job.computerSteps || []), s];
+            job.toolTurns = job.computerSteps.length;
+          },
+        });
+        flushThought();
+        job.chatId = loopRes.chatId ?? job.chatId;
+        job.model = loopRes.model ?? job.model;
+        if (usePersistent && loopRes.chatId) rememberPanelChat(loopRes.chatId, job.model || route.model);
+        job.computerSteps = loopRes.steps;
+        job.toolTurns = loopRes.stepsCount;
+        job.response = String(loopRes.text || '').slice(0, 160_000);
+        job.summary = job.response.slice(0, 400);
+        quotaCache = null;
+        void fetchQuota(true).catch(() => null);
+        finishJob(job, 'done');
+        return;
+      }
       try {
         result = await streamGenerationWithRefusalFallback({
           state,
@@ -929,8 +998,12 @@ app.api('/api/state', async () => {
     antigravityQuota: ANTIGRAVITY_QUOTA_VISIBILITY,
     antigravitySavings: state.antigravitySavings ?? { jobsOffloaded: 0, turnsSavedEst: 0, inputTokensSavedEst: 0, outputTokensSavedEst: 0, totalTokensSavedEst: 0 },
     recentErrors: countRecentErrors(),
+    updateStatus: updateStatusCache,
+    directChats: state.directChats || {},
     active: [...localActive, ...mcpActive],
-    history: (state.history || []).map((h) => (h.jobId ? h : publicView(h))),
+    history: (state.history || [])
+      .filter((h) => !/^fs_/i.test(String(h?.model || '')))
+      .map((h) => (h.jobId ? h : publicView(h))),
   };
 }, 'GET');
 
@@ -1160,133 +1233,27 @@ app.api('/api/workspace', (data) => {
   return { ok: true, ...workspaceView(state) };
 });
 
-function recordPanelToolHistory({
-  tool,
-  title,
-  status = 'done',
-  summary = '',
-  response = '',
-  error = null,
-  triggeredCapabilities = null,
-  canvasPreview = null,
-}) {
-  try {
-    const st = loadState();
-    const now = Date.now();
-    const id = randomUUID().slice(0, 8);
-    const entry = {
-      id,
-      jobId: id,
-      title: `${ATG} ${String(title || tool || 'Outil').slice(0, 70)}`,
-      task: String(title || tool || ''),
-      status,
-      model: String(tool || 'panel'),
-      routeReason: `panneau (${tool})`,
-      createdAt: now,
-      startedAt: now,
-      endedAt: now,
-      summary: String(summary || '').slice(0, 400),
-      response: String(response || summary || '').slice(0, 20_000),
-      ...(error ? { error: String(error).slice(0, 300) } : {}),
-      thoughts: [],
-      ...(triggeredCapabilities ? { triggeredCapabilities } : {}),
-      ...(canvasPreview ? { canvasPreview } : {}),
-    };
-    st.history = [entry, ...(st.history || [])].slice(0, HISTORY_LIMIT);
-    saveState(st);
-    state = st;
-  } catch { /* non-blocking */ }
-}
-
-const PASSIVE_COMPUTER_ACTIONS = new Set(['screen_info', 'windows']);
-
 app.api('/api/computer', async (data) => {
   state = loadState();
   const params = { ...(data || {}) };
-  if (params.action === 'screenshot' && params.screenIndex === undefined && !params.deviceName && !params.region) {
+  if (params.action === 'screenshot' && params.screenIndex === undefined && !params.deviceName && !params.region && !params.windowTitle) {
     params.screenIndex = Number(state.selectedScreenIndex ?? 0) || 0;
   }
-  const shouldRecord = Boolean(params.action) && !PASSIVE_COMPUTER_ACTIONS.has(String(params.action));
-  try {
-    const res = await executeComputerAction(params, {
-      permissionMode: state.permissionMode || 'acceptEdits',
-      computerUseEnabled: state.computerUseEnabled !== false,
-    });
-    if (shouldRecord) {
-      const { dataUrl: _dropUrl, ...meta } = (res && typeof res === 'object') ? res : { res };
-      const act = String(params.action || '');
-      const idx = (res?.screenIndex ?? params?.screenIndex ?? 0) + 1;
-      const prettyTitle = act === 'screenshot'
-        ? `Capture d’écran (Écran ${idx})`
-        : (act === 'ui_tree'
-          ? (res?.windowTitle ? `Inspection d’interface — ${String(res.windowTitle).slice(0, 34)}` : 'Inspection d’interface')
-          : (act === 'ui_click'
-            ? `Clic interface — ${String(res?.clicked || params?.name || params?.automationId || 'contrôle').slice(0, 36)}`
-            : `Contrôle bureau — ${act}`));
-      const detail = act === 'screenshot'
-        ? `${res?.width || '?'}×${res?.height || '?'} · ${Math.round((res?.bytes || 0) / 1024)} Ko`
-        : (act === 'ui_tree'
-          ? `${res?.count ?? 0} contrôle(s) détecté(s)`
-          : (act === 'ui_click'
-            ? `Position (${res?.x ?? '?'}, ${res?.y ?? '?'})`
-            : `Action ${act}`));
-      recordPanelToolHistory({
-        tool: 'fs_computer',
-        title: prettyTitle,
-        summary: detail,
-        response: JSON.stringify(meta, null, 2),
-        triggeredCapabilities: { intent: 'computer_use' },
-      });
-    }
-    return res;
-  } catch (err) {
-    if (shouldRecord) {
-      recordPanelToolHistory({
-        tool: 'fs_computer',
-        title: `Contrôle bureau — ${params.action}`,
-        status: 'error',
-        error: err?.message || String(err),
-        triggeredCapabilities: { intent: 'computer_use' },
-      });
-    }
-    throw err;
-  }
+  return await executeComputerAction(params, {
+    permissionMode: state.permissionMode || 'acceptEdits',
+    computerUseEnabled: state.computerUseEnabled !== false,
+  });
 });
 
 app.api('/api/thinking', async (data) => {
   state = loadState();
-  const res = await executeThinkingAction(data, {
+  return await executeThinkingAction(data, {
     deepThinkingEnabled: state.deepThinkingEnabled !== false,
   });
-  if (!data?.action || data.action === 'think') {
-    const n = data?.thoughtNumber || res?.thoughtNumber || 1;
-    const tot = data?.totalThoughts || res?.totalThoughts || '';
-    const snippet = String(data?.thought || '').replace(/\s+/g, ' ').trim().slice(0, 48);
-    recordPanelToolHistory({
-      tool: 'fs_thinking',
-      title: snippet ? `Réflexion #${n} — ${snippet}` : `Réflexion — Étape #${n}`,
-      summary: tot ? `Étape ${n}/${tot}` : `Étape ${n}`,
-      response: String(data?.thought || JSON.stringify(res, null, 2)),
-      triggeredCapabilities: { intent: 'sequential_thinking' },
-    });
-  }
-  return res;
 });
 
 app.api('/api/canvas', async (data) => {
-  const res = await executeCanvasAction(data);
-  if (data?.action === 'create' || data?.action === 'update') {
-    const fmt = String(data.type || res?.type || 'html').toUpperCase();
-    recordPanelToolHistory({
-      tool: 'fs_canvas',
-      title: `Canvas — ${data.title || data.id || res?.id || 'Artifact'}`,
-      summary: `Artifact ${fmt} prêt à prévisualiser`,
-      response: data.content || JSON.stringify(res, null, 2),
-      triggeredCapabilities: { canvas: true, intent: 'canvas_artifact' },
-      canvasPreview: res?.previewUrl ? { id: res.id, type: res.type || data.type || 'html', url: res.previewUrl, title: data.title || '' } : null,
-    });
-  }
-  return res;
+  return await executeCanvasAction(data);
 });
 
 app.api('/api/fs-personalization', async (data) => {
@@ -1415,14 +1382,47 @@ app.api('/api/undo', (data) => {
   const res = undoLastChange(ws, data?.undoId || null);
   if (res.ok) {
     logEvent('info', 'panel', 'undo.applied', `Restauré ${res.undone.rel} (${res.undone.action}).`, res.undone);
-    recordPanelToolHistory({
-      tool: 'fs_undo',
-      title: `Fichier restauré — ${basename(String(res.undone.rel || '')) || res.undone.rel}`,
-      summary: `Restauré ${res.undone.rel} (${res.undone.action})`,
-      response: JSON.stringify(res, null, 2),
-    });
   }
   return { ...res, undoEntries: listUndoEntries(ws, 15) };
+});
+
+app.api('/api/update', async (data) => {
+  const action = String(data?.action || 'check').toLowerCase();
+  if (action === 'apply') {
+    const res = await applyGithubUpdate();
+    updateStatusCache = res;
+    return res;
+  }
+  const res = await checkForGithubUpdate({ force: Boolean(data?.force) });
+  updateStatusCache = res;
+  return res;
+});
+
+app.api('/api/health', async () => {
+  state = loadState();
+  const mediaCaps = await executeMediaAction({ action: 'capabilities' }, { mediaToolsEnabled: true }).catch(() => ({ ok: false }));
+  return {
+    ok: true,
+    pluginVersion: readLocalPluginVersion(),
+    nodeVersion: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
+    media: mediaCaps,
+    updateStatus: updateStatusCache,
+    directChatsCount: Object.keys(state.directChats || {}).length,
+  };
+});
+
+app.api('/api/session/reset-model', (data) => {
+  const key = String(data?.key || '').trim();
+  state = loadState();
+  if (!key) return { ok: false, error: 'Clé de session manquante.' };
+  if (state.directChats && key in state.directChats) {
+    delete state.directChats[key];
+    saveState(state);
+    return { ok: true, removed: key, directChats: state.directChats };
+  }
+  return { ok: true, removed: null, directChats: state.directChats || {} };
 });
 
 app.api('/api/memory', (data) => {
@@ -1601,6 +1601,16 @@ setInterval(async () => {
     await resolveAuthToken(st, { forceRefresh: true });
   } catch { /* surfaced on next real request */ }
 }, 45_000).unref?.();
+
+// Vérification automatique des mises à jour GitHub : au démarrage (+3s) puis toutes les heures.
+const runSilentUpdateCheck = async () => {
+  try {
+    const res = await checkForGithubUpdate({ force: true });
+    if (res?.ok) updateStatusCache = res;
+  } catch { /* non-blocking */ }
+};
+setTimeout(runSilentUpdateCheck, 3_000).unref?.();
+setInterval(runSilentUpdateCheck, 60 * 60_000).unref?.();
 
 logEvent('info', 'panel', 'panel.started', `Panneau latéral France Student [ATG] v${CONNECTOR_VERSION} démarré.`);
 app.run();

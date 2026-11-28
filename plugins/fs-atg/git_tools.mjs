@@ -6,7 +6,7 @@ import { logEvent } from './logger.mjs';
 
 const execFileAsync = promisify(execFile);
 
-export const GIT_ACTIONS = Object.freeze(['status', 'diff', 'log', 'branch', 'show']);
+export const GIT_ACTIONS = Object.freeze(['status', 'diff', 'log', 'branch', 'show', 'stash_list']);
 
 function validateRef(ref) {
   const clean = String(ref || 'HEAD').trim() || 'HEAD';
@@ -163,6 +163,22 @@ export async function executeGitAction({
         content: t.text,
         totalChars: t.totalChars,
         truncated: t.truncated,
+      };
+    }
+
+    case 'stash_list': {
+      const { stdout } = await runGit(['stash', 'list', '--date=short'], ws);
+      const entries = stdout
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .filter(Boolean)
+        .slice(0, 30);
+      return {
+        ok: true,
+        action: 'stash_list',
+        workspaceRoot: ws,
+        count: entries.length,
+        entries,
       };
     }
 

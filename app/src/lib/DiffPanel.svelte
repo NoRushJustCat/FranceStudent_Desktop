@@ -191,6 +191,7 @@
 <svelte:window {onresize} />
 
 <aside class="dp" class:drag bind:this={el} transition:fly|global={{ x: 48, duration: 280, easing: cubicOut }}>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div
     class="grip"
     role="separator"
@@ -546,21 +547,6 @@ onclick={() => (collapsed[r.id] = !collapsed[r.id])}
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .cn {
-    flex-shrink: 0;
-    color: var(--faint);
-    font-size: 11px;
-  }
-  .add {
-    flex-shrink: 0;
-    color: var(--ok);
-    font-size: 11px;
-  }
-  .del {
-    flex-shrink: 0;
-    color: var(--danger);
-    font-size: 11px;
   }
   .st {
     flex-shrink: 0;

@@ -1,6 +1,6 @@
-# France Student [ATG] (`fs-atg` v2.6.0)
+# France Student [ATG] (`fs-atg` v2.6.1)
 
-Orchestrateur **France Student** complet pour **Antigravity** (Serveur MCP + Sidecar HTML/Node.js à rendu *Liquid Glass* par défaut, avec option mat épuré).
+Orchestrateur **France Student** complet pour **Antigravity** (Serveur MCP + Sidecar HTML/Node.js à rendu *Liquid Glass* par défaut, avec option mat épuré, **Auto-Updater GitHub** intégré et **Computer Use autonome**).
 
 Il délègue l’exploration, la planification, l’édition atomique de code (`/undo`), le raisonnement approfondi, la création d’artifacts Canvas, le pilotage bureau Windows (*Computer Use* + boucle Vision Live) et les recherches web directement aux modèles France Student afin d’économiser le quota Antigravity.
 
@@ -69,7 +69,26 @@ Il délègue l’exploration, la planification, l’édition atomique de code (`
 
 ---
 
-## Installation rapide (Antigravity)
+## Installation rapide (multi-PC, 1 clic)
+
+### Option 1 — Installateur universel (recommandé)
+
+Détecte automatiquement ton profil utilisateur (`%USERPROFILE%` / `$HOME`), génère `mcp_config.json` avec les bons chemins et installe les dépendances Node.js sans aucune édition manuelle :
+
+- **Windows (PowerShell)** :
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File .\plugins\fs-atg\install.ps1
+  ```
+- **macOS / Linux** :
+  ```bash
+  bash ./plugins/fs-atg/install.sh
+  ```
+
+### Mises à jour automatiques (GitHub)
+
+Le panneau latéral vérifie automatiquement les mises à jour sur `NoRushJustCat/FranceStudent_Desktop` (`main`) **au démarrage d'Antigravity et toutes les heures**. Lorsqu'une mise à jour est disponible, un bouton **Mettre à jour** apparaît en haut du panneau (et dans **Réglages → Mises à jour GitHub & Santé PC**) et met à jour le plugin sans jamais écraser ta clé/session, `mcp_config.json`, tes politiques de modèles ou ton historique.
+
+### Option 2 — Installation manuelle
 
 1. Copie le dossier `fs-atg` dans `%USERPROFILE%\.gemini\config\plugins\fs-atg`. Vérifie que `node` est accessible depuis l'environnement qui lance Antigravity.
 2. Installe les dépendances du serveur MCP (`@modelcontextprotocol/sdk` et `zod`) à la racine du plugin :

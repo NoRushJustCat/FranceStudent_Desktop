@@ -1828,15 +1828,6 @@
     display: none;
   }
 
-  .accordion .chev {
-    color: var(--dim);
-    transition: transform 0.16s ease;
-  }
-
-  .accordion[open] .chev {
-    transform: rotate(180deg);
-  }
-
   .accordion-body {
     padding: 10px 18px 14px;
     border-top: 1px solid var(--line);

@@ -181,7 +181,7 @@
   let sessions = $state([]);
   let viewUid = $state(null);
 
-  let box;
+  let box = $state(null);
   let composer = $state(null);
   let uidSeq = 0;
   let runSeq = 0;

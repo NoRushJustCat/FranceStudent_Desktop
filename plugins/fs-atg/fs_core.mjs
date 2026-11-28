@@ -1411,7 +1411,20 @@ export async function uploadFileToFs(state, filePath, { signal } = {}) {
   return String(id);
 }
 
-export const VISION_LIVE_INSTRUCTIONS = `\n\nBoucle Vision Live : une ou plusieurs captures de l’écran Windows de l’utilisateur peuvent être jointes. Décris d’abord en une phrase ce que tu vois d’utile pour la tâche. Puis indique à Antigravity UNE SEULE prochaine étape précise, au choix : (a) une action fs_computer au format JSON, par exemple {"action":"click","x":640,"y":360} ou {"action":"type","text":"..."} (pixels absolus du bureau, en tenant compte de screenBounds de la capture) ; (b) une nouvelle capture si l’image ne suffit pas, par exemple {"action":"screenshot","screenIndex":1} ; ou (c) "TERMINÉ" avec un bilan court si la tâche est finie. Sans capture jointe, commence par demander {"action":"screenshot"}. En cas de doute ou d’action sensible (paiement, suppression, envoi de message, mot de passe), arrête-toi et demande confirmation à l’utilisateur.`;
+export const VISION_LIVE_INSTRUCTIONS = `\n\nMode Computer Use Autonome (France Student pilote le PC Windows) :
+À chaque tour, tu reçois une capture d'écran JPEG compressée (dimensions exactes indiquées dans le contexte) ainsi que, si disponible, la liste des fenêtres ouvertes et les contrôles UIA.
+Quand un clic vient d'être exécuté au tour précédent, un VISEUR ROUGE avec un point central et l'étiquette "(x, y)" est dessiné sur la capture à l'endroit exact où le clic a atterri : vérifie-le immédiatement pour savoir si la cible a été touchée ou s'il faut ajuster !
+Réponds TOUJOURS par une phrase ultra-courte décrivant ce que tu vois, suivie d'UN SEUL bloc JSON strict indiquant la prochaine action :
+- Cliquer sur un bouton nommé (le plus fiable) : {"action":"ui_click","name":"...","title":"..."}
+- Cliquer à des coordonnées sur l'image capturée : {"action":"click","x":640,"y":360,"coordSpace":"image"} (ou "double_click" / "right_click")
+- Activer une fenêtre : {"action":"focus_window","title":"Deezer"}
+- Raccourci clavier (ex: ouvrir menu Démarrer / recherche Windows) : {"action":"hotkey","keys":"ctrl+esc"} ou {"action":"key","key":"enter"}
+- Taper du texte : {"action":"type","text":"Deezer"}
+- Attendre l'ouverture d'une fenêtre : {"action":"wait_for","windowTitle":"Deezer","timeoutMs":5000}
+- Lire le texte à l'écran si flou : {"action":"ocr_screen"}
+- Si la tâche est terminée : {"action":"done","summary":"Deezer est ouvert et prêt."}
+- Si action sensible (paiement, suppression, envoi de message, mot de passe) : {"action":"confirm","reason":"..."}
+Privilégie les actions les plus économes en tours (ex: focus_window ou hotkey Win + type + Enter au lieu de 5 clics successifs). Ne donne jamais plus d'UN objet JSON par tour.`;
 
 /**
  * Prépare les pièces jointes visuelles d'un job (capture d'écran + images
@@ -3846,4 +3859,298 @@ export function writeFileBlocks(rootDir, blocks) {
     written.push(rel);
   }
   return written;
+}
+
+const SENSITIVE_COMPUTER_RE = /\b(paiement|payer|carte bancaire|virement|supprimer définitivement|formatage|mot de passe|password|checkout|purchase|delete forever)\b/i;
+
+/**
+ * Extrait un objet JSON d'action Computer Use depuis la réponse texte de France Student.
+ * Accepte les blocs ```json ... ``` ou un objet JSON inline contenant "action".
+ */
+export function parseComputerActionJson(text) {
+  const src = String(text || '').trim();
+  if (!src) return null;
+  const fenced = [...src.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map((m) => m[1].trim());
+  const candidates = [...fenced];
+  // Extraire aussi les objets JSON équilibrés simples contenant "action"
+  const braceStarts = [];
+  for (let i = 0; i < src.length; i++) {
+    if (src[i] === '{') braceStarts.push(i);
+  }
+  for (const start of braceStarts) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = start; j < src.length; j++) {
+      const ch = src[j];
+      if (inStr) {
+        if (esc) { esc = false; }
+        else if (ch === '\\') { esc = true; }
+        else if (ch === '"') { inStr = false; }
+      } else {
+        if (ch === '"') inStr = true;
+        else if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            const slice = src.slice(start, j + 1);
+            if (/"action"\s*:/.test(slice)) candidates.push(slice);
+            break;
+          }
+        }
+      }
+    }
+  }
+  for (const raw of candidates) {
+    try {
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === 'object' && typeof obj.action === 'string' && obj.action.trim()) {
+        return { ...obj, action: obj.action.trim().toLowerCase() };
+      }
+    } catch { /* ignore invalid json slice */ }
+  }
+  if (/(?:^|[^\p{L}])TERMIN[ÉE](?:$|[^\p{L}])/iu.test(src)) {
+    return { action: 'done', summary: src.slice(0, 300) };
+  }
+  return null;
+}
+
+/**
+ * Convertit une coordonnée (x, y) renvoyée par France Student (soit dans le repère de
+ * l'image JPEG redimensionnée, soit en coordonnées absolues bureau) vers les pixels
+ * absolus du bureau Windows.
+ */
+export function mapImageCoordToDesktop(x, y, shotMeta, coordSpace = 'auto') {
+  const nx = Number(x);
+  const ny = Number(y);
+  if (!Number.isFinite(nx) || !Number.isFinite(ny)) return { x: null, y: null };
+  const originX = Number(shotMeta?.originX ?? shotMeta?.screenBounds?.x ?? 0) || 0;
+  const originY = Number(shotMeta?.originY ?? shotMeta?.screenBounds?.y ?? 0) || 0;
+  const imgW = Number(shotMeta?.width ?? 0) || 0;
+  const imgH = Number(shotMeta?.height ?? 0) || 0;
+  const capW = Number(shotMeta?.captureWidth ?? imgW) || imgW;
+  const capH = Number(shotMeta?.captureHeight ?? imgH) || imgH;
+  const scaleX = Number(shotMeta?.scaleX ?? (imgW > 0 ? capW / imgW : 1)) || 1;
+  const scaleY = Number(shotMeta?.scaleY ?? (imgH > 0 ? capH / imgH : 1)) || 1;
+
+  const space = String(coordSpace || 'auto').toLowerCase();
+  const isImageSpace = space === 'image' || (space === 'auto' && imgW > 0 && imgH > 0 && nx >= 0 && ny >= 0 && nx <= imgW + 2 && ny <= imgH + 2 && (scaleX > 1.01 || scaleY > 1.01 || originX !== 0 || originY !== 0));
+  if (isImageSpace) {
+    return {
+      x: Math.round(originX + nx * scaleX),
+      y: Math.round(originY + ny * scaleY),
+    };
+  }
+  return { x: Math.round(nx), y: Math.round(ny) };
+}
+
+/**
+ * Boucle autonome et économe Computer Use pilotée par France Student (Vision) :
+ * - 1 seule discussion sur ia.francestudent.org (même chatId réutilisé à chaque étape)
+ * - Captures JPEG redimensionnées (maxWidth 1280, ~60-80 Ko au lieu de 3 Mo PNG)
+ * - Viseur rouge "(x, y)" dessiné sur la capture suivante à l'endroit exact du clic précédent
+ * - Contexte léger (fenêtres ouvertes + UIA résumé au 1er tour) pour privilégier les actions rapides
+ * - Arrêt automatique si terminé, erreur bloquante ou action sensible demandant confirmation.
+ */
+export async function runAutonomousComputerLoop({
+  state,
+  goal,
+  model = 'gpt-6.1-terra',
+  chatId = undefined,
+  screenIndex = 0,
+  windowTitle = undefined,
+  maxSteps = 6,
+  maxWidth = 1280,
+  quality = 75,
+  permissionMode = 'acceptEdits',
+  reasoningEffort = 'standard',
+  signal = undefined,
+  executeComputerAction,
+  uploadFile = uploadFileToFs,
+  streamTurn = null,
+  onStep = () => {},
+  onThought = () => {},
+} = {}) {
+  if (typeof executeComputerAction !== 'function') {
+    throw new Error('runAutonomousComputerLoop : executeComputerAction requis.');
+  }
+  const limit = Math.max(1, Math.min(12, Number(maxSteps) || 6));
+  const computerOpts = { permissionMode, computerUseEnabled: state?.computerUseEnabled !== false };
+  const steps = [];
+  let currentChatId = chatId || undefined;
+  let activeModel = model || 'gpt-6.1-terra';
+  let lastClickMarker = null;
+  let lastActionSummary = '';
+  let finalText = '';
+  let finished = false;
+  let needsConfirmation = false;
+  let confirmationReason = '';
+
+  const runStream = streamTurn || ((req) => streamWithAutoFallback(state, req));
+
+  // Contexte initial ultra-compact : fenêtres ouvertes (aide France Student à faire focus_window directement en 1 tour)
+  let initialWindows = [];
+  try {
+    const winRes = await executeComputerAction({ action: 'windows' }, computerOpts);
+    initialWindows = (winRes?.windows || []).slice(0, 15).map((w) => `${w.processName}: "${w.title}"`);
+  } catch { /* best-effort */ }
+
+  for (let stepIdx = 1; stepIdx <= limit; stepIdx++) {
+    if (signal?.aborted) throw new Error('Annulé.');
+
+    // 1. Capture JPEG légère avec viseur rouge sur le clic précédent (si applicable)
+    onThought(`Étape ${stepIdx}/${limit} : capture écran${lastClickMarker ? ` avec viseur (${lastClickMarker.x},${lastClickMarker.y})` : ''}...`);
+    const shot = await executeComputerAction({
+      action: 'screenshot',
+      screenIndex,
+      windowTitle,
+      format: 'jpeg',
+      maxWidth,
+      quality,
+      ...(lastClickMarker ? { marker: lastClickMarker } : {}),
+    }, computerOpts);
+
+    if (!shot?.ok || !shot?.path) {
+      throw new Error(`Capture écran échouée à l'étape ${stepIdx} : ${shot?.error || 'inconnue'}`);
+    }
+
+    const fileId = await uploadFile(state, shot.path, { signal });
+
+    // 2. Prompt ultra-compact pour économiser les tokens
+    const promptLines = [];
+    if (stepIdx === 1) {
+      promptLines.push(`Objectif utilisateur : ${String(goal || '').trim()}`);
+      if (initialWindows.length) {
+        promptLines.push(`Fenêtres ouvertes : ${initialWindows.join(' | ')}`);
+      }
+    } else {
+      promptLines.push(`Résultat étape ${stepIdx - 1} : ${lastActionSummary}`);
+      if (lastClickMarker) {
+        promptLines.push(`Le viseur ROUGE sur la capture montre exactement où le clic (${lastClickMarker.x}, ${lastClickMarker.y}) a atterri. Vérifie si cela a fonctionné.`);
+      }
+    }
+    promptLines.push(`Capture jointe : ${shot.width}x${shot.height}px (origine bureau ${shot.originX ?? 0},${shot.originY ?? 0}, échelle ${shot.scaleX ?? 1}x${shot.scaleY ?? 1}, taille ${Math.round((shot.bytes || 0) / 1024)} Ko).`);
+    promptLines.push(`Indique ta prochaine action JSON unique (ou {"action":"done","summary":"..."} si l'objectif est atteint).`);
+
+    // 3. Appel France Student dans la MÊME discussion (currentChatId)
+    const turnRes = await runStream({
+      model: activeModel,
+      prompt: promptLines.join('\n'),
+      chatId: currentChatId,
+      instructions: stepIdx === 1 ? VISION_LIVE_INSTRUCTIONS : undefined,
+      fileIds: [fileId],
+      enableWebSearch: false,
+      reasoningEffort,
+      signal,
+    });
+
+    if (turnRes?.chatId) currentChatId = turnRes.chatId;
+    if (turnRes?.model) activeModel = turnRes.model;
+    finalText = String(turnRes?.text || '').trim();
+
+    const parsed = parseComputerActionJson(finalText);
+    const stepRecord = {
+      step: stepIdx,
+      screenshotPath: shot.path,
+      screenshotBytes: shot.bytes || 0,
+      markerDrawn: Boolean(shot.markerDrawn),
+      model: activeModel,
+      response: finalText.slice(0, 500),
+      parsedAction: parsed,
+      result: null,
+    };
+
+    if (!parsed) {
+      stepRecord.result = { ok: true, stopped: 'no_action_json' };
+      steps.push(stepRecord);
+      onStep(stepRecord);
+      finished = true;
+      break;
+    }
+
+    if (parsed.action === 'done') {
+      stepRecord.result = { ok: true, done: true, summary: parsed.summary || finalText };
+      steps.push(stepRecord);
+      onStep(stepRecord);
+      finished = true;
+      finalText = parsed.summary || finalText;
+      break;
+    }
+
+    if (parsed.action === 'confirm' || SENSITIVE_COMPUTER_RE.test(JSON.stringify(parsed))) {
+      needsConfirmation = true;
+      confirmationReason = parsed.reason || 'Action sensible détectée — confirmation utilisateur requise.';
+      stepRecord.result = { ok: false, needsConfirmation: true, reason: confirmationReason };
+      steps.push(stepRecord);
+      onStep(stepRecord);
+      finalText = `Confirmation requise avant de continuer : ${confirmationReason}`;
+      break;
+    }
+
+    // 4. Exécution locale de l'action demandée par France Student
+    const execParams = { ...parsed };
+    delete execParams.coordSpace;
+    let clickPoint = null;
+    if (['click', 'double_click', 'right_click', 'mouse_move', 'scroll'].includes(parsed.action) && parsed.x !== undefined && parsed.y !== undefined) {
+      const mapped = mapImageCoordToDesktop(parsed.x, parsed.y, shot, parsed.coordSpace || 'auto');
+      execParams.x = mapped.x;
+      execParams.y = mapped.y;
+      if (['click', 'double_click', 'right_click'].includes(parsed.action)) {
+        clickPoint = { x: mapped.x, y: mapped.y, label: `(${mapped.x},${mapped.y})` };
+      }
+    } else if (parsed.action === 'drag' && parsed.x !== undefined && parsed.y !== undefined && parsed.toX !== undefined && parsed.toY !== undefined) {
+      const m1 = mapImageCoordToDesktop(parsed.x, parsed.y, shot, parsed.coordSpace || 'auto');
+      const m2 = mapImageCoordToDesktop(parsed.toX, parsed.toY, shot, parsed.coordSpace || 'auto');
+      execParams.x = m1.x;
+      execParams.y = m1.y;
+      execParams.toX = m2.x;
+      execParams.toY = m2.y;
+      clickPoint = { x: m2.x, y: m2.y, label: `drop(${m2.x},${m2.y})` };
+    }
+
+    onThought(`Étape ${stepIdx}/${limit} : exécution ${execParams.action}${clickPoint ? ` à (${clickPoint.x}, ${clickPoint.y})` : ''}...`);
+    let execRes;
+    try {
+      execRes = await executeComputerAction(execParams, computerOpts);
+    } catch (e) {
+      execRes = { ok: false, error: String(e?.message || e) };
+    }
+
+    if (execRes?.matched?.x != null && execRes?.matched?.y != null) {
+      clickPoint = { x: execRes.matched.x, y: execRes.matched.y, label: execRes.matched.name || `(${execRes.matched.x},${execRes.matched.y})` };
+    }
+    lastClickMarker = clickPoint;
+
+    stepRecord.result = execRes;
+    steps.push(stepRecord);
+    onStep(stepRecord);
+
+    if (execRes?.ok === false) {
+      lastActionSummary = `Action ${execParams.action} échouée : ${execRes.error || 'erreur inconnue'}`;
+    } else if (execParams.action === 'ocr_screen') {
+      lastActionSummary = `OCR lu (${execRes.lineCount ?? 0} lignes) : ${String(execRes.text || '').slice(0, 600)}`;
+    } else if (execParams.action === 'ui_tree') {
+      const topCtrls = (execRes.controls || []).slice(0, 20).map((c) => `${c.controlType}:"${c.name || c.automationId}"(${c.x},${c.y})`).join(', ');
+      lastActionSummary = `UIA "${execRes.windowTitle}" (${execRes.count} contrôles) : ${topCtrls}`;
+    } else {
+      lastActionSummary = `Action ${execParams.action} exécutée (${clickPoint ? `clic ${clickPoint.x},${clickPoint.y}` : execRes.title || execRes.key || 'ok'}).`;
+    }
+
+    // Courte pause pour laisser Windows afficher l'effet du clic/raccourci avant la capture suivante
+    if (stepIdx < limit && !signal?.aborted) {
+      await sleep(450, signal);
+    }
+  }
+
+  return {
+    ok: !needsConfirmation,
+    finished,
+    needsConfirmation,
+    confirmationReason,
+    chatId: currentChatId,
+    model: activeModel,
+    stepsCount: steps.length,
+    steps,
+    text: finalText || (finished ? 'Tâche Computer Use terminée.' : `Boucle Computer Use arrêtée après ${steps.length} étapes.`),
+  };
 }

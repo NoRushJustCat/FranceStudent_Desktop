@@ -13,6 +13,7 @@ export const MEDIA_ACTIONS = [
   'video_info',
   'video_edit',
   'hyperframes',
+  'canvas_to_hyperframes',
 ];
 
 const READ_ONLY_MEDIA_ACTIONS = new Set(['capabilities', 'image_info', 'video_info']);
@@ -520,6 +521,49 @@ export async function executeMediaAction(params = {}, {
       return await editVideo(params, workspaceRoot);
     case 'hyperframes':
       return await runHyperframes(params, workspaceRoot);
+    case 'canvas_to_hyperframes': {
+      const htmlContent = String(params.html || params.content || '').trim();
+      const srcHtmlPath = params.inputPath || params.path ? resolveMediaPath(params.inputPath || params.path, workspaceRoot) : null;
+      let html = htmlContent;
+      if (!html && srcHtmlPath && existsSync(srcHtmlPath)) {
+        html = readFileSync(srcHtmlPath, 'utf-8');
+      }
+      if (!html) throw new Error('Contenu HTML ou chemin de fichier Canvas requis pour canvas_to_hyperframes.');
+      const projectDir = resolveMediaPath(params.projectDir || 'hyperframes-canvas', workspaceRoot);
+      mkdirSync(projectDir, { recursive: true });
+      const durationSec = Math.max(1, Math.min(60, Number(params.duration || 5)));
+      const fps = Math.max(12, Math.min(60, Math.round(Number(params.fps || 30))));
+      const width = Math.max(320, Math.min(3840, Math.round(Number(params.width || 1280))));
+      const height = Math.max(240, Math.min(2160, Math.round(Number(params.height || 720))));
+      const title = String(params.title || 'Canvas Video').trim();
+      const wrapped = html.includes('<!doctype') || html.includes('<html')
+        ? html
+        : `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>${title}</title><style>html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden;background:#0b1020;}</style></head><body>${html}</body></html>`;
+      const indexPath = join(projectDir, 'index.html');
+      writeFileSync(indexPath, wrapped, 'utf-8');
+      const manifest = {
+        name: title,
+        width,
+        height,
+        fps,
+        durationSec,
+        entry: 'index.html',
+      };
+      const manifestPath = join(projectDir, 'hyperframes.json');
+      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+      return {
+        ok: true,
+        action: 'canvas_to_hyperframes',
+        projectDir,
+        indexPath,
+        manifestPath,
+        width,
+        height,
+        fps,
+        durationSec,
+        nextStep: `Appelle fs_media({ action: "hyperframes", subAction: "render", projectDir: "${projectDir}" }) pour compiler la vidéo MP4 (requiert FFmpeg + Node 22+).`,
+      };
+    }
     default:
       throw new Error(`Action non gérée : ${action}`);
   }

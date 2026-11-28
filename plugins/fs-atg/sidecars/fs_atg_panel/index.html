@@ -1565,6 +1565,19 @@
       <button class="btn ghost sm" id="clearCooldownBtn">Réessayer</button>
     </div>
 
+    <div id="updateBanner" class="warnbox" style="background:rgba(10,132,255,0.12);border-color:rgba(10,132,255,0.34)" hidden>
+      <div class="warn-left">
+        <div class="warn-ico" style="background:rgba(10,132,255,0.22);color:#64B5FF">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <div>
+          <div class="warn-title" id="updateBannerTitle" style="color:#7CC0FF">Mise à jour disponible</div>
+          <div class="warn-sub" id="updateBannerSub">Une nouvelle version est prête sur GitHub.</div>
+        </div>
+      </div>
+      <button type="button" class="btn sm" id="applyUpdateBannerBtn">Mettre à jour</button>
+    </div>
+
     <div class="card hero">
       <div class="hero-top">
         <div class="brand">
@@ -2099,6 +2112,28 @@
         </div>
         <div class="visual-stage" id="mcpVisualStage" hidden></div>
         <div class="diagnostic-body" id="mcpToolsQuickOut">Prêt — active Live, capture un écran ou lance Raisonnement / Canvas en 1 clic.</div>
+      </div>
+
+      <div class="card">
+        <div class="settings-title" style="justify-content:space-between">
+          <span style="display:inline-flex;align-items:center;gap:7px">
+            <svg class="ico" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Mises à jour GitHub &amp; Santé PC
+          </span>
+          <span class="hchip" id="updateVerTag">v2.6.0</span>
+        </div>
+        <div class="f-help" id="updateStatusLine" style="margin-bottom:8px">Vérification automatique au démarrage et toutes les heures (préserve ta clé, tes réglages et ton historique).</div>
+        <div class="actions" style="margin-bottom:9px">
+          <button type="button" class="btn sm" id="applyUpdateBtn">Mettre à jour</button>
+          <button type="button" class="btn ghost sm" id="checkUpdateBtn">Vérifier</button>
+          <button type="button" class="btn ghost sm" id="loadHealthBtn">Santé PC</button>
+          <span class="toast" id="updateToast"></span>
+        </div>
+        <div class="probe-grid" id="pcHealthGrid" hidden></div>
+        <div class="hist-sec" style="margin-top:8px">
+          <div class="hist-sec-lbl">Discussions actives par modèle (ia.francestudent.org)</div>
+          <div id="directChatsList" class="mem-list"><span class="empty-txt" style="padding:2px 0">Aucune discussion persistante active</span></div>
+        </div>
       </div>
     </div>
 
@@ -3012,6 +3047,7 @@
           trig?.intent === 'doc_read' ? '<span class="cap-chip">Doc</span>' : '',
           trig?.intent === 'git_read' ? '<span class="cap-chip">Git</span>' : '',
           trig?.intent === 'media_tool' ? '<span class="cap-chip">Média</span>' : '',
+          Array.isArray(j.computerSteps) && j.computerSteps.length ? `<span class="cap-chip">${j.computerSteps.length} étape(s) bureau</span>` : '',
           fwCount ? `<span class="hchip">${fwCount} fichier(s)</span>` : '',
           cmdCount ? `<span class="hchip">${cmdCount} cmd</span>` : '',
         ].filter(Boolean).join('');
@@ -3101,6 +3137,8 @@
             <div class="hist-actions">
               ${codeExtract ? `<button type="button" class="btn sm" data-copy-code="${esc(jId)}">Copier le code (${esc(codeExtract.kind)})</button>` : ''}
               ${respText && j.status === 'done' ? `<button type="button" class="btn ${codeExtract ? 'ghost ' : ''}sm" data-copy-resp="${esc(jId)}">Copier tout</button>` : ''}
+              ${respText && j.status === 'done' ? `<button type="button" class="btn ghost sm" data-export-md="${esc(jId)}" title="Télécharger en Markdown">Exporter .md</button>` : ''}
+              ${j.chatId ? `<a class="btn ghost sm" href="https://ia.francestudent.org/chat/${esc(j.chatId)}" target="_blank" rel="noopener" style="text-decoration:none">Ouvrir sur FS ↗</a>` : ''}
               ${j.task ? `<button type="button" class="btn ghost sm" data-rerun-id="${esc(jId)}">Relancer</button>` : ''}
               <span class="spacer"></span>
               <button type="button" class="btn ghost sm" data-del-hist="${esc(jId)}" title="Supprimer de l’historique">Supprimer</button>
@@ -3548,6 +3586,7 @@
           <span style="display:inline-flex;gap:4px;flex-shrink:0"><button type="button" class="undo-mini" data-undo-diff="${esc(u.id)}">Diff</button><button type="button" class="undo-mini" data-undo-id="${esc(u.id)}">Annuler</button></span>
         </div>`).join('');
       renderProjectMemory();
+      renderUpdateAndChats();
       renderAutoDelegate();
       renderTiers();
       renderActive();
@@ -5305,6 +5344,136 @@
         const id = hist.dataset.hist;
         if (expandedHistory.has(id)) expandedHistory.delete(id); else expandedHistory.add(id);
         renderHistory(true);
+      }
+
+      const exportBtn = e.target.closest('[data-export-md]');
+      if (exportBtn) {
+        const job = (S.history || []).find((h) => (h.jobId || h.id) === exportBtn.dataset.exportMd);
+        if (job) {
+          const md = `# ${job.title || 'France Student'}\n\n- Modèle : \`${job.model || 'auto'}\`\n- Date : ${new Date(job.endedAt || job.createdAt || Date.now()).toLocaleString('fr-FR')}\n${job.chatId ? `- Discussion : https://ia.francestudent.org/chat/${job.chatId}\n` : ''}\n## Demande\n\n${job.task || ''}\n\n## Réponse\n\n${job.response || job.summary || ''}\n`;
+          const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `francestudent-${(job.jobId || job.id || 'run').slice(0, 8)}.md`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          flash('Export Markdown téléchargé');
+        }
+        return;
+      }
+
+      const resetChatBtn = e.target.closest('[data-reset-chat-key]');
+      if (resetChatBtn) {
+        const key = resetChatBtn.dataset.resetChatKey;
+        try {
+          await api('/api/session/reset-model', { key });
+          flash('Discussion réinitialisée', 'updateToast');
+          await poll();
+        } catch (err) {
+          flash(err.message, 'updateToast', true);
+        }
+        return;
+      }
+    });
+
+    function renderUpdateAndChats() {
+      const upd = S.updateStatus || null;
+      const avail = Boolean(upd?.updateAvailable);
+      if ($('updateBanner')) {
+        $('updateBanner').hidden = !avail;
+        if (avail) {
+          $('updateBannerTitle').textContent = `Mise à jour disponible (${upd.remoteVersion ? 'v' + upd.remoteVersion : upd.remoteSha || 'GitHub'})`;
+          $('updateBannerSub').textContent = upd.commitMessage
+            ? `${upd.commitMessage.slice(0, 80)}${upd.remoteSha ? ' · ' + upd.remoteSha : ''}`
+            : 'Nouvelle version disponible sur NoRushJustCat/FranceStudent_Desktop.';
+        }
+      }
+      if ($('updateVerTag')) {
+        $('updateVerTag').textContent = `v${upd?.localVersion || '2.6.0'}${upd?.installedSha ? ' · ' + upd.installedSha : ''}`;
+      }
+      if ($('updateStatusLine') && upd) {
+        $('updateStatusLine').textContent = avail
+          ? `Nouvelle version prête sur GitHub (${upd.remoteSha || 'main'}) : ${upd.commitMessage || 'clique sur Mettre à jour'}.`
+          : (upd.ok ? `À jour (v${upd.localVersion || '2.6.0'}${upd.remoteSha ? ' · ' + upd.remoteSha : ''}) — vérification auto toutes les heures.` : `Dernière vérification impossible : ${upd.error || 'hors ligne'}`);
+      }
+      const listEl = $('directChatsList');
+      if (listEl) {
+        const entries = Object.entries(S.directChats || {}).filter(([k, v]) => v && k !== 'panel');
+        if (!entries.length) {
+          listEl.innerHTML = '<span class="empty-txt" style="padding:2px 0">Aucune discussion persistante active</span>';
+        } else {
+          listEl.innerHTML = entries.map(([k, cid]) => {
+            const parts = k.split('::');
+            const modelPart = parts.length > 1 ? parts[parts.length - 1] : k;
+            const scopePart = parts.length > 1 ? parts[0].replace(/^workspace:/, 'Projet: ') : 'Général';
+            return `<div class="mem-item">
+              <span title="${esc(k)} → ${esc(cid)}"><strong>${esc(shortModel(modelPart))}</strong> · ${esc(scopePart.slice(-26))}</span>
+              <span style="display:inline-flex;gap:4px;flex-shrink:0">
+                <a class="undo-mini" href="https://ia.francestudent.org/chat/${esc(cid)}" target="_blank" rel="noopener" style="text-decoration:none">↗</a>
+                <button type="button" class="mem-del" data-reset-chat-key="${esc(k)}" title="Nouvelle discussion pour ce modèle">✕</button>
+              </span>
+            </div>`;
+          }).join('');
+        }
+      }
+    }
+
+    async function triggerGithubUpdate(btn) {
+      if (btn) { btn.disabled = true; btn.classList.add('is-busy'); }
+      flash('Téléchargement de la mise à jour depuis GitHub…', 'updateToast');
+      try {
+        const res = await api('/api/update', { action: 'apply' });
+        if (res?.ok) {
+          S.updateStatus = res;
+          renderUpdateAndChats();
+          flash(`Mis à jour (${res.filesUpdated || 0} fichiers) — redémarre Antigravity si besoin.`, 'updateToast');
+          flash('Mise à jour installée !', 'toast');
+        } else {
+          flash(res?.error || 'Échec de mise à jour', 'updateToast', true);
+        }
+      } catch (err) {
+        flash(err.message, 'updateToast', true);
+      } finally {
+        if (btn) { btn.disabled = false; btn.classList.remove('is-busy'); }
+      }
+    }
+
+    $('applyUpdateBannerBtn')?.addEventListener('click', () => triggerGithubUpdate($('applyUpdateBannerBtn')));
+    $('applyUpdateBtn')?.addEventListener('click', () => triggerGithubUpdate($('applyUpdateBtn')));
+    $('checkUpdateBtn')?.addEventListener('click', async () => {
+      const btn = $('checkUpdateBtn');
+      btn.disabled = true;
+      try {
+        const res = await api('/api/update', { action: 'check', force: true });
+        S.updateStatus = res;
+        renderUpdateAndChats();
+        flash(res?.updateAvailable ? `Mise à jour trouvée (${res.remoteSha || 'main'})` : 'Déjà à jour !', 'updateToast');
+      } catch (err) {
+        flash(err.message, 'updateToast', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    $('loadHealthBtn')?.addEventListener('click', async () => {
+      const grid = $('pcHealthGrid');
+      try {
+        const h = await api('/api/health', {});
+        const m = h?.media || {};
+        const items = [
+          { lbl: `Node ${h.nodeVersion || '?'}`, ok: true },
+          { lbl: `Images natives`, ok: Boolean(m.nativeImageEdit) },
+          { lbl: `FFmpeg`, ok: Boolean(m.ffmpeg) },
+          { lbl: `HyperFrames`, ok: Boolean(m.hyperframesReady) },
+          { lbl: `Edge/Chrome SVG`, ok: Boolean(m.svgToPngBrowser) },
+          { lbl: `Chats actifs (${h.directChatsCount || 0})`, ok: true },
+        ];
+        if (grid) {
+          grid.hidden = false;
+          grid.innerHTML = items.map((it) => `<div class="probe-pill ${it.ok ? 'ok' : ''}"><span>${esc(it.lbl)}</span><span class="probe-dot"></span></div>`).join('');
+        }
+      } catch (err) {
+        flash(err.message, 'updateToast', true);
       }
     });
 
